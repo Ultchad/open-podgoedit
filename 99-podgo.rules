@@ -1,0 +1,11 @@
+# Line 6 POD Go (0e41:4247) — grant access to the USB device for the
+# "plugdev" group without running the editor as root.
+#
+# Install:
+#   sudo cp 99-podgo.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# Then unplug and replug the device.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="4247", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e41", ATTR{idProduct}=="424b", MODE="0660", GROUP="plugdev", TAG+="uaccess"
