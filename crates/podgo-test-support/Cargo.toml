@@ -1,0 +1,12 @@
+[package]
+name = "podgo-test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Fixture loaders and protocol response builders for POD Go tests."
+
+[dependencies]
+podgo-domain.workspace = true
+podgo-protocol.workspace = true

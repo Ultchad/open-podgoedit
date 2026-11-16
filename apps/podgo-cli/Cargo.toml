@@ -1,0 +1,15 @@
+[package]
+name = "podgo-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Offline, read-only probe for POD Go preset blobs."
+
+[[bin]]
+name = "podgo-probe"
+path = "src/main.rs"
+
+[dependencies]
+podgo-domain.workspace = true

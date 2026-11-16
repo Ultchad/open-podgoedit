@@ -1,0 +1,13 @@
+[package]
+name = "podgo-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Connection state machine, handshake and request/response correlation for POD Go."
+
+[dependencies]
+podgo-domain.workspace = true
+podgo-protocol.workspace = true
+podgo-transport.workspace = true

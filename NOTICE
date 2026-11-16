@@ -1,0 +1,23 @@
+Open POD Go Edit
+Copyright (c) 2026 the Open POD Go Edit contributors
+Licensed under the MIT License (see LICENSE).
+
+This project is an independent, unofficial tool. It is NOT affiliated with,
+endorsed by, or supported by Yamaha Guitar Group / Line 6. "Line 6", "POD Go",
+"POD Go Edit", "Helix" and related names are trademarks of their respective
+owners and are used here only to describe interoperability.
+
+No proprietary Line 6 / POD Go Edit assets (images, fonts, manuals, firmware,
+binaries or resource files) are distributed with this project. Documentation
+records only observed behaviour, message layouts and non-copyrightable
+structural facts. Users must supply their own legally obtained device and
+presets.
+
+Protocol knowledge was informed by these community projects, credited as
+prior art. No source code from them is redistributed here:
+
+  * openpodgo — behavioural Python reference (MIT)
+  * openhx — https://github.com/allansomensi/openhx (MIT)
+  * helix_usb — https://github.com/kempline/helix_usb (MIT)
+
+See docs/reverse-engineering/legal-notes.md for the full clean-room policy.

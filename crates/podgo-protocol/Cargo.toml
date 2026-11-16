@@ -1,0 +1,16 @@
+[package]
+name = "podgo-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Transport-independent frame codec and message builders for the POD Go vendor protocol."
+
+[dependencies]
+podgo-domain.workspace = true
+
+[features]
+# Device write encoders. Disabled by default: the core stays read-only unless
+# a caller opts in (ADR-0007).
+device-write = []

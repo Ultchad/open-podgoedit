@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/podgo-cli",
+    "crates/podgo-domain",
+    "crates/podgo-protocol",
+    "crates/podgo-transport",
+    "crates/podgo-session",
+    "crates/podgo-test-support",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+authors = ["Open POD Go Edit contributors"]
+
+[workspace.dependencies]
+podgo-domain = { path = "crates/podgo-domain" }
+podgo-protocol = { path = "crates/podgo-protocol" }
+podgo-transport = { path = "crates/podgo-transport" }
+podgo-session = { path = "crates/podgo-session" }
+podgo-test-support = { path = "crates/podgo-test-support" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

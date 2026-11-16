@@ -1,0 +1,26 @@
+# Version control and local captures
+.git
+.gitignore
+reverse/
+captures/
+*.pcap
+*.pcapng
+
+# Build artefacts (rebuilt inside the image)
+**/node_modules/
+**/dist/
+**/target/
+apps/web/src/wasm/
+apps/web/public/fixtures/
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/
+
+# Editor/OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Documentation is not needed to build or serve the page
+docs/
