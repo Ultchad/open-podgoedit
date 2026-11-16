@@ -103,7 +103,10 @@ nginx):
 docker compose up --build   # http://127.0.0.1:8080
 ```
 
-The `.github/workflows/pages.yml` workflow publishes the same static build to
+The `.github/workflows/ci.yml` workflow runs the Rust formatting, Clippy and
+offline tests, the WASM host tests, the TypeScript build and the Playwright
+browser suite on pull requests and pushes to `dev`/`main`. The
+`.github/workflows/pages.yml` workflow publishes the same static build to
 GitHub Pages on every push to `main`.
 
 ## Local web app
