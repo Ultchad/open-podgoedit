@@ -292,6 +292,157 @@ test('reorders blocks, adds a Wah and marks browser-only presets', async ({
   expect(doc.data.tone.footswitch.dsp0.block0).toBeUndefined();
 });
 
+test('links to GitHub and edits snapshot bypass, values and LED colours', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // The repository link sits next to the WASM badge.
+  const github = page.locator('header .github-link');
+  await expect(github).toBeVisible();
+  await expect(github).toHaveAttribute(
+    'href',
+    'https://github.com/Ultchad/open-podgoedit',
+  );
+
+  const chips = page.locator('.snapshot');
+  await expect(chips).toHaveCount(4);
+  const ampCamera = page.locator('.snapshot-assign').first();
+
+  // Nothing is snapshot-controlled yet; the camera toggle assigns it.
+  await expect(ampCamera).toHaveAttribute('aria-pressed', 'false');
+  await ampCamera.click();
+  await expect(ampCamera).toHaveAttribute('aria-pressed', 'true');
+
+  // Bypass the amp in snapshot 1 (the loaded snapshot).
+  const bypass = page.locator('.inspector-state.is-toggle');
+  await expect(bypass).toHaveText('active');
+  await bypass.click();
+  await expect(bypass).toHaveText('bypassed');
+
+  // Snapshot 1 stores Drive = 7.5.
+  await page.locator('#param-value-0').click();
+  const drive = page.locator('#param-input-0');
+  await drive.fill('7.5');
+  await drive.press('Enter');
+  await expect(page.locator('#param-value-0')).toHaveText('7.5');
+
+  // Snapshot 2 keeps the amp active and stores Drive = 2, plus a blue LED.
+  await chips.nth(1).click();
+  await expect(chips.nth(1)).toHaveClass(/is-active/);
+  await expect(page.locator('#param-value-0')).toHaveText('4.0');
+  await expect(page.locator('.inspector-state.is-toggle')).toHaveText('active');
+  await page.locator('#param-value-0').click();
+  const secondDrive = page.locator('#param-input-0');
+  await secondDrive.fill('2');
+  await secondDrive.press('Enter');
+  await expect(page.locator('#param-value-0')).toHaveText('2.0');
+  await page.getByLabel('Snapshot LED colour').selectOption('8');
+
+  const download = page.waitForEvent('download');
+  await page.locator('#export-pgp').click();
+  const file = await download;
+  const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
+  const tone = doc.data.tone;
+
+  // The Snapshots controller is controller number 10 (ITM for POD Go).
+  expect(tone.controller.dsp0.block0.Drive['@controller']).toBe(10);
+  // Each snapshot carries its own Drive value.
+  expect(
+    tone.snapshot0.controllers.dsp0.block0.Drive['@value'],
+  ).toBeCloseTo(0.75, 5);
+  expect(
+    tone.snapshot1.controllers.dsp0.block0.Drive['@value'],
+  ).toBeCloseTo(0.2, 5);
+  // Bypass is per snapshot; snapshot 2 was seeded from the previous state.
+  expect(tone.snapshot0.blocks.dsp0.block0).toBe(false);
+  expect(tone.snapshot1.blocks.dsp0.block0).toBe(true);
+  // The LED palette index is stored as an index, not an RGB value.
+  expect(tone.snapshot1['@ledcolor']).toBe(8);
+  // Snapshot 1 keeps the default Auto entry (absent in the seeded document).
+  expect(tone.snapshot0['@ledcolor'] ?? 0).toBe(0);
+
+  // Removing the Snapshots controller clears the base entry and every value.
+  await ampCamera.click();
+  await expect(ampCamera).toHaveAttribute('aria-pressed', 'false');
+  const removedDownload = page.waitForEvent('download');
+  await page.locator('#export-pgp').click();
+  const removed = JSON.parse(
+    await readFile((await (await removedDownload).path())!, 'utf8'),
+  );
+  expect(removed.data.tone.controller.dsp0.block0?.Drive).toBeUndefined();
+  expect(
+    removed.data.tone.snapshot0.controllers.dsp0.block0?.Drive,
+  ).toBeUndefined();
+});
+
+test('marks EXP-controlled parameters as not assignable to snapshots', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.getByRole('button', { name: 'Import…' }).click();
+  await page
+    .locator('#import-file')
+    .setInputFiles(
+      new URL('../../../fixtures/spec02_a.pgp', import.meta.url).pathname,
+    );
+  await expect(page.locator('#import-preset-name')).toBeVisible();
+  await page.locator('#import-open').click();
+
+  // The first block's Pedal parameter follows EXP 2: the camera toggle is
+  // disabled so the assignment cannot be overwritten silently.
+  const pedal = page.locator('.snapshot-assign').first();
+  await expect(pedal).toBeDisabled();
+  await expect(pedal).toHaveAttribute('aria-pressed', 'false');
+  await expect(pedal).toHaveAttribute('title', /EXP 2 controls this parameter/);
+});
+
+test('selects and renames snapshots offline, then exports them', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  const chips = page.locator('.snapshot');
+  await expect(chips).toHaveCount(4);
+  await expect(chips.nth(0)).toHaveClass(/is-active/);
+
+  // Clicking a chip loads that snapshot in the draft.
+  await chips.nth(1).click();
+  await expect(chips.nth(1)).toHaveClass(/is-active/);
+  await expect(chips.nth(0)).not.toHaveClass(/is-active/);
+  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+
+  // Double-clicking the name opens an inline field; Enter accepts.
+  await chips.nth(1).dblclick();
+  const nameField = page.getByRole('textbox', { name: 'Snapshot 2 name' });
+  await expect(nameField).toBeVisible();
+  await nameField.fill('GTR SOLO');
+  await nameField.press('Enter');
+  await expect(chips.nth(1)).toContainText('GTR SOLO');
+
+  // The manual's limit is 10 characters; other bytes are refused.
+  await chips.nth(2).dblclick();
+  const longField = page.getByRole('textbox', { name: 'Snapshot 3 name' });
+  await longField.fill('1234567890ABC');
+  await expect(longField).toHaveValue('1234567890');
+  await longField.press('Enter');
+  await expect(chips.nth(2)).toContainText('1234567890');
+  await expect(chips.nth(3)).toContainText('SNAPSHOT 4');
+
+  const download = page.waitForEvent('download');
+  await page.locator('#export-pgp').click();
+  const file = await download;
+  const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
+  expect(doc.data.tone.global['@current_snapshot']).toBe(2);
+  expect(doc.data.tone.snapshot1['@name']).toBe('GTR SOLO');
+  expect(doc.data.tone.snapshot2['@name']).toBe('1234567890');
+  expect(doc.data.tone.snapshot3['@name']).toBe('SNAPSHOT 4');
+});
+
 test('rejects a malformed preset in the browser', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('header .badge')).toHaveText(/WASM ready/);

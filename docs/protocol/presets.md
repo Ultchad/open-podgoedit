@@ -99,7 +99,10 @@ Confirmed shape (schema `L6Preset`, version 6):
                  "@pedalstate": 2, "@tempo": 120.0},
       "irUuidTable": {"000": "", "…": ""},
       "snapshot0": {"@name": "SNAPSHOT 1", "@valid": true, "@tempo": 120.0,
-                    "blocks": {"dsp0": {"block0": true}}},
+                    "@ledcolor": 0,
+                    "blocks": {"dsp0": {"block0": true}},
+                    "controllers": {"dsp0": {"block0": {"Drive":
+                                     {"@fs_enabled": false, "@value": 0.5}}}}},
       "snapshot1": {}, "snapshot2": {}, "snapshot3": {}
     }
   },
@@ -117,7 +120,20 @@ Confirmed shape (schema `L6Preset`, version 6):
 - `@fs_index` is 1-based: `1`…`8` are `FS1`…`FS8`, `9` is the expression toe
   switch. The switch target is the containing block (slot `n + 1`).
 - `@current_snapshot` is 0-based; `snapshot0`…`snapshot3` carry the names and
-  validity flags.
+  validity flags. The POD Go Owner's Manual limits a custom snapshot label to
+  10 characters (the Rename Snapshot screen); `@name` is plain text in the
+  JSON export and NUL-terminated in the binary blob.
+- A snapshot may also store `blocks.dsp0.blockN` (bypass, per snapshot),
+  `controllers.dsp0.blockN.<Param>` (`@fs_enabled`, `@value`) and
+  `@ledcolor`. The parameter `@value` is written as `0`/`1` for boolean
+  parameters, like the rest of the JSON export.
+- `@ledcolor` is a palette index, not RGB: `0` Auto, `1` White, `2` Red,
+  `3` Dark Orange, `4` Light Orange, `5` Yellow, `6` Green, `7` Turquoise,
+  `8` Blue, `9` Violet, `10` Pink, `11` Off.
+- The Snapshots controller number (`@controller`) is `10` in Line 6 `.hlx`
+  files. POD Go uses the same controller table, but a POD Go hardware capture
+  is still missing, so `10` is **ITM** here; controllers `1`/`2` are EXP 1/2
+  and are evidenced by the `.pgp` fixtures.
 - `device_version` is packed BCD: `0x02500000` reads as firmware `2.50`.
 
 ## 6. `.pgb` backup

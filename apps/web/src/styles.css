@@ -141,6 +141,23 @@ code {
   color: #ff7b72;
 }
 
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--text-soft);
+  background: var(--surface-2);
+}
+
+.github-link:hover {
+  color: #fff;
+  border-color: var(--text-soft);
+}
+
 .badge.idle {
   background: #21262d;
   color: var(--text-dim);
@@ -591,12 +608,24 @@ button:disabled:hover {
   padding: 0.12rem 0.45rem;
   border: 1px solid transparent;
   border-radius: 4px;
+  background: transparent;
   color: var(--text-dim);
+  font-family: inherit;
   font-size: 0.72rem;
   white-space: nowrap;
   max-width: 9rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.snapshot:hover:not(:disabled) {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.snapshot:disabled {
+  cursor: default;
 }
 
 .snapshot.is-empty {
@@ -607,6 +636,63 @@ button:disabled:hover {
   border-color: var(--line-strong);
   background: var(--surface-2);
   color: #fff;
+}
+
+.snapshot-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.snapshot-led {
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-right: 0.3rem;
+  border-radius: 999px;
+  vertical-align: middle;
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.35);
+}
+
+.snapshot-led.is-off {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  box-shadow: none;
+}
+
+.snapshot-led-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.05rem 0.3rem 0.05rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+
+.snapshot-led-picker select {
+  min-height: 1.35rem;
+  padding: 0 0.15rem;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  font-family: inherit;
+  font-size: 0.7rem;
+}
+
+.snapshot-number {
+  margin-right: 0.25rem;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.snapshot-input {
+  width: 8.5rem;
+  max-width: 10rem;
+  min-height: 1.55rem;
+  border-color: var(--amber);
+  background: var(--surface);
+  color: #fff;
+  font-size: 0.72rem;
 }
 
 .toolbar-right {
@@ -861,6 +947,59 @@ button:disabled:hover {
   color: #e3b341;
 }
 
+button.inspector-state.is-toggle {
+  min-height: 0;
+  padding: 0.02rem 0.42rem;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+
+button.inspector-state.is-toggle:hover:not(:disabled) {
+  border-color: var(--text-soft);
+  color: #fff;
+}
+
+button.inspector-state.is-toggle.is-bypassed {
+  border-color: #5a4a1c;
+  color: #e3b341;
+}
+
+.snapshot-assign {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-right: 0.35rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #8a8f98;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.snapshot-assign:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: #fff;
+}
+
+.snapshot-assign.is-on {
+  border-color: var(--amber);
+  background: #2b2412;
+  color: var(--amber);
+}
+
+.snapshot-assign.is-blocked {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .inspector-slot {
   margin-left: auto;
 }
@@ -883,6 +1022,8 @@ button:disabled:hover {
 }
 
 .param-name {
+  display: inline-flex;
+  align-items: center;
   color: var(--text-soft);
   font-size: 0.78rem;
 }

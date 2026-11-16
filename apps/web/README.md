@@ -33,6 +33,19 @@ setlist depuis un POD Go branché en **WebUSB**.
 - **Repères visuels** : le nom d'un preset qui n'existe que dans le navigateur
   (copie hors ligne ou brouillon non exporté) est en italique, dans le titre et
   dans la liste, pour montrer qu'il n'est pas encore sur le pédalier.
+- **Snapshots** : un clic sur une puce choisit le snapshot actif enregistré
+  avec le preset (`@current_snapshot`) et un double-clic sur son nom ouvre un
+  champ de saisie (Entrée valide, Échap ou perte de focus annule). Le nom est
+  limité aux 10 caractères ASCII imprimables documentés par le manuel du POD
+  Go ; un nom vide revient à `SNAPSHOT n`. La caméra à gauche d'un paramètre
+  l'assigne au contrôleur Snapshots (`@controller: 10`, **ITM** pour POD Go) :
+  chaque snapshot garde alors sa propre valeur, et un paramètre déjà piloté par
+  une pédale d'expression ne peut pas être converti (la caméra est désactivée).
+  La pastille Active/Bypass de l'en-tête change l'état du bloc dans le snapshot
+  chargé. Une palette sur la ligne des snapshots règle `@ledcolor` (Auto,
+  White, Red, Dark Orange, Light Orange, Yellow, Green, Turquoise, Blue,
+  Violet, Pink, Off). Comme le reste du brouillon, ces changements restent
+  dans le navigateur et partent avec **Save** (pédalier) ou **Export .pgp**.
 - **Menus et glisser-déposer** : un clic droit sur un preset ouvre
   ouvrir/créer, **Save to Pedal**, renommer, copier, coller, déplacer, exporter
   `.pgp` et importer. **Save to Pedal** est grisé sans pédalier ou sans

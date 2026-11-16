@@ -44,15 +44,23 @@ import PresetActionsDialog, {
 import PresetMenu, {
   type PresetMenuEntry,
 } from './components/PresetMenu';
-import { validatePresetName } from './presetName';
+import { validatePresetName, validateSnapshotName } from './presetName';
 import {
   clonePreset,
+  hasImportedSnapshotParam,
   presetFileName,
   serializePgp,
   moveImportedBlock,
+  setImportedBlockEnabled,
   setImportedModel,
   setImportedName,
   setImportedParam,
+  setImportedSnapshot,
+  setImportedSnapshotAssignment,
+  setImportedSnapshotLedColor,
+  setImportedSnapshotName,
+  setImportedSnapshotParam,
+  SNAPSHOT_CONTROLLER,
   toneToStructure,
   type EditPreset,
 } from './podgoEdit';
@@ -1213,6 +1221,23 @@ export default function App() {
       return;
     }
     if (workingDoc) {
+      const snapshotIndex = structure?.currentSnapshot ?? 0;
+      if (
+        hasImportedSnapshotParam(
+          workingDoc,
+          snapshotIndex,
+          block - 1,
+          param.n,
+        )
+      ) {
+        setImportedSnapshotParam(
+          workingDoc,
+          snapshotIndex,
+          block - 1,
+          param.n,
+          value,
+        );
+      }
       setImportedParam(workingDoc, block - 1, param.n, value);
       setWorkingDoc({ ...workingDoc });
     } else if (activePresetLoaded && connected) {
@@ -1353,6 +1378,148 @@ export default function App() {
     setSaveNotice(null);
     appendLog(
       `Draft: moved block ${from + 1} to ${to + 1} (not written to the pedal).`,
+    );
+  }
+
+  /**
+   * Commit a snapshot-only change to the working copy.
+   *
+   * Snapshot selection and labels live in the same JSON document as the rest
+   * of the preset, so they follow the normal draft contract: the working copy
+   * and the local library are updated, Save writes them to the pedal and
+   * Export writes them to a `.pgp`.
+   */
+  function commitSnapshotDraft(changed: () => void, message: string): void {
+    if (!workingDoc) {
+      return;
+    }
+    changed();
+    const next = { ...workingDoc };
+    setWorkingDoc(next);
+    setStructure(toneToStructure(next));
+    if (workingSlot) {
+      const key = localKey(workingSlot.setlist, workingSlot.slot);
+      setLocalDocs((currentDocs) => ({
+        ...currentDocs,
+        [key]: clonePreset(next),
+      }));
+      markSlotDirty(key);
+    } else {
+      setDirty(true);
+    }
+    setSaveNotice(null);
+    appendLog(message);
+  }
+
+  /** Load one snapshot in an offline draft. */
+  function selectSnapshot(index: number): void {
+    if (!workingDoc || structure?.currentSnapshot === index) {
+      return;
+    }
+    commitSnapshotDraft(
+      () => setImportedSnapshot(workingDoc, index),
+      `Draft: active snapshot set to ${index + 1} (not written to the pedal).`,
+    );
+  }
+
+  /** Rename one snapshot in an offline draft (10 printable ASCII chars). */
+  function renameSnapshot(index: number, name: string): void {
+    if (!workingDoc) {
+      return;
+    }
+    const error = validateSnapshotName(name);
+    if (error) {
+      setSaveNotice({ kind: 'error', text: error });
+      return;
+    }
+    commitSnapshotDraft(
+      () => setImportedSnapshotName(workingDoc, index, name),
+      name
+        ? `Draft: snapshot ${index + 1} renamed to "${name}" (not written).`
+        : `Draft: snapshot ${index + 1} name cleared (not written).`,
+    );
+  }
+
+  /**
+   * Assign or remove the Snapshots controller on one parameter.
+   *
+   * The value currently displayed becomes the starting value in all four
+   * snapshots. A parameter already driven by an EXP pedal or footswitch cannot
+   * be converted here: doing so would delete that assignment.
+   */
+  function toggleSnapshotParam(
+    block: number,
+    paramIndex: number,
+    assigned: boolean,
+  ): void {
+    if (!workingDoc || !structure) {
+      return;
+    }
+    const entry = structure.chain.find((item) => item.slot === block + 1);
+    const model =
+      entry && (entry.kind === 'block' || entry.kind === 'looper')
+        ? modelById(entry.modelId)
+        : null;
+    const param = paramAt(model, paramIndex);
+    if (!entry || !param || !('params' in entry)) {
+      return;
+    }
+    const existing = structure.controllers.find(
+      (controller) =>
+        controller.block === block && controller.paramIndex === paramIndex,
+    );
+    if (
+      assigned &&
+      existing &&
+      existing.controller !== SNAPSHOT_CONTROLLER
+    ) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          `${param.n} already has a controller assignment. Choose None in ` +
+          'POD Go Edit first; this editor will not overwrite it silently.',
+      });
+      return;
+    }
+    const current = entry.params[paramIndex];
+    const value = typeof current === 'boolean' ? current : (current ?? 0);
+    commitSnapshotDraft(
+      () =>
+        setImportedSnapshotAssignment(
+          workingDoc,
+          block,
+          param.n,
+          assigned,
+          value,
+        ),
+      assigned
+        ? `Draft: ${param.n} now stores a value per snapshot (starting at ${String(value)}).`
+        : `Draft: ${param.n} no longer changes with snapshots.`,
+    );
+  }
+
+  /** Bypass or enable one block in the active snapshot. */
+  function setBlockEnabled(block: number, enabled: boolean): void {
+    if (!workingDoc) {
+      return;
+    }
+    const index = structure?.currentSnapshot ?? 0;
+    commitSnapshotDraft(
+      () => setImportedBlockEnabled(workingDoc, index, block, enabled),
+      `Draft: block ${block + 1} ${
+        enabled ? 'enabled' : 'bypassed'
+      } in snapshot ${index + 1} (not written).`,
+    );
+  }
+
+  /** Change the LED colour of one snapshot. */
+  function setSnapshotLedColor(index: number, color: number): void {
+    if (!workingDoc) {
+      return;
+    }
+    commitSnapshotDraft(
+      () => setImportedSnapshotLedColor(workingDoc, index, color),
+      `Draft: snapshot ${index + 1} LED colour set to palette ${color} (not written).`,
     );
   }
 
@@ -2513,6 +2680,27 @@ export default function App() {
           </button>
 
           <ModuleBadge module={module} />
+          <a
+            className="github-link"
+            href="https://github.com/Ultchad/open-podgoedit"
+            target="_blank"
+            rel="noreferrer"
+            title="Open the source repository on GitHub"
+            aria-label="Open the source repository on GitHub"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              width="18"
+              height="18"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path
+                fill="currentColor"
+                d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.42 7.42 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+              />
+            </svg>
+          </a>
         </div>
       </header>
 
@@ -2561,6 +2749,15 @@ export default function App() {
               onEditParam={editWorkingParam}
               onSelectModel={workingDoc ? changeModel : undefined}
               onMoveBlock={workingDoc ? moveBlock : undefined}
+              onSelectSnapshot={workingDoc ? selectSnapshot : undefined}
+              onRenameSnapshot={workingDoc ? renameSnapshot : undefined}
+              onSetSnapshotLedColor={
+                workingDoc ? setSnapshotLedColor : undefined
+              }
+              onToggleSnapshotParam={
+                workingDoc ? toggleSnapshotParam : undefined
+              }
+              onSetBlockEnabled={workingDoc ? setBlockEnabled : undefined}
               canExport={canExport}
               onExport={exportWorkingPreset}
               canRename={workingDoc !== null}

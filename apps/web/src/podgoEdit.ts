@@ -22,6 +22,8 @@ import type {
   ControllerAssignment,
   FootswitchAssignment,
   PresetStructure,
+  SnapshotParamValue,
+  SnapshotState,
 } from './types';
 
 /** One preset read from a `.pgp` or a `.pgb` setlist. */
@@ -388,8 +390,10 @@ const MODEL_BY_NAME = new Map<
   string,
   { id: number; model: CatalogModel }
 >();
+const MODEL_BY_ID = new Map<number, CatalogModel>();
 for (const [id, model] of Object.entries(MODELS)) {
   MODEL_BY_NAME.set(model.name, { id: Number(id), model });
+  MODEL_BY_ID.set(Number(id), model);
 }
 
 /** Decode POD Go Edit's packed version (`0x02500000` → `2.50`). */
@@ -534,6 +538,7 @@ export function toneToStructure(preset: EditPreset): PresetStructure {
         continue;
       }
       controllers.push({
+        block: index,
         controller,
         paramIndex,
         min: asNumber(spec?.['@min']) ?? 0,
@@ -542,14 +547,101 @@ export function toneToStructure(preset: EditPreset): PresetStructure {
     }
   }
 
-  const snapshots = [0, 1, 2, 3].map((index) => {
+  const snapshots: SnapshotState[] = [0, 1, 2, 3].map((index) => {
     const snapshot = asObject(tone[`snapshot${index}`]) ?? {};
+    const blocksObject = asObject(asObject(snapshot.blocks)?.dsp0);
+    const blocks = Array.from({ length: BLOCK_COUNT }, (_, blockIndex) => {
+      const value = blocksObject?.[`block${blockIndex}`];
+      return typeof value === 'boolean' ? value : null;
+    });
+
+    const values: SnapshotParamValue[] = [];
+    const snapshotControllers = asObject(asObject(snapshot.controllers)?.dsp0);
+    for (let blockIndex = 0; blockIndex < BLOCK_COUNT; blockIndex += 1) {
+      const controllerBlock = asObject(
+        snapshotControllers?.[`block${blockIndex}`],
+      );
+      if (!controllerBlock) {
+        continue;
+      }
+      const block = asObject(dsp0[`block${blockIndex}`]);
+      const modelName = asString(block?.['@model']);
+      const known = modelName ? MODEL_BY_NAME.get(modelName) : undefined;
+      if (!known) {
+        continue;
+      }
+      for (const [paramName, rawSpec] of Object.entries(controllerBlock)) {
+        const paramIndex = known.model.params.findIndex(
+          (param) => param.n === paramName,
+        );
+        const param = known.model.params[paramIndex];
+        const spec = asObject(rawSpec);
+        if (paramIndex < 0 || !spec) {
+          continue;
+        }
+        const rawValue = spec['@value'];
+        let value: ChainParamValue = null;
+        if (typeof rawValue === 'boolean') {
+          value = rawValue;
+        } else {
+          const numeric = asNumber(rawValue);
+          if (numeric !== null) {
+            value = param.k === 'bool' ? numeric !== 0 : numeric;
+          }
+        }
+        if (value === null) {
+          continue;
+        }
+        values.push({
+          block: blockIndex,
+          paramIndex,
+          value,
+          fsEnabled: spec['@fs_enabled'] === true,
+        });
+      }
+    }
+
     return {
       name: asString(snapshot['@name']) ?? '',
       valid: snapshot['@valid'] === true,
       tempo: asNumber(snapshot['@tempo']),
+      ledColor: asNumber(snapshot['@ledcolor']) ?? 0,
+      blocks,
+      controllers: values,
     };
   });
+
+  // The base block object is the preset-level state; the selected snapshot's
+  // entries override it for the values the inspector shows. A snapshot that
+  // has no entry keeps the base value, which is how the vendor editor treats
+  // parameters that are not assigned to the Snapshots controller.
+  const currentSnapshot = asNumber(global['@current_snapshot']);
+  const activeSnapshot =
+    snapshots[
+      currentSnapshot !== null && currentSnapshot >= 0 && currentSnapshot < 4
+        ? currentSnapshot
+        : 0
+    ];
+  for (const entry of chain) {
+    if (entry.kind !== 'block' && entry.kind !== 'looper') {
+      continue;
+    }
+    const blockIndex = entry.slot - 1;
+    const enabled = activeSnapshot.blocks[blockIndex];
+    if (typeof enabled === 'boolean') {
+      entry.enabled = enabled;
+    }
+    for (const stored of activeSnapshot.controllers) {
+      if (
+        stored.block !== blockIndex ||
+        stored.paramIndex < 0 ||
+        stored.paramIndex >= entry.params.length
+      ) {
+        continue;
+      }
+      entry.params[stored.paramIndex] = stored.value;
+    }
+  }
 
   const inSetlist =
     preset.setlist === 0 || preset.setlist === 1 ? preset.setlist : null;
@@ -563,7 +655,7 @@ export function toneToStructure(preset: EditPreset): PresetStructure {
     product: productLabel(preset.device),
     firmware: decodeFirmware(preset.deviceVersion),
     tempo: asNumber(global['@tempo']),
-    currentSnapshot: asNumber(global['@current_snapshot']),
+    currentSnapshot,
     snapshots,
     chain,
     footswitches,
@@ -633,6 +725,274 @@ export function setImportedName(preset: EditPreset, name: string): void {
   const toneMeta = asObject(preset.tone.meta);
   if (toneMeta) {
     toneMeta.name = name;
+  }
+}
+
+/**
+ * `@controller` number used for the Snapshots controller.
+ *
+ * The POD Go reference implementation only has evidence for `1` (EXP 1) and
+ * `2` (EXP 2); `.hlx` files use `10` for Snapshots, and the same Line 6
+ * controller table is used here. This value is **ITM** for POD Go until a
+ * capture from the pedal (or a POD Go Edit export with a snapshot assignment)
+ * confirms it.
+ */
+export const SNAPSHOT_CONTROLLER = 10;
+
+function ensureObject(
+  parent: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const existing = asObject(parent[key]);
+  if (existing) {
+    return existing;
+  }
+  const created: Record<string, unknown> = {};
+  parent[key] = created;
+  return created;
+}
+
+function pruneEmpty(parent: Record<string, unknown>, key: string): void {
+  const child = asObject(parent[key]);
+  if (child && Object.keys(child).length === 0) {
+    delete parent[key];
+  }
+}
+
+function ensureSnapshot(
+  preset: EditPreset,
+  index: number,
+): Record<string, unknown> {
+  return ensureObject(preset.tone, `snapshot${index}`);
+}
+
+function snapshotControllerBlock(
+  preset: EditPreset,
+  index: number,
+): Record<string, unknown> {
+  const snapshot = ensureSnapshot(preset, index);
+  const controllers = ensureObject(snapshot, 'controllers');
+  return ensureObject(controllers, 'dsp0');
+}
+
+/** Raw `@value` stored in a snapshot: booleans are written as 0/1. */
+function snapshotRawValue(value: number | boolean): number {
+  return typeof value === 'boolean' ? (value ? 1 : 0) : value;
+}
+
+/**
+ * True when a parameter has a stored value for this snapshot.
+ *
+ * These values recall with the snapshot whether the base controller is the
+ * Snapshots controller or an EXP/footswitch assignment, so the inspector can
+ * edit the active snapshot instead of the preset-level value.
+ */
+export function hasImportedSnapshotParam(
+  preset: EditPreset,
+  snapshotIndex: number,
+  block: number,
+  paramName: string,
+): boolean {
+  if (snapshotIndex < 0 || snapshotIndex > 3) {
+    return false;
+  }
+  const snapshot = asObject(preset.tone[`snapshot${snapshotIndex}`]);
+  const blockControllers = asObject(
+    asObject(asObject(snapshot?.controllers)?.dsp0)?.[`block${block}`],
+  );
+  return asObject(blockControllers?.[paramName]) !== null;
+}
+
+/**
+ * Write one snapshot's value for a parameter.
+ *
+ * The block value is updated too, so the exported preset still carries the
+ * value the vendor editor shows for the loaded snapshot. Only `@value` is
+ * touched; `@fs_enabled` and unknown keys on the entry survive.
+ */
+export function setImportedSnapshotParam(
+  preset: EditPreset,
+  snapshotIndex: number,
+  block: number,
+  paramName: string,
+  value: number | boolean,
+): void {
+  if (snapshotIndex < 0 || snapshotIndex > 3) {
+    return;
+  }
+  const dsp0 = snapshotControllerBlock(preset, snapshotIndex);
+  const blockControllers = ensureObject(dsp0, `block${block}`);
+  const existing = asObject(blockControllers[paramName]);
+  if (existing) {
+    existing['@value'] = snapshotRawValue(value);
+  } else {
+    blockControllers[paramName] = {
+      '@fs_enabled': false,
+      '@value': snapshotRawValue(value),
+    };
+  }
+}
+
+/**
+ * Assign or remove the Snapshots controller on one parameter.
+ *
+ * Assigning creates the base controller entry plus a value for all four
+ * snapshots (the caller passes the value currently shown). Removing deletes
+ * the base entry and every per-snapshot value for that parameter. The caller
+ * must refuse to replace a different controller; this helper preserves any
+ * existing per-snapshot values when they are already present.
+ */
+export function setImportedSnapshotAssignment(
+  preset: EditPreset,
+  block: number,
+  paramName: string,
+  assigned: boolean,
+  value: number | boolean,
+): void {
+  const controllerRoot = asObject(preset.tone.controller);
+  if (assigned) {
+    if (!controllerRoot) {
+      preset.tone.controller = {};
+    }
+    const root = asObject(preset.tone.controller) ?? {};
+    const dsp0 = ensureObject(root, 'dsp0');
+    const blockControllers = ensureObject(dsp0, `block${block}`);
+    blockControllers[paramName] = {
+      '@controller': SNAPSHOT_CONTROLLER,
+      '@min': 0,
+      '@max': 1,
+    };
+    for (let index = 0; index < 4; index += 1) {
+      const snapshotDsp0 = snapshotControllerBlock(preset, index);
+      const snapshotBlock = ensureObject(snapshotDsp0, `block${block}`);
+      if (!asObject(snapshotBlock[paramName])) {
+        snapshotBlock[paramName] = {
+          '@fs_enabled': false,
+          '@value': snapshotRawValue(value),
+        };
+      }
+    }
+    return;
+  }
+
+  const dsp0 = asObject(controllerRoot?.dsp0);
+  const blockControllers = asObject(dsp0?.[`block${block}`]);
+  if (blockControllers) {
+    delete blockControllers[paramName];
+    if (dsp0) {
+      pruneEmpty(dsp0, `block${block}`);
+    }
+  }
+  for (let index = 0; index < 4; index += 1) {
+    const snapshot = asObject(preset.tone[`snapshot${index}`]);
+    const snapshotDsp0 = asObject(asObject(snapshot?.controllers)?.dsp0);
+    const snapshotBlock = asObject(snapshotDsp0?.[`block${block}`]);
+    if (!snapshotBlock) {
+      continue;
+    }
+    delete snapshotBlock[paramName];
+    if (snapshotDsp0) {
+      pruneEmpty(snapshotDsp0, `block${block}`);
+    }
+  }
+}
+
+/**
+ * Set one block's bypass state for a snapshot.
+ *
+ * The other snapshots are seeded from the previous block state when they do
+ * not carry an explicit value yet, so adding a bypass state to one snapshot
+ * cannot silently change the others. The base `@enabled` follows the active
+ * snapshot and is what the vendor editor shows for the loaded preset.
+ */
+export function setImportedBlockEnabled(
+  preset: EditPreset,
+  snapshotIndex: number,
+  block: number,
+  enabled: boolean,
+): void {
+  if (snapshotIndex < 0 || snapshotIndex > 3) {
+    return;
+  }
+  const baseBlock = asObject(asObject(preset.tone.dsp0)?.[`block${block}`]);
+  const previous = baseBlock?.['@enabled'] !== false;
+  for (let index = 0; index < 4; index += 1) {
+    const snapshot = ensureSnapshot(preset, index);
+    const blocks = ensureObject(snapshot, 'blocks');
+    const dsp0 = ensureObject(blocks, 'dsp0');
+    const key = `block${block}`;
+    if (typeof dsp0[key] !== 'boolean') {
+      dsp0[key] = previous;
+    }
+    if (index === snapshotIndex) {
+      dsp0[key] = enabled;
+    }
+  }
+  if (baseBlock) {
+    baseBlock['@enabled'] = enabled;
+  }
+}
+
+/** Set one snapshot's footswitch LED palette index (0 = Auto … 11 = Off). */
+export function setImportedSnapshotLedColor(
+  preset: EditPreset,
+  index: number,
+  color: number,
+): void {
+  if (!Number.isInteger(index) || index < 0 || index > 3) {
+    return;
+  }
+  if (!Number.isInteger(color) || color < 0 || color > 11) {
+    return;
+  }
+  ensureSnapshot(preset, index)['@ledcolor'] = color;
+}
+
+/**
+ * Set the loaded snapshot (`@current_snapshot`, 0-based).
+ *
+ * This is a JSON edit: selecting a snapshot only changes the document that
+ * the next export writes. The pedal's own snapshot select (op 88) is a live
+ * device command and is not used here.
+ */
+export function setImportedSnapshot(preset: EditPreset, index: number): void {
+  if (!Number.isInteger(index) || index < 0 || index > 3) {
+    return;
+  }
+  const global = asObject(preset.tone.global);
+  if (global) {
+    global['@current_snapshot'] = index;
+  }
+}
+
+/**
+ * Rename one snapshot, keeping its stored state and validity flag.
+ *
+ * An empty name removes `@name`, so the vendor editor falls back to
+ * `SNAPSHOT n`. Snapshots that were `{}` get an object with only the name;
+ * this does not mark them valid, because this build has no evidence for when
+ * the pedal flips `@valid`.
+ */
+export function setImportedSnapshotName(
+  preset: EditPreset,
+  index: number,
+  name: string,
+): void {
+  if (!Number.isInteger(index) || index < 0 || index > 3) {
+    return;
+  }
+  const key = `snapshot${index}`;
+  const snapshot = asObject(preset.tone[key]);
+  if (!snapshot) {
+    if (name) {
+      preset.tone[key] = { '@name': name };
+    }
+    return;
+  }
+  if (name) {
+    snapshot['@name'] = name;
+  } else {
+    delete snapshot['@name'];
   }
 }
 

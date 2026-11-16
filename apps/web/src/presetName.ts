@@ -7,6 +7,32 @@
 
 export const MAX_PRESET_NAME_BYTES = 16;
 
+/**
+ * Snapshot labels are shorter than preset names: the POD Go Owner's Manual
+ * (v2.50, "Customizing a Snapshot Footswitch's Label & LED Color") says the
+ * Rename Snapshot screen accepts **up to 10 characters**.
+ */
+export const MAX_SNAPSHOT_NAME_LENGTH = 10;
+
+/**
+ * Return an error message, or `null` when a snapshot name is acceptable.
+ *
+ * An empty name is allowed: it clears the custom label, and the editor falls
+ * back to `SNAPSHOT n`.
+ */
+export function validateSnapshotName(name: string): string | null {
+  for (const char of name) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || code > 0x7e) {
+      return 'Use printable ASCII only (no accents, tabs or control bytes).';
+    }
+  }
+  if (name.length > MAX_SNAPSHOT_NAME_LENGTH) {
+    return `The snapshot name must fit in ${MAX_SNAPSHOT_NAME_LENGTH} characters.`;
+  }
+  return null;
+}
+
 /** Return an error message, or `null` when the name is acceptable. */
 export function validatePresetName(name: string): string | null {
   if (name.length === 0) {

@@ -11,6 +11,11 @@ import {
   processingChain,
   slotLabel,
 } from '../catalog';
+import { MAX_SNAPSHOT_NAME_LENGTH } from '../presetName';
+import {
+  SNAPSHOT_LED_COLORS,
+  snapshotLedColor,
+} from '../snapshot';
 import type { CatalogModel, PresetStructure, Selection } from '../types';
 import BlockInspector from './BlockInspector';
 import SignalChain from './SignalChain';
@@ -32,6 +37,20 @@ interface Props {
   onSelectModel?: (index: number | null, model: CatalogModel) => void;
   /** Reorder blocks by drag and drop; absent for read-only presets. */
   onMoveBlock?: (from: number, to: number) => void;
+  /** Select one snapshot in an offline draft. */
+  onSelectSnapshot?: (index: number) => void;
+  /** Rename one snapshot; absent for read-only presets. */
+  onRenameSnapshot?: (index: number, name: string) => void;
+  /** Change a snapshot's LED palette colour; absent for read-only presets. */
+  onSetSnapshotLedColor?: (index: number, color: number) => void;
+  /** Assign or remove the Snapshots controller on a parameter. */
+  onToggleSnapshotParam?: (
+    block: number,
+    paramIndex: number,
+    assigned: boolean,
+  ) => void;
+  /** Bypass or enable a block in the active snapshot. */
+  onSetBlockEnabled?: (block: number, enabled: boolean) => void;
   canExport: boolean;
   onExport: () => void;
   canRename: boolean;
@@ -51,6 +70,11 @@ export default function PresetView({
   onEditParam,
   onSelectModel,
   onMoveBlock,
+  onSelectSnapshot,
+  onRenameSnapshot,
+  onSetSnapshotLedColor,
+  onToggleSnapshotParam,
+  onSetBlockEnabled,
   canExport,
   onExport,
   canRename,
@@ -60,12 +84,15 @@ export default function PresetView({
   const [selected, setSelected] = useState<Selection>(() =>
     firstSelection(processing),
   );
+  const [editingSnapshot, setEditingSnapshot] = useState<number | null>(null);
+  const [snapshotDraft, setSnapshotDraft] = useState('');
 
   // Reset on a new preset, not on an edit: a parameter write replaces the
   // structure object, and resetting there would jump back to the first slot.
   const presetKey = `${structure.preset.setlist}:${structure.preset.slot}:${structure.preset.name}`;
   useEffect(() => {
     setSelected(firstSelection(processingChain(structure.chain)));
+    setEditingSnapshot(null);
   }, [presetKey]);
 
   const selectedEntry =
@@ -108,6 +135,53 @@ export default function PresetView({
       ? SETLISTS[structure.preset.setlist]
       : null;
 
+  const snapshotIndex =
+    structure.currentSnapshot !== null &&
+    structure.currentSnapshot >= 0 &&
+    structure.currentSnapshot < structure.snapshots.length
+      ? structure.currentSnapshot
+      : 0;
+  const activeSnapshot = structure.snapshots[snapshotIndex] ?? null;
+  const activeLed = snapshotLedColor(activeSnapshot?.ledColor ?? 0);
+
+  // Base controller assignments and the values the active snapshot recalls for
+  // the selected block. The inspector uses both to draw the camera toggle and
+  // the bypass button.
+  const blockIndex = selectedIndex(selected);
+  const snapshotAssignments = new Map<number, number>();
+  const snapshotValues = new Set<number>();
+  if (blockIndex !== null) {
+    for (const controller of structure.controllers) {
+      if (controller.block === blockIndex) {
+        snapshotAssignments.set(controller.paramIndex, controller.controller);
+      }
+    }
+    for (const value of activeSnapshot?.controllers ?? []) {
+      if (value.block === blockIndex) {
+        snapshotValues.add(value.paramIndex);
+      }
+    }
+  }
+
+  /** Start editing a snapshot label inline (double-click on the chip). */
+  function startSnapshotRename(index: number): void {
+    if (!onRenameSnapshot) {
+      return;
+    }
+    setSnapshotDraft(structure.snapshots[index]?.name ?? '');
+    setEditingSnapshot(index);
+  }
+
+  /** Enter accepts; anything else cancels (blur keeps the old name). */
+  function commitSnapshotRename(): void {
+    if (editingSnapshot === null) {
+      return;
+    }
+    const index = editingSnapshot;
+    setEditingSnapshot(null);
+    onRenameSnapshot?.(index, snapshotDraft.trim());
+  }
+
   return (
     <div className="preset-view">
       <div className="editor-toolbar">
@@ -148,18 +222,104 @@ export default function PresetView({
         </div>
 
         <div className="snapshot-row" aria-label="Snapshots">
-          {structure.snapshots.slice(0, 4).map((snapshot, index) => (
-            <span
-              key={index}
-              className={`snapshot${
-                snapshot.name && snapshot.valid ? '' : ' is-empty'
-              }${structure.currentSnapshot === index ? ' is-active' : ''}`}
-              title={snapshot.name || `Snapshot ${index + 1}`}
+          {structure.snapshots.slice(0, 4).map((snapshot, index) => {
+            if (editingSnapshot === index) {
+              return (
+                <input
+                  key={`edit-${index}`}
+                  className="snapshot snapshot-input"
+                  aria-label={`Snapshot ${index + 1} name`}
+                  value={snapshotDraft}
+                  maxLength={MAX_SNAPSHOT_NAME_LENGTH}
+                  autoFocus
+                  title={`Snapshot name — up to ${MAX_SNAPSHOT_NAME_LENGTH} characters, Enter to accept`}
+                  onChange={(event) => {
+                    const next = event.target.value
+                      .replace(/[^\x20-\x7e]/g, '')
+                      .slice(0, MAX_SNAPSHOT_NAME_LENGTH);
+                    setSnapshotDraft(next);
+                  }}
+                  onBlur={() => setEditingSnapshot(null)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      commitSnapshotRename();
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault();
+                      setEditingSnapshot(null);
+                    }
+                  }}
+                  onClick={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                />
+              );
+            }
+            const fallback = `SNAPSHOT ${index + 1}`;
+            const label = snapshot.name || fallback;
+            const custom = label.toUpperCase() !== fallback;
+            const editableSnapshot = Boolean(
+              onSelectSnapshot || onRenameSnapshot,
+            );
+            const led = snapshotLedColor(snapshot.ledColor);
+            return (
+              <button
+                key={index}
+                type="button"
+                className={`snapshot${snapshot.valid ? '' : ' is-empty'}${
+                  structure.currentSnapshot === index ? ' is-active' : ''
+                }`}
+                disabled={!editableSnapshot}
+                title={
+                  editableSnapshot
+                    ? `${label} — click to select, double-click to rename (up to ${MAX_SNAPSHOT_NAME_LENGTH} characters)`
+                    : label
+                }
+                onClick={() => onSelectSnapshot?.(index)}
+                onDoubleClick={() => startSnapshotRename(index)}
+              >
+                <span
+                  className={`snapshot-led${led.color ? '' : ' is-off'}`}
+                  style={led.color ? { background: led.color } : undefined}
+                  aria-hidden="true"
+                />
+                {custom ? (
+                  <>
+                    <span className="snapshot-number">{index + 1}</span>
+                    <span className="snapshot-name">{label}</span>
+                  </>
+                ) : (
+                  <span className="snapshot-name">{label}</span>
+                )}
+              </button>
+            );
+          })}
+          {onSetSnapshotLedColor && (
+            <label
+              className="snapshot-led-picker"
+              title={`Footswitch LED colour of snapshot ${snapshotIndex + 1}`}
             >
-              {index + 1}
-              {snapshot.name ? ` ${snapshot.name}` : ''}
-            </span>
-          ))}
+              <span
+                className={`snapshot-led${activeLed.color ? '' : ' is-off'}`}
+                style={
+                  activeLed.color ? { background: activeLed.color } : undefined
+                }
+                aria-hidden="true"
+              />
+              <select
+                aria-label="Snapshot LED colour"
+                value={activeSnapshot?.ledColor ?? 0}
+                onChange={(event) =>
+                  onSetSnapshotLedColor(snapshotIndex, Number(event.target.value))
+                }
+              >
+                {SNAPSHOT_LED_COLORS.map((entry) => (
+                  <option key={entry.index} value={entry.index}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
 
         <div className="toolbar-right">
@@ -219,6 +379,20 @@ export default function PresetView({
             : undefined
         }
         usedModelCategories={usedModelCategories}
+        snapshotIndex={snapshotIndex}
+        snapshotAssignments={snapshotAssignments}
+        snapshotValues={snapshotValues}
+        onToggleSnapshotParam={
+          onToggleSnapshotParam && blockIndex !== null
+            ? (paramIndex, assigned) =>
+                onToggleSnapshotParam(blockIndex, paramIndex, assigned)
+            : undefined
+        }
+        onSetBlockEnabled={
+          onSetBlockEnabled && blockIndex !== null
+            ? (enabled) => onSetBlockEnabled(blockIndex, enabled)
+            : undefined
+        }
       />
 
       <div className="editor-foot">

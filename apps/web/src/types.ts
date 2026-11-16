@@ -73,10 +73,36 @@ export interface FootswitchAssignment {
 }
 
 export interface ControllerAssignment {
+  /** 0-based `dsp0` block index the controller is attached to. */
+  block: number;
   controller: number;
   paramIndex: number;
   min: number;
   max: number;
+}
+
+/** One parameter value stored in a snapshot (`snapshotN.controllers`). */
+export interface SnapshotParamValue {
+  /** 0-based `dsp0` block index. */
+  block: number;
+  paramIndex: number;
+  value: ChainParamValue;
+  fsEnabled: boolean;
+}
+
+export interface SnapshotState {
+  name: string;
+  valid: boolean;
+  tempo: number | null;
+  /** JSON `@ledcolor` palette index (0 = Auto … 11 = Off). */
+  ledColor: number;
+  /**
+   * Per-snapshot bypass state of the 10 processing slots:
+   * `true` = active, `false` = bypassed, `null` = not stored (use the block).
+   */
+  blocks: (boolean | null)[];
+  /** Parameter values this snapshot recalls. */
+  controllers: SnapshotParamValue[];
 }
 
 export interface PresetStructure {
@@ -85,7 +111,7 @@ export interface PresetStructure {
   firmware: string;
   tempo: number | null;
   currentSnapshot: number | null;
-  snapshots: { name: string; valid: boolean; tempo: number | null }[];
+  snapshots: SnapshotState[];
   chain: ChainEntry[];
   footswitches: FootswitchAssignment[];
   controllers: ControllerAssignment[];

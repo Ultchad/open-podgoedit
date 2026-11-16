@@ -41,6 +41,7 @@ import type {
   ChainEntry,
   ChainParamValue,
 } from '../types';
+import { SNAPSHOT_CONTROLLER } from '../podgoEdit';
 
 type Mode = 'params' | 'models';
 
@@ -57,6 +58,16 @@ interface Props {
   onSelectModel?: (model: CatalogModel) => void;
   /** Categories already used by the other blocks (single-role models). */
   usedModelCategories: ReadonlySet<string>;
+  /** Active snapshot (0-based) for the snapshots label. */
+  snapshotIndex: number;
+  /** Base controller number per parameter index for this block. */
+  snapshotAssignments: ReadonlyMap<number, number>;
+  /** Parameter indexes that have a stored value in the active snapshot. */
+  snapshotValues: ReadonlySet<number>;
+  /** Assign or remove the Snapshots controller on a parameter. */
+  onToggleSnapshotParam?: (paramIndex: number, assigned: boolean) => void;
+  /** Bypass or enable this block in the active snapshot. */
+  onSetBlockEnabled?: (enabled: boolean) => void;
 }
 
 export default function BlockInspector({
@@ -67,6 +78,11 @@ export default function BlockInspector({
   onEditParam,
   onSelectModel,
   usedModelCategories,
+  snapshotIndex,
+  snapshotAssignments,
+  snapshotValues,
+  onToggleSnapshotParam,
+  onSetBlockEnabled,
 }: Props) {
   const [mode, setMode] = useState<Mode>('params');
 
@@ -146,11 +162,26 @@ export default function BlockInspector({
           {display}
         </span>
         {model?.sub && <span className="inspector-sub">{model.sub}</span>}
-        {entry?.kind === 'block' && (
-          <span className={`inspector-state${enabled ? '' : ' is-bypassed'}`}>
-            {enabled ? 'active' : 'bypassed'}
-          </span>
-        )}
+        {entry?.kind === 'block' &&
+          (onSetBlockEnabled ? (
+            <button
+              type="button"
+              className={`inspector-state is-toggle${
+                enabled ? '' : ' is-bypassed'
+              }`}
+              aria-pressed={!enabled}
+              title={`${enabled ? 'Bypass' : 'Enable'} this block in snapshot ${
+                snapshotIndex + 1
+              } (draft, not written)`}
+              onClick={() => onSetBlockEnabled(!enabled)}
+            >
+              {enabled ? 'active' : 'bypassed'}
+            </button>
+          ) : (
+            <span className={`inspector-state${enabled ? '' : ' is-bypassed'}`}>
+              {enabled ? 'active' : 'bypassed'}
+            </span>
+          ))}
         {index !== null && entry?.kind === 'block' && (
           <span className="inspector-slot">slot {index + 1}</span>
         )}
@@ -171,6 +202,9 @@ export default function BlockInspector({
           editable={editable}
           editHint={editHint}
           onEditParam={onEditParam}
+          snapshotAssignments={snapshotAssignments}
+          snapshotValues={snapshotValues}
+          onToggleSnapshotParam={onToggleSnapshotParam}
         />
       )}
     </section>
@@ -185,6 +219,9 @@ function ParamList({
   editable,
   editHint,
   onEditParam,
+  snapshotAssignments,
+  snapshotValues,
+  onToggleSnapshotParam,
 }: {
   entry: ChainEntry;
   io: IoKind | null;
@@ -193,6 +230,9 @@ function ParamList({
   editable: boolean;
   editHint: string | null;
   onEditParam: (block: number, paramIndex: number, value: number) => void;
+  snapshotAssignments: ReadonlyMap<number, number>;
+  snapshotValues: ReadonlySet<number>;
+  onToggleSnapshotParam?: (paramIndex: number, assigned: boolean) => void;
 }) {
   const values: ChainParamValue[] =
     'params' in entry ? (entry.params as ChainParamValue[]) : [];
@@ -226,7 +266,14 @@ function ParamList({
           value={values[index] ?? null}
           color={color}
           editable={writable && param?.k === 'cont'}
+          controller={snapshotAssignments.get(index)}
+          snapshotStored={snapshotValues.has(index)}
           onEditParam={onEditParam}
+          onToggleSnapshot={
+            onToggleSnapshotParam && param?.k === 'cont'
+              ? (assigned) => onToggleSnapshotParam(index, assigned)
+              : undefined
+          }
         />
       ))}
     </div>
@@ -240,7 +287,10 @@ function ParamRow({
   value,
   color,
   editable,
+  controller,
+  snapshotStored,
   onEditParam,
+  onToggleSnapshot,
 }: {
   entry: ChainEntry;
   param: CatalogParam | null;
@@ -248,7 +298,12 @@ function ParamRow({
   value: ChainParamValue;
   color: string;
   editable: boolean;
+  /** Base controller number, when this parameter is assigned. */
+  controller: number | undefined;
+  /** The active snapshot stores a value for this parameter. */
+  snapshotStored: boolean;
   onEditParam: (block: number, paramIndex: number, value: number) => void;
+  onToggleSnapshot?: (assigned: boolean) => void;
 }) {
   const fraction = valueFraction(param, value);
   const [rangeMin, rangeMax] = paramRange(param);
@@ -297,10 +352,53 @@ function ParamRow({
     setDraft(formatDraft(currentDisplay, param));
   }
 
+  const snapshotControlled = controller === SNAPSHOT_CONTROLLER;
+  const otherController =
+    controller !== undefined && controller !== SNAPSHOT_CONTROLLER;
+  const otherControllerLabel =
+    controller === 1
+      ? 'EXP 1'
+      : controller === 2
+        ? 'EXP 2'
+        : `controller ${String(controller)}`;
+  const snapshotTitle = otherController
+    ? `${otherControllerLabel} controls this parameter. Clear that assignment in POD Go Edit before using the Snapshots controller.`
+    : snapshotControlled
+      ? `Snapshots control this parameter${
+          snapshotStored ? ' and this snapshot stores a value' : ''
+        } — click to remove it from all snapshots (draft)`
+      : 'Store a different value for this parameter in each snapshot (draft, exported with .pgp)';
+
   return (
     <div className="param-row">
       <div className="param-line">
         <span className="param-name">
+          {onToggleSnapshot && (
+            <button
+              type="button"
+              className={`snapshot-assign${
+                snapshotControlled ? ' is-on' : ''
+              }${otherController ? ' is-blocked' : ''}`}
+              aria-pressed={snapshotControlled}
+              aria-label={`Snapshots controller for ${paramLabel(param, index)}`}
+              title={snapshotTitle}
+              disabled={otherController}
+              onClick={() => onToggleSnapshot(!snapshotControlled)}
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="12"
+                height="12"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path
+                  fill="currentColor"
+                  d="M6.5 2 5.6 3.4H3.2A1.7 1.7 0 0 0 1.5 5v6.9a1.7 1.7 0 0 0 1.7 1.6h9.6a1.7 1.7 0 0 0 1.7-1.6V5a1.7 1.7 0 0 0-1.7-1.6h-2.4L9.5 2h-3Zm1.5 3a3.3 3.3 0 1 1 0 6.6 3.3 3.3 0 0 1 0-6.6Zm0 1.4a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8Z"
+                />
+              </svg>
+            </button>
+          )}
           {paramLabel(param, index)}
           {param?.k === 'int' && param.labels ? (
             <span className="param-tag">enum</span>

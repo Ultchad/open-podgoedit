@@ -31,12 +31,34 @@ semantic versioning once it reaches 1.0.
   going back shows them again with an `unsaved changes` chip until Export;
   only unsaved pedal RAM drafts prompt before being dropped on a new read.
   New `PresetMenu`, `defaultPreset.ts`, `modelByName`, `presetFromDocument`
-  and `clonePreset`; 19 Playwright tests cover the offline library, the
+  and `clonePreset`; 22 Playwright tests cover the offline library, the
   disabled save paths, draft retention across preset switches, model loading,
-  chain reordering, the context menu, drag-and-drop, in-place parameter
-  editing and the batch save.
+  chain reordering, snapshot selection/renaming, per-snapshot values, bypass
+  and LED colours, the context menu, drag-and-drop, in-place parameter editing
+  and the batch save. A small GitHub logo next to the `WASM ready` badge links
+  to the source repository.
 
 ### Added
+- **Per-snapshot values, bypass and LED colours in offline presets.** The
+  inspector's camera toggle assigns the Snapshots controller (`@controller:
+  10`, **ITM** for POD Go) to a continuous parameter and stores its current
+  value in all four snapshots. A parameter that already follows an EXP pedal
+  cannot be converted, so its toggle is disabled instead of deleting that
+  assignment. Editing an assigned parameter updates the loaded snapshot, and
+  the header's active/bypassed chip toggles the block in that snapshot only.
+  A palette picker on the snapshot row sets `@ledcolor` (Auto, White, Red,
+  Dark Orange, Light Orange, Yellow, Green, Turquoise, Blue, Violet, Pink,
+  Off). All changes stay in the working copy and export through `.pgp`;
+  nothing is written to the pedal.
+- **Snapshot selection and renaming in offline presets.** Clicking a snapshot
+  chip makes it the active snapshot saved with the preset
+  (`@current_snapshot`), and double-clicking its label opens an inline field:
+  **Enter** accepts, **Esc** or blur cancels. Labels are limited to the 10
+  printable ASCII characters the POD Go Owner's Manual documents for the
+  Rename Snapshot screen; clearing the name falls back to `SNAPSHOT n`. Both
+  changes follow the normal draft contract (browser/local copy, Save for the
+  pedal, Export `.pgp` for a file) and never write to the pedal; choosing a
+  snapshot on the hardware still uses the pedal's own controls.
 - **Model swapping and chain editing in offline presets.** The Models tab now
   loads a model into the selected block (or an empty slot) when an offline
   document is open: clicking a tile writes the model and its vendor defaults,
