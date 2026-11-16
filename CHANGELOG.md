@@ -7,6 +7,11 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Changed
+- **CI quality gates.** `.github/workflows/ci.yml` now runs on every pull
+  request and every push to `dev`/`main`: Rust formatting, Clippy and offline
+  workspace tests, the WASM host tests, `tsc` and the production build, then
+  the Playwright suite (23 tests). Failed browser runs upload their traces.
+  GitHub Pages deployment remains a separate `main`-only workflow.
 - **Offline-first editor, draft edits and a compact UI.** The page now loads
   without a pedal: Factory names come from the bundled
   `factory_setlist_fw250.bin`, and User `01A` is seeded with a neutral
