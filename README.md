@@ -10,6 +10,8 @@ He was inspired by the project [openpodgo](https://github.com/agarat/openpodgo)
 > used only to describe interoperability. See [NOTICE](NOTICE) and
 > [docs/reverse-engineering/legal-notes.md](docs/reverse-engineering/legal-notes.md).
 
+The [open-podgoedit](https://ultchad.github.io/open-podgoedit/) website runs entirely in your browser (only Chromium-based browsers are supported)
+
 ## Status
 
 Phase 1 (analysis and architecture) is documented in
