@@ -7,6 +7,10 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Changed
+- **Unofficial-project disclaimer.** The README opens with a plain-language
+  disclaimer (not affiliated with Line 6 / Yamaha, not linked to POD Go Edit,
+  use at your own risk, keep a backup) and the web UI shows the same notice
+  under the editor plus a one-line "unofficial" subtitle in the header.
 - **CI quality gates.** `.github/workflows/ci.yml` now runs on every pull
   request and every push to `dev`/`main`: Rust formatting, Clippy and offline
   workspace tests, the WASM host tests, `tsc` and the production build, then

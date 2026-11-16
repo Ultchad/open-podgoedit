@@ -10,6 +10,22 @@ He was inspired by the project [openpodgo](https://github.com/agarat/openpodgo)
 > used only to describe interoperability. See [NOTICE](NOTICE) and
 > [docs/reverse-engineering/legal-notes.md](docs/reverse-engineering/legal-notes.md).
 
+## Disclaimer
+
+- **Unofficial.** This project is not made, endorsed, sponsored or supported by
+  Line 6 or Yamaha Guitar Group, and it is **not linked to** the official
+  POD Go Edit software in any way.
+- **Use at your own risk.** The software is provided "as is", without warranty
+  of any kind. The author is **not responsible** for any damage to your pedal,
+  its firmware, your presets or any other data, nor for any loss arising from
+  its use.
+- **Keep a backup.** Before enabling device writes, export a full backup from
+  POD Go Edit. Writes are opt-in, gated behind the **Enable writing** checkbox,
+  and never enabled by default.
+- Some features (device writes, restore, `.pgb` export) are inferred from
+  observation and are not all validated on hardware. See the
+  [roadmap](docs/roadmap.md) for the evidence level of each feature.
+
 The [open-podgoedit](https://ultchad.github.io/open-podgoedit/) website runs entirely in your browser (only Chromium-based browsers are supported)
 
 ## Status
