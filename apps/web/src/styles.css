@@ -1908,6 +1908,57 @@ dl.save-backup-info dd {
   border-top: 1px solid var(--line);
 }
 
+.snapshot-menu-title {
+  margin: 0.2rem 0.55rem 0.35rem;
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snapshot-menu-label {
+  margin: 0.1rem 0.55rem 0.3rem;
+  color: var(--text-dim);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.snapshot-palette {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.25rem;
+  padding: 0 0.3rem 0.2rem;
+}
+
+.context-menu .snapshot-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.6rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+}
+
+.context-menu .snapshot-swatch:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-3);
+}
+
+.context-menu .snapshot-swatch.is-active {
+  border-color: var(--amber);
+  background: #2b2412;
+}
+
+.snapshot-swatch .snapshot-led {
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-right: 0;
+}
+
 /* --- developer tools ----------------------------------------------------- */
 
 .developer-tools {

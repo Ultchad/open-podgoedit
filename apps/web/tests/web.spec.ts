@@ -400,6 +400,53 @@ test('marks EXP-controlled parameters as not assignable to snapshots', async ({
   await expect(pedal).toHaveAttribute('title', /EXP 2 controls this parameter/);
 });
 
+test('opens snapshot actions from the right-click menu', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  const chips = page.locator('.snapshot');
+  const menu = page.getByRole('menu', { name: 'Snapshot 3 actions' });
+
+  // Right-clicking a chip opens its own actions, without changing the draft.
+  await chips.nth(2).click({ button: 'right' });
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText('SNAPSHOT 3');
+  await menu
+    .getByRole('menuitem', { name: 'Use as active snapshot' })
+    .click();
+  await expect(chips.nth(2)).toHaveClass(/is-active/);
+
+  // Rename from the menu opens the same inline field as a double-click.
+  await chips.nth(2).click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Rename snapshot…' }).click();
+  const nameField = page.getByRole('textbox', { name: 'Snapshot 3 name' });
+  await expect(nameField).toBeVisible();
+  await nameField.fill('LEAD');
+  await nameField.press('Enter');
+  await expect(chips.nth(2)).toContainText('LEAD');
+
+  // The palette writes the fixed LED index and updates the chip dot.
+  await chips.nth(2).click({ button: 'right' });
+  await menu.getByRole('menuitemradio', { name: 'Blue' }).click();
+  await expect(chips.nth(2).locator('.snapshot-led')).toHaveCSS(
+    'background-color',
+    'rgb(59, 130, 246)',
+  );
+
+  // Clearing the custom name falls back to SNAPSHOT 3.
+  await chips.nth(2).click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Clear custom name' }).click();
+  await expect(chips.nth(2)).toContainText('SNAPSHOT 3');
+
+  const download = page.waitForEvent('download');
+  await page.locator('#export-pgp').click();
+  const file = await download;
+  const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
+  expect(doc.data.tone.global['@current_snapshot']).toBe(2);
+  expect(doc.data.tone.snapshot2['@name']).toBeUndefined();
+  expect(doc.data.tone.snapshot2['@ledcolor']).toBe(8);
+});
+
 test('selects and renames snapshots offline, then exports them', async ({
   page,
 }) => {

@@ -31,12 +31,12 @@ semantic versioning once it reaches 1.0.
   going back shows them again with an `unsaved changes` chip until Export;
   only unsaved pedal RAM drafts prompt before being dropped on a new read.
   New `PresetMenu`, `defaultPreset.ts`, `modelByName`, `presetFromDocument`
-  and `clonePreset`; 22 Playwright tests cover the offline library, the
+  and `clonePreset`; 23 Playwright tests cover the offline library, the
   disabled save paths, draft retention across preset switches, model loading,
   chain reordering, snapshot selection/renaming, per-snapshot values, bypass
-  and LED colours, the context menu, drag-and-drop, in-place parameter editing
-  and the batch save. A small GitHub logo next to the `WASM ready` badge links
-  to the source repository.
+  and LED colours, the snapshot and preset context menus, drag-and-drop,
+  in-place parameter editing and the batch save. A small GitHub logo next to
+  the `WASM ready` badge links to the source repository.
 
 ### Added
 - **Per-snapshot values, bypass and LED colours in offline presets.** The
@@ -53,7 +53,9 @@ semantic versioning once it reaches 1.0.
 - **Snapshot selection and renaming in offline presets.** Clicking a snapshot
   chip makes it the active snapshot saved with the preset
   (`@current_snapshot`), and double-clicking its label opens an inline field:
-  **Enter** accepts, **Esc** or blur cancels. Labels are limited to the 10
+  **Enter** accepts, **Esc** or blur cancels. Right-clicking a chip opens the
+  same actions as a menu: rename, use as the active snapshot, clear the custom
+  name and pick any footswitch LED colour. Labels are limited to the 10
   printable ASCII characters the POD Go Owner's Manual documents for the
   Rename Snapshot screen; clearing the name falls back to `SNAPSHOT n`. Both
   changes follow the normal draft contract (browser/local copy, Save for the

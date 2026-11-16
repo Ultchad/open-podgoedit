@@ -35,9 +35,11 @@ setlist depuis un POD Go branché en **WebUSB**.
   dans la liste, pour montrer qu'il n'est pas encore sur le pédalier.
 - **Snapshots** : un clic sur une puce choisit le snapshot actif enregistré
   avec le preset (`@current_snapshot`) et un double-clic sur son nom ouvre un
-  champ de saisie (Entrée valide, Échap ou perte de focus annule). Le nom est
-  limité aux 10 caractères ASCII imprimables documentés par le manuel du POD
-  Go ; un nom vide revient à `SNAPSHOT n`. La caméra à gauche d'un paramètre
+  champ de saisie (Entrée valide, Échap ou perte de focus annule). Un clic
+  droit sur une puce ouvre le même menu d'actions : renommer, activer,
+  effacer le nom personnalisé et choisir la couleur de LED. Le nom est limité
+  aux 10 caractères ASCII imprimables documentés par le manuel du POD Go ; un
+  nom vide revient à `SNAPSHOT n`. La caméra à gauche d'un paramètre
   l'assigne au contrôleur Snapshots (`@controller: 10`, **ITM** pour POD Go) :
   chaque snapshot garde alors sa propre valeur, et un paramètre déjà piloté par
   une pédale d'expression ne peut pas être converti (la caméra est désactivée).

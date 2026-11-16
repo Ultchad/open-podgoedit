@@ -19,6 +19,7 @@ import {
 import type { CatalogModel, PresetStructure, Selection } from '../types';
 import BlockInspector from './BlockInspector';
 import SignalChain from './SignalChain';
+import SnapshotMenu from './SnapshotMenu';
 
 interface Props {
   structure: PresetStructure;
@@ -86,6 +87,11 @@ export default function PresetView({
   );
   const [editingSnapshot, setEditingSnapshot] = useState<number | null>(null);
   const [snapshotDraft, setSnapshotDraft] = useState('');
+  const [snapshotMenu, setSnapshotMenu] = useState<{
+    x: number;
+    y: number;
+    index: number;
+  } | null>(null);
 
   // Reset on a new preset, not on an edit: a parameter write replaces the
   // structure object, and resetting there would jump back to the first slot.
@@ -93,6 +99,7 @@ export default function PresetView({
   useEffect(() => {
     setSelected(firstSelection(processingChain(structure.chain)));
     setEditingSnapshot(null);
+    setSnapshotMenu(null);
   }, [presetKey]);
 
   const selectedEntry =
@@ -143,6 +150,13 @@ export default function PresetView({
       : 0;
   const activeSnapshot = structure.snapshots[snapshotIndex] ?? null;
   const activeLed = snapshotLedColor(activeSnapshot?.ledColor ?? 0);
+  const snapshotEditable = Boolean(
+    onRenameSnapshot || onSelectSnapshot || onSetSnapshotLedColor,
+  );
+  const menuSnapshot =
+    snapshotMenu && structure.snapshots[snapshotMenu.index]
+      ? structure.snapshots[snapshotMenu.index]
+      : null;
 
   // Base controller assignments and the values the active snapshot recalls for
   // the selected block. The inspector uses both to draw the camera toggle and
@@ -271,11 +285,23 @@ export default function PresetView({
                 disabled={!editableSnapshot}
                 title={
                   editableSnapshot
-                    ? `${label} — click to select, double-click to rename (up to ${MAX_SNAPSHOT_NAME_LENGTH} characters)`
+                    ? `${label} — click to select, double-click to rename, right-click for actions`
                     : label
                 }
                 onClick={() => onSelectSnapshot?.(index)}
                 onDoubleClick={() => startSnapshotRename(index)}
+                onContextMenu={(event) => {
+                  if (!snapshotEditable) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setSnapshotMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    index,
+                  });
+                }}
               >
                 <span
                   className={`snapshot-led${led.color ? '' : ' is-off'}`}
@@ -429,6 +455,23 @@ export default function PresetView({
           })}
         </span>
       </div>
+
+      {snapshotMenu && menuSnapshot && (
+        <SnapshotMenu
+          x={snapshotMenu.x}
+          y={snapshotMenu.y}
+          index={snapshotMenu.index}
+          snapshot={menuSnapshot}
+          active={structure.currentSnapshot === snapshotMenu.index}
+          onRename={() => startSnapshotRename(snapshotMenu.index)}
+          onSelect={() => onSelectSnapshot?.(snapshotMenu.index)}
+          onClearName={() => onRenameSnapshot?.(snapshotMenu.index, '')}
+          onSetLedColor={(color) =>
+            onSetSnapshotLedColor?.(snapshotMenu.index, color)
+          }
+          onClose={() => setSnapshotMenu(null)}
+        />
+      )}
     </div>
   );
 }
