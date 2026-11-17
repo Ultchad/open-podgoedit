@@ -1369,7 +1369,7 @@ export default function App() {
       `Imported "${name}" from ${label} into User ${slotLabel(
         target.slot,
       )} (offline copy, exports as .pgp${
-        backup && source ? ' or .pgb' : ''
+        fromBackup ? ' or .pgb' : ''
       }).`,
     );
   }
