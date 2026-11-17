@@ -37,6 +37,9 @@ semantic versioning once it reaches 1.0.
   automatically, so the editor is usable without pressing Read first.
 
 ### Changed
+- **One connection button.** The header now shows a single **Connect** button
+  that becomes **Disconnect** while a pedal is open, instead of two buttons
+  that were alternately disabled.
 - **Unofficial-project disclaimer.** The README opens with a plain-language
   disclaimer (not affiliated with Line 6 / Yamaha, not linked to POD Go Edit,
   use at your own risk, keep a backup) and the web UI shows the same notice

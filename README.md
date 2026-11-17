@@ -158,7 +158,8 @@ npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. Click **Connect POD Go**, select the Line 6
+Open <http://127.0.0.1:5173>. Click **Connect** (the same button turns into
+**Disconnect** while a pedal is open), select the Line 6
 device, then **Read User**, **Read Factory** or **Read active preset**. After a
 setlist read, click any preset in the librarian to open that slot's chain
 without recalling it on the pedal. Reads are always safe; writes stay off until
