@@ -175,11 +175,14 @@ pub fn subset_backup(bytes: &[u8], pairs: &[u8]) -> Result<Vec<u8>, String> {
             .entries
             .iter()
             .find(|entry| entry.setlist == setlist && entry.slot == slot)
-            .ok_or_else(|| {
-                format!("the backup has no preset at setlist {setlist} slot {slot}")
-            })?;
+            .ok_or_else(|| format!("the backup has no preset at setlist {setlist} slot {slot}"))?;
         subset
-            .add(entry.setlist, entry.slot, entry.name.clone(), entry.blob.clone())
+            .add(
+                entry.setlist,
+                entry.slot,
+                entry.name.clone(),
+                entry.blob.clone(),
+            )
             .map_err(|err| err.to_string())?;
     }
     let encoded = subset.encode().map_err(|err| err.to_string())?;
@@ -568,7 +571,9 @@ mod tests {
             body.resize(200, fill);
             body
         };
-        builder.add(0, 2, "Factory A".to_owned(), &blob(0x11)).unwrap();
+        builder
+            .add(0, 2, "Factory A".to_owned(), &blob(0x11))
+            .unwrap();
         builder.add(1, 3, "User A".to_owned(), &blob(0x22)).unwrap();
         builder.add(1, 9, "User B".to_owned(), &blob(0x33)).unwrap();
         let full = builder.finish().unwrap();
