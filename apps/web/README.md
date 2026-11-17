@@ -54,18 +54,20 @@ setlist depuis un POD Go branché en **WebUSB**.
   *Enable writing*. Les presets User se réorganisent par glisser-déposer dans
   la liste locale.
 - **Outils de développement repliés** : lectures Factory/User, lecture du
-  preset actif, sauvegarde complète/restauration `.pgbak`, actions avancées
-  (op 5/71), téléchargement `.bin`, journal de diagnostic et rapports bruts
-  vivent sous **Developer tools**.
+  preset actif, sauvegarde complète ou partielle/restauration `.pgbak`, actions
+  avancées (op 5/71), téléchargement `.bin`, journal de diagnostic et rapports
+  bruts vivent sous **Developer tools**.
 - **Lecture toujours disponible** ; **écriture opt-in** : la case **Enable
   writing**, affichée uniquement quand le pédalier est connecté, est le seul
   garde-fou. **Save**, **Ctrl+S** et **Save to Pedal** restent inactifs sans
   elle ; **Export .pgp** n'en a jamais besoin. Le canal `0x1080 → 0x03ED` sert à
   `set_param` (op 30, preset actif) et à `save_preset` (op 71, métadonnées
   seulement, slot User, sauvegarde préalable du slot destination). Une
-  restauration destructive a **un seul garde-fou** : le fichier est vérifié en
-  Rust, le diff des destinations est affiché, puis un clic sur **Restore N
-  preset(s)** et une confirmation `window.confirm`. Voir
+  sauvegarde `.pgbak` peut couvrir les deux setlists, un seul setlist ou une
+  sélection de slots. Une restauration destructive a **un seul garde-fou** : le
+  fichier est vérifié en Rust, les entrées à restaurer sont cochées, le diff des
+  destinations est affiché, puis un clic sur **Restore N preset(s)** et une
+  confirmation `window.confirm`. Voir
   [docs/protocol/writes.md](../../docs/protocol/writes.md).
 - **Import POD Go Edit et export `.pgp`/`.pgb` hors ligne** : **Import…** ouvre
   un export de preset `.pgp` ou une sauvegarde complète `.pgb` (conteneur `AF6L`
@@ -301,8 +303,9 @@ démarre un. Il vérifie :
 - une lecture du preset actif et le repli sur l'objet 22 seul ;
 - l'ouverture d'un slot depuis la barre latérale (opération 4 ciblée) ;
 - une sauvegarde par lot `set_param` déclenchée par **Ctrl+S**, une sauvegarde
-  `save_preset`, une sauvegarde complète et une restauration op-5 avec **une
-  seule** confirmation ;
+  `save_preset`, une sauvegarde complète ou limitée (setlist ou slots choisis)
+  et une restauration op-5 des seules entrées cochées avec **une seule**
+  confirmation ;
 - le collage et le renommage sur le pédalier sans sauvegarde préalable ;
 - l'import `.pgp`/`.pgb` sans écriture vers le pédalier, l'édition hors ligne
   d'un paramètre et d'un nom, l'export `.pgp` (y compris depuis un `.pgb`) et

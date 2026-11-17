@@ -231,13 +231,18 @@ After the pedal answers status `0`, the page re-reads the User setlist and
 checks that the destination slot now reads the requested name. A mismatch is
 reported in the diagnostics log without pretending the write failed.
 
-### 2.6 Full backup (`.pgbak`)
+### 2.6 Backup (`.pgbak`)
 
-The backup is produced entirely on the host. The page reads both setlists with
-`ReadFlow`, then reads every slot that has a name with `PresetFlow::for_slot`
-(operation 4, `{107: setlist, 108: slot, 101: 2}`) and feeds the raw key-104
-`l6-helix` body, unchanged, to `BackupBuilder`. No preset is decoded or
-re-encoded, so a body restored later is byte-identical to the one read.
+The backup is produced entirely on the host. The page reads the setlists with
+`ReadFlow`, then reads the selected slots that have a name with
+`PresetFlow::for_slot` (operation 4, `{107: setlist, 108: slot, 101: 2}`) and
+feeds the raw key-104 `l6-helix` body, unchanged, to `BackupBuilder`. No preset
+is decoded or re-encoded, so a body restored later is byte-identical to the one
+read.
+
+A full backup covers both setlists; a partial backup can cover one setlist or
+an arbitrary set of slots. Both produce the same versioned container, so the
+restore flow streams either one unchanged.
 
 The container is versioned and self-checking
 (`crates/podgo-domain/src/backup.rs`):
@@ -269,9 +274,16 @@ bytes it just encoded, and on any file the user selects for a restore.
 Backup fails closed: a truncated setlist, a truncated preset or any error other
 than "empty slot" aborts the file. Slots whose setlist name is empty, or whose
 read answers `key 104 is not a blob: nil`, are reported as skipped instead.
-The file is downloaded as `podgo-full-backup-<timestamp>.pgbak`; its SHA-256 is
-shown in the restore dialog as the last safety copy. Taking one is recommended
-but never a precondition for a write.
+The file is downloaded as `podgo-full-backup-<timestamp>.pgbak` or
+`podgo-selected-backup-<timestamp>.pgbak`; its SHA-256 is shown in the restore
+dialog as the last safety copy. Taking one is recommended but never a
+precondition for a write.
+
+`subset_backup` in the WASM crate (over the Rust domain `Backup`) re-encodes a
+selection of entries from a verified file with the same product/firmware
+header. The restore dialog uses it when the user unchecks entries, so only the
+checked bodies are streamed; the whole-file digest is recomputed for the
+subset.
 
 ### 2.7 Restore (operation 5, streamed)
 
@@ -348,15 +360,18 @@ Restore is destructive and has **one** gate on top of the session arm switch:
 
 1. the `device-write` feature must be compiled in and the user must have armed
    writes for the session;
-2. the selected `.pgbak` is verified in Rust; its digest and a per-setlist
-   destination diff (slots replaced, slots filled, slots left untouched) are
-   shown next to the write button;
-3. the user clicks **Restore N preset(s)**, then accepts the single
-   `window.confirm` that names the preset count and the file digest.
+2. the selected entries are encoded as a subset `.pgbak` in Rust
+   (`subset_backup`), then verified; its digest and a per-setlist destination
+   diff (slots replaced, slots filled, slots left untouched) are shown next to
+   the write button;
+3. the user clicks **Restore N preset(s)**, where `N` is the number of checked
+   entries, then accepts the single `window.confirm` that names that count and
+   the subset digest.
 
-A full backup is offered in the same dialog as a safety copy, but it is **not**
-required and never blocks. There is no typed word and no acknowledgement
-checkbox.
+A backup is offered in the same dialog as a safety copy, but it is **not**
+required and never blocks. The backup can be full or partial; a partial backup
+is not a substitute for a full one. There is no typed word and no
+acknowledgement checkbox.
 
 After the last message, the page re-reads both setlists and compares every
 backup entry's slot name with what the pedal reports. Mismatches are logged as

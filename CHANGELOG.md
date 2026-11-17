@@ -7,6 +7,13 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Selective backup and restore.** A `.pgbak` can now cover both setlists, one
+  setlist, or an arbitrary set of slots (chosen in the backup dialog). On
+  restore, the dialog lists every preset in the file with a checkbox; only the
+  checked entries are encoded into a subset `.pgbak` in Rust and streamed, so
+  unselected slots are never touched. The destination diff, confirmation count
+  and post-restore name check all follow the selection. Restore remains
+  destructive and has not been validated on hardware.
 - **Rebuild a `.pgb` backup offline.** After opening a preset from a `.pgb`
   backup, **Export .pgb** writes a new `AF6L` container with that preset in its
   original slot. The header, `IDGP` directory body, trailer and every untouched

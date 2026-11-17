@@ -12,12 +12,20 @@
 
 import { useEffect, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { verifyBackup } from '../wasmClient';
+import { slotLabel } from '../catalog';
+import { subsetBackup, verifyBackup } from '../wasmClient';
 import type { BackupVerify, SetlistEntry } from '../types';
+import type { BackupTarget } from '../usb/backup';
 import type { SetlistKind } from '../usb/setlist';
 
 const SETLIST_NAMES: Record<number, string> = { 0: 'Factory', 1: 'User' };
 const MAX_DIFF_SLOTS = 6;
+
+type BackupScope = 'full' | 'factory' | 'user' | 'custom';
+
+function slotKey(setlist: number, slot: number): string {
+  return `${setlist}:${slot}`;
+}
 
 interface Props {
   open: boolean;
@@ -33,7 +41,8 @@ interface Props {
   restoreBusy: boolean;
   restoreError: string | null;
   onClose: () => void;
-  onCreateBackup: () => void;
+  /** `null` = both setlists; otherwise only these slots. */
+  onCreateBackup: (targets: BackupTarget[] | null) => void;
   onRestore: (bytes: Uint8Array, summary: BackupVerify) => void;
 }
 
@@ -131,6 +140,10 @@ export default function BackupRestoreDialog({
     summary: BackupVerify;
   } | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [scope, setScope] = useState<BackupScope>('full');
+  const [pickSetlist, setPickSetlist] = useState<SetlistKind>(1);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [restorePicked, setRestorePicked] = useState<Set<string>>(new Set());
 
   // A new opening starts from a clean slate; the last backup lives in App.
   useEffect(() => {
@@ -139,6 +152,10 @@ export default function BackupRestoreDialog({
     }
     setSelected(null);
     setFileError(null);
+    setScope('full');
+    setPickSetlist(1);
+    setPicked(new Set());
+    setRestorePicked(new Set());
   }, [open]);
 
   if (!open) {
@@ -155,26 +172,72 @@ export default function BackupRestoreDialog({
       const bytes = new Uint8Array(await file.arrayBuffer());
       const summary = verifyBackup(bytes);
       setSelected({ name: file.name, bytes, summary });
+      setRestorePicked(
+        new Set(
+          summary.entries.map((entry) => slotKey(entry.setlist, entry.slot)),
+        ),
+      );
       setFileError(null);
     } catch (error) {
       setSelected(null);
+      setRestorePicked(new Set());
       setFileError(messageOf(error));
     }
   }
 
-  const rows = selected
-    ? [0, 1].map((setlist) =>
-        diffRow(selected.summary, setlist, setlists[setlist as SetlistKind]),
+  const setlistTargets = (kind: SetlistKind): BackupTarget[] =>
+    (setlists[kind] ?? [])
+      .filter((entry) => entry.name)
+      .map((entry) => ({ setlist: kind, slot: entry.slot }));
+
+  const backupTargets = (): BackupTarget[] | null => {
+    if (scope === 'full') {
+      return null;
+    }
+    if (scope === 'factory') {
+      return setlistTargets(0);
+    }
+    if (scope === 'user') {
+      return setlistTargets(1);
+    }
+    return [...picked]
+      .map((key) => {
+        const [setlist, slot] = key.split(':').map(Number);
+        return { setlist: setlist as SetlistKind, slot };
+      })
+      .sort((a, b) => a.setlist - b.setlist || a.slot - b.slot);
+  };
+  const scopeTargets = backupTargets();
+  const canCreateBackup =
+    connected &&
+    !busy &&
+    !backupBusy &&
+    !restoreBusy &&
+    (scope === 'full' || (scopeTargets?.length ?? 0) > 0);
+
+  // Only the checked entries are shown in the diff and streamed on restore.
+  const selectedEntries = selected
+    ? selected.summary.entries.filter((entry) =>
+        restorePicked.has(slotKey(entry.setlist, entry.slot)),
       )
     : [];
-  const totalEntries = selected ? selected.summary.entries.length : 0;
+  const activeSummary: BackupVerify | null = selected
+    ? { ...selected.summary, entries: selectedEntries }
+    : null;
+  const rows = activeSummary
+    ? [0, 1].map((setlist) =>
+        diffRow(activeSummary, setlist, setlists[setlist as SetlistKind]),
+      )
+    : [];
+  const totalEntries = selectedEntries.length;
   const canRestore =
     connected &&
     writeArmed &&
     !busy &&
     !backupBusy &&
     !restoreBusy &&
-    selected !== null;
+    selected !== null &&
+    totalEntries > 0;
 
   // One short line explains a disabled button; no checklist, no typed word.
   const missing: string[] = [];
@@ -186,6 +249,8 @@ export default function BackupRestoreDialog({
   }
   if (selected === null) {
     missing.push('open a .pgbak file');
+  } else if (totalEntries === 0) {
+    missing.push('select at least one preset');
   }
   if (busy || backupBusy || restoreBusy) {
     missing.push('wait for the current operation');
@@ -212,10 +277,10 @@ export default function BackupRestoreDialog({
         </div>
 
         <p className="modal-hint">
-          A full backup reads both setlists and every non-empty slot, and stores
-          each raw <code>l6-helix</code> body verbatim. Restore streams those
-          bodies back with operation 5. <strong>Restore is destructive.</strong>{' '}
-          It has not been validated on hardware yet.
+          A backup reads the slots you choose (or every non-empty slot) and
+          stores each raw <code>l6-helix</code> body verbatim. Restore streams
+          the selected bodies back with operation 5. <strong>Restore is
+          destructive.</strong> It has not been validated on hardware yet.
         </p>
 
         <div className="save-backup">
@@ -224,12 +289,113 @@ export default function BackupRestoreDialog({
             <button
               id="backup-create"
               type="button"
-              disabled={!connected || busy || backupBusy || restoreBusy}
-              onClick={onCreateBackup}
+              disabled={!canCreateBackup}
+              onClick={() => onCreateBackup(backupTargets())}
             >
-              {backupBusy ? 'Backing up…' : 'Download full backup'}
+              {backupBusy
+                ? 'Backing up…'
+                : scope === 'full'
+                  ? 'Download full backup'
+                  : `Download ${scopeTargets?.length ?? 0} preset(s)`}
             </button>
           </div>
+
+          <div
+            className="backup-scope"
+            role="radiogroup"
+            aria-label="Backup scope"
+          >
+            {(
+              [
+                ['full', 'Both setlists'],
+                ['factory', 'Factory setlist'],
+                ['user', 'User setlist'],
+                ['custom', 'Choose slots…'],
+              ] as [BackupScope, string][]
+            ).map(([value, label]) => (
+              <label key={value} className="backup-scope-option">
+                <input
+                  id={`backup-scope-${value}`}
+                  type="radio"
+                  name="backup-scope"
+                  value={value}
+                  checked={scope === value}
+                  disabled={backupBusy || restoreBusy}
+                  onChange={() => setScope(value)}
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+
+          {scope === 'custom' && (
+            <div className="backup-picker" id="backup-picker">
+              <div className="setlist-tabs backup-picker-tabs" role="tablist">
+                {([0, 1] as const).map((kind) => (
+                  <button
+                    type="button"
+                    key={kind}
+                    role="tab"
+                    aria-selected={pickSetlist === kind}
+                    className={pickSetlist === kind ? 'is-active' : ''}
+                    onClick={() => setPickSetlist(kind)}
+                  >
+                    {SETLIST_NAMES[kind]}
+                  </button>
+                ))}
+              </div>
+              {setlists[pickSetlist] ? (
+                (setlists[pickSetlist] ?? []).some((entry) => entry.name) ? (
+                  <ul className="backup-pick-list">
+                    {(setlists[pickSetlist] ?? [])
+                      .filter((entry) => entry.name)
+                      .map((entry) => {
+                        const key = slotKey(pickSetlist, entry.slot);
+                        return (
+                          <li key={entry.slot}>
+                            <label>
+                              <input
+                                type="checkbox"
+                                data-backup-slot={key}
+                                checked={picked.has(key)}
+                                disabled={backupBusy || restoreBusy}
+                                onChange={() =>
+                                  setPicked((current) => {
+                                    const next = new Set(current);
+                                    if (next.has(key)) {
+                                      next.delete(key);
+                                    } else {
+                                      next.add(key);
+                                    }
+                                    return next;
+                                  })
+                                }
+                              />
+                              <span className="preset-slot">
+                                {slotLabel(entry.slot)}
+                              </span>
+                              <span className="preset-name">{entry.name}</span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                  </ul>
+                ) : (
+                  <p className="save-backup-info">
+                    This setlist has no non-empty slot.
+                  </p>
+                )
+              ) : (
+                <p className="save-backup-info">
+                  Setlist not read yet; connect or read it first.
+                </p>
+              )}
+              <p className="save-backup-info" id="backup-picked-count">
+                {picked.size} slot(s) selected.
+              </p>
+            </div>
+          )}
+
           {backupError && <p className="save-error">{backupError}</p>}
           {freshBackup ? (
             <dl className="save-backup-info">
@@ -274,7 +440,9 @@ export default function BackupRestoreDialog({
                 <dt>File</dt>
                 <dd>{selected.name}</dd>
                 <dt>Presets</dt>
-                <dd>{totalEntries}</dd>
+                <dd>
+                  {totalEntries} of {selected.summary.entries.length} selected
+                </dd>
                 <dt>Product / firmware</dt>
                 <dd>
                   {selected.summary.product || '—'} /{' '}
@@ -285,6 +453,73 @@ export default function BackupRestoreDialog({
                   <code>{selected.summary.digest}</code>
                 </dd>
               </dl>
+
+              <div className="backup-selection" id="restore-selection">
+                <div className="save-backup-head">
+                  <h3>Presets to restore</h3>
+                  <div className="backup-selection-actions">
+                    <button
+                      id="restore-select-all"
+                      type="button"
+                      disabled={restoreBusy}
+                      onClick={() =>
+                        setRestorePicked(
+                          new Set(
+                            selected.summary.entries.map((entry) =>
+                              slotKey(entry.setlist, entry.slot),
+                            ),
+                          ),
+                        )
+                      }
+                    >
+                      All
+                    </button>
+                    <button
+                      id="restore-select-none"
+                      type="button"
+                      disabled={restoreBusy}
+                      onClick={() => setRestorePicked(new Set())}
+                    >
+                      None
+                    </button>
+                  </div>
+                </div>
+                <ul className="backup-pick-list">
+                  {selected.summary.entries.map((entry) => {
+                    const key = slotKey(entry.setlist, entry.slot);
+                    return (
+                      <li key={key}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            data-restore-entry={key}
+                            checked={restorePicked.has(key)}
+                            disabled={restoreBusy}
+                            onChange={() =>
+                              setRestorePicked((current) => {
+                                const next = new Set(current);
+                                if (next.has(key)) {
+                                  next.delete(key);
+                                } else {
+                                  next.add(key);
+                                }
+                                return next;
+                              })
+                            }
+                          />
+                          <span className="preset-slot">
+                            {SETLIST_NAMES[entry.setlist]}{' '}
+                            {slotLabel(entry.slot)}
+                          </span>
+                          <span className="preset-name">
+                            {entry.name || 'unnamed'}
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
 
               <h3 className="backup-diff-title">Destination diff</h3>
               <ul className="backup-diff" id="restore-diff">
@@ -312,7 +547,7 @@ export default function BackupRestoreDialog({
                 ))}
               </ul>
               <p className="save-backup-info">
-                Current contents of the target slots are overwritten; slots
+                Selected slots are overwritten; unchecked entries and slots
                 absent from the file are left as they are. One confirmation
                 follows.
               </p>
@@ -344,8 +579,23 @@ export default function BackupRestoreDialog({
             disabled={!canRestore}
             title={canRestore ? 'Restore and confirm' : missing.join(', ')}
             onClick={() => {
-              if (selected) {
-                onRestore(selected.bytes, selected.summary);
+              if (!selected || selectedEntries.length === 0) {
+                return;
+              }
+              try {
+                if (selectedEntries.length === selected.summary.entries.length) {
+                  onRestore(selected.bytes, selected.summary);
+                  return;
+                }
+                const pairs = new Uint8Array(selectedEntries.length * 2);
+                selectedEntries.forEach((entry, index) => {
+                  pairs[index * 2] = entry.setlist;
+                  pairs[index * 2 + 1] = entry.slot;
+                });
+                const bytes = subsetBackup(selected.bytes, pairs);
+                onRestore(bytes, verifyBackup(bytes));
+              } catch (error) {
+                setFileError(messageOf(error));
               }
             }}
           >

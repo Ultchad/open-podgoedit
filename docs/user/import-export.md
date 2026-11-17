@@ -1,9 +1,9 @@
 # Import and export
 
-> **Implementation status:** planned (Phase 3). Only the binary `l6-helix`
-> container can be read today, through `podgo-probe` and the Rust domain crate.
-> The `.pgp`, `.hlx` and `.pgb` workflows described below are not implemented
-> yet; see the [roadmap](../roadmap.md).
+> **Implementation status:** the web app imports `.pgp` presets and `.pgb`
+> backups, exports `.pgp`/`.pgb` offline, and backs up or restores the pedal as
+> `.pgbak`. `.hlx` import and JSON → `l6-helix` conversion are planned; see the
+> [roadmap](../roadmap.md).
 
 ## 1. Supported formats
 
@@ -11,16 +11,17 @@
 |---|---|---|---|
 | POD Go preset | `.pgp` | import/export | JSON, schema `L6Preset` |
 | POD Go backup | `.pgb` | import/export | `AF6L` + zlib streams |
-| Helix preset | `.hlx` | import | JSON authoring format |
+| Editor backup | `.pgbak` | export/restore | Raw `l6-helix` bodies + SHA-256 |
+| Helix preset | `.hlx` | planned | JSON authoring format |
 | Raw device blob | `.bin` | import (advanced) | `l6-helix` MessagePack |
 
 ## 2. Importing a preset
 
 1. Choose **Import**.
-2. Select a `.pgp` or `.hlx` file.
+2. Select a `.pgp` preset or a `.pgb` backup.
 3. The app validates the schema, version and size.
 4. Review the summary (name, model count, warnings).
-5. Choose a destination slot or keep it local.
+5. Choose a destination User slot or keep it local.
 
 Warnings are shown for unknown models, out-of-range parameters and unknown
 fields. Unknown fields are preserved even when not displayed.
@@ -28,14 +29,18 @@ fields. Unknown fields are preserved even when not displayed.
 ## 3. Exporting a preset
 
 1. Select a preset.
-2. Choose **Export**.
-3. Pick `.pgp` (portable) or `.bin` (advanced).
-4. The app writes atomically and reports the path.
+2. Choose **Export .pgp** (portable), **Export .pgb** (rebuild the backup it
+   came from), or **Download preset** for the raw blob.
+3. The browser downloads the file; nothing is uploaded.
 
 ## 4. Backups
 
-- **Full backup (`.pgb`):** all setlists, globals and IRs.
-- **Collection export:** selected presets only.
+- **Full backup (`.pgbak`):** both setlists, every non-empty slot, raw bodies.
+- **Partial backup (`.pgbak`):** one setlist or a chosen set of slots.
+- **Backup file import/export (`.pgb`):** the vendor container, with untouched
+  members copied byte for byte on export.
+- **Restore:** checked entries from a `.pgbak` are streamed with operation 5;
+  unchecked entries and slots absent from the file are left untouched.
 - Backups are never uploaded anywhere.
 
 ## 5. Validation rules
