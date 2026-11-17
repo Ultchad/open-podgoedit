@@ -149,6 +149,47 @@ fn render_backup(backup: &Backup, bytes: &[u8]) -> String {
     out
 }
 
+/// Encode a subset of a verified backup, preserving every selected body.
+///
+/// `pairs` is a flat `[setlist, slot, setlist, slot, …]` array. The result is
+/// a normal `.pgbak` with the same product/firmware header, so the existing
+/// restore flow can stream it unchanged.
+///
+/// # Errors
+///
+/// Returns a message for an empty or odd-length selection, an entry that is
+/// not in the file, or a repeated slot.
+#[wasm_bindgen]
+pub fn subset_backup(bytes: &[u8], pairs: &[u8]) -> Result<Vec<u8>, String> {
+    if pairs.is_empty() {
+        return Err("select at least one preset".to_owned());
+    }
+    if pairs.len() % 2 != 0 {
+        return Err("the selection must be (setlist, slot) pairs".to_owned());
+    }
+    let backup = Backup::decode(bytes).map_err(|err| err.to_string())?;
+    let mut subset = Backup::new(backup.product.clone(), backup.firmware.clone());
+    for pair in pairs.chunks_exact(2) {
+        let (setlist, slot) = (pair[0], pair[1]);
+        let entry = backup
+            .entries
+            .iter()
+            .find(|entry| entry.setlist == setlist && entry.slot == slot)
+            .ok_or_else(|| format!("the backup has no preset at setlist {setlist} slot {slot}"))?;
+        subset
+            .add(
+                entry.setlist,
+                entry.slot,
+                entry.name.clone(),
+                entry.blob.clone(),
+            )
+            .map_err(|err| err.to_string())?;
+    }
+    let encoded = subset.encode().map_err(|err| err.to_string())?;
+    Backup::decode(&encoded).map_err(|err| format!("backup subset self-check failed: {err}"))?;
+    Ok(encoded)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
     Preamble(usize),
@@ -520,6 +561,44 @@ mod tests {
         assert!(builder.add(0, 0, "B".to_owned(), &[2]).is_err());
         assert!(builder.add(2, 0, "C".to_owned(), &[3]).is_err());
         assert!(builder.add(0, 128, "D".to_owned(), &[4]).is_err());
+    }
+
+    #[test]
+    fn subset_backup_keeps_only_the_selected_entries() {
+        let mut builder = BackupBuilder::new("P34".to_owned(), "v2.50".to_owned());
+        let blob = |fill: u8| {
+            let mut body = vec![0xa9, b'l', b'6', b'-', b'h', b'e', b'l', b'i', b'x', 0];
+            body.resize(200, fill);
+            body
+        };
+        builder
+            .add(0, 2, "Factory A".to_owned(), &blob(0x11))
+            .unwrap();
+        builder.add(1, 3, "User A".to_owned(), &blob(0x22)).unwrap();
+        builder.add(1, 9, "User B".to_owned(), &blob(0x33)).unwrap();
+        let full = builder.finish().unwrap();
+
+        // Keep one User entry only.
+        let subset = subset_backup(&full, &[1, 9]).unwrap();
+        let json = verify_backup(&subset).unwrap();
+        assert!(json.contains("\"product\":\"P34\""), "{json}");
+        assert!(json.contains("\"firmware\":\"v2.50\""), "{json}");
+        assert!(json.contains("\"name\":\"User B\""), "{json}");
+        assert!(!json.contains("Factory A"), "{json}");
+        assert!(!json.contains("User A"), "{json}");
+        let decoded = Backup::decode(&subset).unwrap();
+        assert_eq!(decoded.entries.len(), 1);
+        assert_eq!(decoded.entries[0].slot, 9);
+        assert_eq!(decoded.entries[0].blob, blob(0x33));
+    }
+
+    #[test]
+    fn subset_backup_rejects_bad_selections() {
+        let bytes = sample_backup();
+        assert!(subset_backup(&bytes, &[]).is_err());
+        assert!(subset_backup(&bytes, &[1]).is_err());
+        assert!(subset_backup(&bytes, &[1, 6]).is_err());
+        assert!(subset_backup(&bytes, &[1, 7, 1, 7]).is_err());
     }
 
     #[test]

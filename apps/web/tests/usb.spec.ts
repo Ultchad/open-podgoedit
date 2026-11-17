@@ -45,6 +45,46 @@ function smallSetlist(names: string[]): string {
   return Buffer.from(Uint8Array.from(out)).toString('base64');
 }
 
+interface PgbakEntry {
+  setlist: number;
+  slot: number;
+  name: string;
+  blob: Buffer;
+}
+
+/** Minimal reader for the `.pgbak` header/entries (the writer is in Rust). */
+function readPgbak(buffer: Buffer): {
+  product: string;
+  firmware: string;
+  entries: PgbakEntry[];
+} {
+  expect(buffer.toString('latin1', 0, 8)).toBe('PODGOBK\0');
+  expect(buffer.readUInt16LE(8)).toBe(1);
+  const count = buffer.readUInt32LE(12);
+  const productLength = buffer.readUInt16LE(16);
+  const firmwareLength = buffer.readUInt16LE(18);
+  let pos = 64;
+  const product = buffer.toString('utf8', pos, pos + productLength);
+  pos += productLength;
+  const firmware = buffer.toString('utf8', pos, pos + firmwareLength);
+  pos += firmwareLength;
+  const entries: PgbakEntry[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const setlist = buffer[pos];
+    const slot = buffer[pos + 1];
+    const nameLength = buffer[pos + 2];
+    pos += 4;
+    const blobLength = buffer.readUInt32LE(pos);
+    pos += 4;
+    const name = buffer.toString('utf8', pos, pos + nameLength);
+    pos += nameLength;
+    const blob = buffer.subarray(pos, pos + blobLength);
+    pos += blobLength + 32; // per-entry SHA-256
+    entries.push({ setlist, slot, name, blob });
+  }
+  return { product, firmware, entries };
+}
+
 /**
  * In-page fake WebUSB device.
  *
@@ -1446,6 +1486,162 @@ test('backs up every slot and restores the streamed file', async ({ page }) => {
   );
   expect(messages.every((message) => message.bytes > 0)).toBe(true);
 
+  expect(errors).toEqual([]);
+});
+
+test('backs up only the selected setlist or slots', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      errors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const factoryFixture = smallSetlist(['Factory A']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, factoryFixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  await page.locator('#backup-restore').click();
+  await expect(page.locator('#backup-dialog-title')).toBeVisible();
+
+  // User setlist scope: two entries, no Factory slot in the file.
+  await page.locator('#backup-scope-user').check();
+  await expect(page.locator('#backup-create')).toHaveText(
+    'Download 2 preset(s)',
+  );
+  const [userDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#backup-create').click(),
+  ]);
+  const userBackup = readPgbak(
+    readFileSync((await userDownload.path()) ?? ''),
+  );
+  expect(userBackup.entries.map((entry) => `${entry.setlist}:${entry.slot}`)).toEqual([
+    '1:0',
+    '1:1',
+  ]);
+  expect(userBackup.entries.map((entry) => entry.name)).toEqual([
+    'Lead A',
+    'Lead B',
+  ]);
+  expect(userBackup.entries.every((entry) => entry.blob.length > 0)).toBe(
+    true,
+  );
+
+  // Custom scope: one Factory slot only.
+  await page.locator('#backup-scope-custom').check();
+  await page.locator('.backup-picker-tabs button').first().click();
+  await page.locator('[data-backup-slot="0:0"]').check();
+  await expect(page.locator('#backup-picked-count')).toHaveText(
+    '1 slot(s) selected.',
+  );
+  const [factoryDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#backup-create').click(),
+  ]);
+  const factoryBackup = readPgbak(
+    readFileSync((await factoryDownload.path()) ?? ''),
+  );
+  expect(
+    factoryBackup.entries.map((entry) => `${entry.setlist}:${entry.slot}`),
+  ).toEqual(['0:0']);
+  expect(factoryBackup.entries[0]?.name).toBe('Factory A');
+
+  expect(errors).toEqual([]);
+});
+
+test('restores only the checked presets from a .pgbak', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      errors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const factoryFixture = smallSetlist(['Factory A']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, factoryFixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await page.locator('#read-preset').click();
+  await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
+  await page.locator('#arm-writes').check();
+
+  await page.locator('#backup-restore').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#backup-create').click(),
+  ]);
+  await page.locator('#restore-file').setInputFiles((await download.path()) ?? '');
+  await expect(page.locator('#restore-selection')).toBeVisible();
+  await expect(page.locator('[data-restore-entry]')).toHaveCount(3);
+  await expect(page.locator('#restore-confirm')).toHaveText(
+    'Restore 3 preset(s)',
+  );
+
+  // Nothing selected: restore is refused with a specific reason.
+  await page.locator('#restore-select-none').click();
+  await expect(page.locator('#restore-confirm')).toBeDisabled();
+  await expect(page.locator('#restore-blockers')).toContainText(
+    'select at least one preset',
+  );
+  await page.locator('#restore-select-all').click();
+
+  // Keep only User 01A; Factory and User 01B stay checked off.
+  await page.locator('[data-restore-entry="0:0"]').uncheck();
+  await page.locator('[data-restore-entry="1:1"]').uncheck();
+  await expect(page.locator('#restore-confirm')).toHaveText(
+    'Restore 1 preset(s)',
+  );
+
+  let message = '';
+  page.once('dialog', (dialog) => {
+    message = dialog.message();
+    void dialog.accept();
+  });
+  await page.locator('#restore-confirm').click();
+  expect(message).toContain('Restore 1 preset(s)');
+  await expect(page.locator('.backup-dialog')).toHaveCount(0, {
+    timeout: 30_000,
+  });
+  await expect(page.locator('.report.log')).toContainText(
+    'Restore verified: 1 name(s) match the backup.',
+  );
+
+  const messages = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __podgoRestore?: Array<{
+            setlist: number;
+            slot: number;
+            bytes: number;
+          }>;
+        }
+      ).__podgoRestore ?? [],
+  );
+  expect(messages.map((entry) => `${entry.setlist}:${entry.slot}`)).toEqual([
+    '1:0',
+  ]);
   expect(errors).toEqual([]);
 });
 

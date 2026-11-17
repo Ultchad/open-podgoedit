@@ -1608,6 +1608,77 @@ dl.save-backup-info dd {
   margin-top: 0.7rem;
 }
 
+.backup-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  margin-top: 0.6rem;
+}
+
+.backup-scope-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-soft);
+  font-size: 0.76rem;
+}
+
+.backup-scope-option input {
+  accent-color: var(--amber);
+}
+
+.backup-picker {
+  margin-top: 0.6rem;
+}
+
+.backup-picker-tabs {
+  padding: 0 0 0.4rem;
+}
+
+.backup-pick-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0.25rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101113;
+}
+
+.backup-pick-list li + li {
+  border-top: 1px solid #1e2024;
+}
+
+.backup-pick-list label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.35rem;
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.backup-pick-list input {
+  accent-color: var(--amber);
+}
+
+.backup-selection {
+  margin-top: 0.75rem;
+}
+
+.backup-selection-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.backup-selection-actions button {
+  min-height: 1.6rem;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.72rem;
+}
+
 .backup-diff-title {
   margin: 0.8rem 0 0.25rem;
   font-size: 0.74rem;
