@@ -2887,19 +2887,18 @@ export default function App() {
             id="connect"
             type="button"
             className="toolbar-button"
-            disabled={!moduleReady || !usbSupported || busy || connected}
-            onClick={() => void connect()}
+            disabled={
+              busy || (!connected && (!moduleReady || !usbSupported))
+            }
+            data-connected={connected}
+            title={
+              connected
+                ? 'Disconnect from this POD Go'
+                : 'Connect a POD Go over WebUSB'
+            }
+            onClick={() => void (connected ? disconnect() : connect())}
           >
-            Connect
-          </button>
-          <button
-            id="disconnect"
-            type="button"
-            className="toolbar-button"
-            disabled={!connected || busy}
-            onClick={() => void disconnect()}
-          >
-            Disconnect
+            {connected ? 'Disconnect' : 'Connect'}
           </button>
 
           {connected && (

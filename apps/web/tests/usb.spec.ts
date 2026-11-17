@@ -974,6 +974,13 @@ test('reads the User setlist over a fake WebUSB device', async ({ page }) => {
     '13 chunk',
   );
 
+  // One button handles both directions: it reads Disconnect while connected
+  // and returns to Connect after closing the session.
+  await expect(page.locator('#connect')).toHaveText('Disconnect');
+  await page.locator('#connect').click();
+  await expect(page.locator('#connect')).toHaveText('Connect');
+  await expect(page.locator('.device-card .badge')).toHaveText('No device');
+
   expect(errors).toEqual([]);
 });
 
