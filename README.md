@@ -51,7 +51,8 @@ arms writes. `set_param` is hardware-validated; save and restore are not. See
   parameters and device state.
 - Edit and organize presets and setlists offline.
 - Import `.pgp` presets and `.pgb` backups, edit a preset offline and export
-  it back as `.pgp`; `.pgb` export is planned.
+  it back as `.pgp`, or rebuild the backup as `.pgb` with untouched members
+  copied byte-for-byte.
 - Synchronize with the device, detect device-side changes, undo/redo locally.
 - Preserve unknown fields byte-for-byte across read/modify/write cycles.
 - Run entirely without a backend or cloud service.

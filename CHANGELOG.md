@@ -6,6 +6,17 @@ semantic versioning once it reaches 1.0.
 
 ## [Unreleased]
 
+### Added
+- **Rebuild a `.pgb` backup offline.** After opening a preset from a `.pgb`
+  backup, **Export .pgb** writes a new `AF6L` container with that preset in its
+  original slot. The header, `IDGP` directory body, trailer and every untouched
+  member keep their exact bytes (impulse responses and `UMDS` included); only
+  the edited setlist is re-serialized and recompressed with
+  `CompressionStream('deflate')`, and the directory offsets are patched. The
+  offer disappears when another preset becomes the working copy, so the wrong
+  slot is never written. The writer layout is `ITM` until POD Go Edit opens an
+  exported backup.
+
 ### Fixed
 - **Save now stores the preset on the pedal.** The Save button (and Ctrl+S)
   applies the draft parameters with op 30 and then sends op 71 for the active
@@ -33,7 +44,7 @@ semantic versioning once it reaches 1.0.
 - **CI quality gates.** `.github/workflows/ci.yml` now runs on every pull
   request and every push to `dev`/`main`: Rust formatting, Clippy and offline
   workspace tests, the WASM host tests, `tsc` and the production build, then
-  the Playwright suite (23 tests). Failed browser runs upload their traces.
+  the Playwright suite (28 tests). Failed browser runs upload their traces.
   GitHub Pages deployment remains a separate `main`-only workflow.
 - **Offline-first editor, draft edits and a compact UI.** The page now loads
   without a pedal: Factory names come from the bundled

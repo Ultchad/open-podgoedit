@@ -46,9 +46,12 @@ import PresetMenu, {
 } from './components/PresetMenu';
 import { validatePresetName, validateSnapshotName } from './presetName';
 import {
+  applyBackupEdits,
+  backupFileName,
   clonePreset,
   hasImportedSnapshotParam,
   presetFileName,
+  serializePgb,
   serializePgp,
   moveImportedBlock,
   setImportedBlockEnabled,
@@ -62,6 +65,7 @@ import {
   setImportedSnapshotParam,
   SNAPSHOT_CONTROLLER,
   toneToStructure,
+  type EditBackup,
   type EditPreset,
 } from './podgoEdit';
 import { createDefaultPreset } from './defaultPreset';
@@ -295,6 +299,16 @@ export default function App() {
   } | null>(null);
   /** Slot chosen by the right-click "Import .pgp…" action. */
   const [importTarget, setImportTarget] = useState<WorkingSlot | null>(null);
+  /**
+   * The `.pgb` backup the working copy came from, when it came from one.
+   *
+   * Kept so **Export .pgb** can rebuild the container: unchanged members are
+   * copied verbatim and only the edited setlist slot is rewritten.
+   */
+  const [importedBackup, setImportedBackup] = useState<EditBackup | null>(null);
+  /** User slot the imported backup's preset was opened into. */
+  const [backupExportKey, setBackupExportKey] = useState<string | null>(null);
+  const [backupExportBusy, setBackupExportBusy] = useState(false);
   const [clipboard, setClipboard] = useState<ClipboardEntry | null>(null);
   /** Raw body of the clipboard preset; the entry keeps only the metadata. */
   const [clipboardBlob, setClipboardBlob] = useState<Uint8Array | null>(null);
@@ -1195,7 +1209,12 @@ export default function App() {
     setlist: SetlistKind,
     slot: number,
     source?: EditPreset,
-    options?: { fresh?: boolean; draftsConfirmed?: boolean },
+    options?: {
+      fresh?: boolean;
+      draftsConfirmed?: boolean;
+      /** The `.pgb` this copy came from, when **Export .pgb** is available. */
+      backup?: EditBackup | null;
+    },
   ): boolean {
     const preset = source ?? localDocs[localKey(setlist, slot)];
     if (!preset) {
@@ -1208,6 +1227,10 @@ export default function App() {
     const working = clonePreset(preset);
     working.setlist = setlist;
     working.slot = slot;
+    // Only the preset that came from a backup can rebuild it; opening any
+    // other slot drops the offer so the wrong preset is never exported.
+    setImportedBackup(options?.backup ?? null);
+    setBackupExportKey(options?.backup ? key : null);
     setWorkingDoc(working);
     setWorkingSlot({ setlist: 1, slot });
     setStructure(toneToStructure(working));
@@ -1308,6 +1331,7 @@ export default function App() {
     preset: EditPreset,
     label: string,
     source: { setlist: number; slot: number } | null = null,
+    backup: EditBackup | null = null,
   ) {
     // Explicit right-click target, then the slot the .pgb entry came from,
     // then the first empty User slot.
@@ -1330,11 +1354,23 @@ export default function App() {
     updateSetlistName(1, target.slot, name);
     setImportTarget(null);
     setImportOpen(false);
-    openLocalPreset(1, target.slot, stored, { fresh: true });
+    // Remember the backup and where this preset sits in it, so Export .pgb
+    // can rebuild the container with this slot replaced. The preset itself
+    // opens in a User slot; `source` stays the slot inside the backup.
+    const fromBackup =
+      backup && source && backup.container
+        ? { ...backup, source: { setlist: source.setlist, slot: source.slot } }
+        : null;
+    openLocalPreset(1, target.slot, stored, {
+      fresh: true,
+      backup: fromBackup,
+    });
     appendLog(
       `Imported "${name}" from ${label} into User ${slotLabel(
         target.slot,
-      )} (offline copy, exports as .pgp).`,
+      )} (offline copy, exports as .pgp${
+        backup && source ? ' or .pgb' : ''
+      }).`,
     );
   }
 
@@ -1743,6 +1779,72 @@ export default function App() {
     }
     setDirty(false);
     setSaveNotice({ kind: 'info', text: 'Exported. The offline copy is up to date.' });
+  }
+
+  /**
+   * Download the imported `.pgb` with the working draft in its original slot.
+   *
+   * Every other member keeps its stored bytes, so impulse responses, globals
+   * and unknown members survive. Only the source setlist is re-serialized and
+   * recompressed. The file is rebuilt in this tab; nothing is uploaded.
+   */
+  async function exportBackup(): Promise<void> {
+    const preset = workingDoc;
+    const backup = importedBackup;
+    const key = workingSlot
+      ? localKey(workingSlot.setlist, workingSlot.slot)
+      : null;
+    if (
+      !preset ||
+      !backup ||
+      !backup.source ||
+      key === null ||
+      key !== backupExportKey
+    ) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'Export .pgb needs a backup imported from a .pgb file. Open one ' +
+          'with Import… first.',
+      });
+      return;
+    }
+    if (backupExportBusy) {
+      return;
+    }
+    setBackupExportBusy(true);
+    try {
+      const edits = new Map<number, Map<number, EditPreset | null>>([
+        [backup.source.setlist, new Map([[backup.source.slot, preset]])],
+      ]);
+      const bytes = await serializePgb(applyBackupEdits(backup, edits));
+      const file = backupFileName(`podgo-backup-${new Date()
+        .toISOString()
+        .slice(0, 10)}`);
+      downloadBytes(bytes, file);
+      appendLog(
+        `Export: ${file} (${bytes.length} B). Setlist ${
+          backup.source.setlist
+        } slot ${slotLabel(backup.source.slot)} updated; other members copied ` +
+          'unchanged.',
+      );
+      setSaveNotice({
+        kind: 'info',
+        text: `Exported ${file}. Only the edited slot changed; every other member is byte-identical.`,
+      });
+      setLocalDocs((current) => ({
+        ...current,
+        [key]: clonePreset(preset),
+      }));
+      clearSlotDirty(key);
+      setDirty(false);
+    } catch (error) {
+      const message = errorMessage(error);
+      setSaveNotice({ kind: 'error', text: `Export .pgb failed: ${message}` });
+      appendLog(`ERROR export .pgb: ${message}`);
+    } finally {
+      setBackupExportBusy(false);
+    }
   }
 
   /** Export one slot's offline document, when it has one. */
@@ -2705,6 +2807,11 @@ export default function App() {
   const busy = usbBusy !== null;
   const connected = deviceInfo !== null;
   const canExport = workingDoc !== null;
+  /** **Export .pgb** is only offered for the preset opened from a backup. */
+  const canExportBackup =
+    importedBackup !== null &&
+    workingSlot !== null &&
+    backupExportKey === localKey(workingSlot.setlist, workingSlot.slot);
   /** User slots that live only in the browser (offline copy or draft). */
   const browserSlots = new Set(Object.keys(localDocs));
   const canEditHere = workingDoc !== null || (connected && activePresetLoaded);
@@ -2770,8 +2877,8 @@ export default function App() {
             POD Go <span>Editor</span>
           </h1>
           <p className="subtitle">
-            Preset editor — Rust core in WebAssembly. Works offline; connect a
-            pedal for live reads and writes.
+            Unofficial preset editor — Rust core in WebAssembly. Works offline;
+            connect a pedal for live reads and writes.
           </p>
         </div>
 
@@ -2948,6 +3055,8 @@ export default function App() {
               onSetBlockEnabled={workingDoc ? setBlockEnabled : undefined}
               canExport={canExport}
               onExport={exportWorkingPreset}
+              canExportBackup={canExportBackup}
+              onExportBackup={() => void exportBackup()}
               canRename={workingDoc !== null}
               onRename={renameWorkingPreset}
             />
@@ -3221,6 +3330,13 @@ export default function App() {
         onRenameWrite={(name) => void writeRename(name)}
         onPasteWrite={(slot, name, mode) => void writePaste(slot, name, mode)}
       />
+
+      <p id="unofficial-disclaimer" className="disclaimer" role="note">
+        <strong>Unofficial project.</strong> Not made, endorsed or supported by
+        Line 6 / Yamaha Guitar Group, and not linked to the official POD Go Edit
+        software. Use it at your own risk: the author is not responsible for any
+        damage to your pedal, presets or data. Always keep a backup.
+      </p>
 
       <footer>
         <span>

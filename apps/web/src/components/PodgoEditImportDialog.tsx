@@ -17,6 +17,7 @@ import {
   SLOT_COUNT,
   toneToStructure,
   type EditFile,
+  type EditBackup,
   type EditPreset,
   type EditSetlist,
 } from '../podgoEdit';
@@ -33,6 +34,7 @@ interface Props {
     preset: EditPreset,
     label: string,
     source: { setlist: number; slot: number } | null,
+    backup: EditBackup | null,
   ) => void;
 }
 
@@ -190,8 +192,9 @@ export default function PodgoEditImportDialog({
           backup. The file is read in this tab only: nothing is uploaded,
           written back or saved. An imported preset becomes an{' '}
           <strong>offline copy</strong> you can edit and export as{' '}
-          <code>.pgp</code>; this build cannot write its JSON back to the
-          pedal.
+          <code>.pgp</code>, or rebuild the backup as <code>.pgb</code>; this
+          build cannot write its JSON back to the pedal. This is an unofficial
+          tool: use it at your own risk and keep a backup.
         </p>
 
         <label className="file import-file">
@@ -346,6 +349,7 @@ export default function PodgoEditImportDialog({
                   file.kind === 'pgb' && slot !== null
                     ? { setlist: setlistIndex, slot }
                     : null,
+                  file.kind === 'pgb' ? file : null,
                 );
               }
             }}

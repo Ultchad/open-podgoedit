@@ -77,7 +77,7 @@ Remaining for this phase:
 **Exit criterion:** `cargo fmt`, `cargo clippy -D warnings`, `cargo test` green
 offline; no command capable of mutating device state.
 
-## Phase 3 — Preset file import/export (Import and offline `.pgp` export delivered)
+## Phase 3 — Preset file import/export (Import, `.pgp` and `.pgb` export delivered)
 
 Delivered:
 
@@ -97,14 +97,20 @@ Delivered:
   envelope is rebuilt from the observed `.pgp` shape (`ITM`). The export of an
   untouched real `.pgp` was compared with the original: 0 semantic differences,
   whitespace only.
+- **`.pgb` (setlist/backup) export.** **Export .pgb** rebuilds the imported
+  `AF6L` container with the working preset in the slot it came from. The
+  header, `IDGP` directory body, trailer and every untouched member keep their
+  exact bytes, including impulse responses and `UMDS`; only the edited setlist
+  is re-serialized and recompressed with `CompressionStream('deflate')`. The
+  directory offsets are patched. A local round trip on a real backup produced a
+  setlist that deep-equals the original and byte-identical untouched members.
+  The writer layout is `ITM` until POD Go Edit opens an exported backup.
 - Files are parsed in memory only, never uploaded or persisted. Automated
   tests build synthetic files with invented names, so no personal backup is
   committed.
 
 Still planned:
 
-- **`.pgb` (setlist/backup) export.** The `AF6L` container, the zlib member
-  writer and the `IDGP` directory are not implemented.
 - JSON ↔ `l6-helix` conversion; this needs an evidenced encoder and is not
   attempted, so an exported or imported preset cannot be written to the pedal.
 - `.hlx` import/export (JSON authoring format).
@@ -114,7 +120,8 @@ Still planned:
 **Exit criterion (import):** a `.pgp` and a `.pgb` open without network access,
 show the expected chain and names, and leave every write path disabled.
 **Exit criterion (export):** import → domain → export preserves all known and
-unknown fields; malformed and oversized files are rejected without panic.
+unknown fields for both `.pgp` and `.pgb`; malformed and oversized files are
+rejected without panic.
 
 ## Phase 4 — Offline web application (In progress)
 
@@ -125,7 +132,7 @@ Delivered:
 - Local page on `127.0.0.1:5173` that parses an `l6-helix` preset and a
   streamed setlist, loads the bundled fixtures, and accepts local files.
 - WASM host tests (`apps/web/wasm`) and a Node smoke test of the generated module.
-- Playwright browser tests (14): both reports render, no external request,
+- Playwright browser tests (28): both reports render, no external request,
   malformed input is rejected, a full User-setlist read through a fake WebUSB
   device (handshake, `OPEN_PRESETS`, `OPEN_STREAM`, 13 chunks, 128 entries),
   the local library actions (copy/paste/move/rename with pending markers), the
@@ -159,7 +166,7 @@ Delivered:
 Remaining:
 
 - IndexedDB `PresetRepository`.
-- `.pgb` (setlist/backup) and `.hlx` export, undo/redo, and model swapping
+- `.hlx` export, undo/redo, and model swapping
   (read-only until the gated whole-chain write exists).
 - Capture object 22 during a knob sweep to correlate values with parameter
   indexes on hardware.

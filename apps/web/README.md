@@ -67,18 +67,21 @@ setlist depuis un POD Go branché en **WebUSB**.
   Rust, le diff des destinations est affiché, puis un clic sur **Restore N
   preset(s)** et une confirmation `window.confirm`. Voir
   [docs/protocol/writes.md](../../docs/protocol/writes.md).
-- **Import POD Go Edit et export `.pgp` hors ligne** : **Import…** ouvre un
-  export de preset `.pgp` ou une sauvegarde complète `.pgb` (conteneur `AF6L`
+- **Import POD Go Edit et export `.pgp`/`.pgb` hors ligne** : **Import…** ouvre
+  un export de preset `.pgp` ou une sauvegarde complète `.pgb` (conteneur `AF6L`
   avec membres zlib et répertoire `IDGP`), liste les setlists Factory/User et
   affiche la chaîne, les paramètres, les snapshots et les affectations de
   footswitch. Le fichier est lu dans l'onglet, jamais envoyé ni enregistré. Un
   preset importé devient une **copie hors ligne** : il peut être renommé,
   édité, puis téléchargé avec **Export .pgp** ; l'export conserve tous les
-  champs du document, y compris ceux que ce build ne comprend pas.
+  champs du document, y compris ceux que ce build ne comprend pas. **Export
+  .pgb** reconstruit la sauvegarde d'origine avec ce preset dans son slot :
+  les membres non modifiés (réponses d'impulsion, `UMDS`, …) gardent leurs
+  octets exacts et seule la setlist éditée est recompressée.
 - **Hors ligne** : aucune requête sortante après l'installation. Les fichiers
   restent dans le navigateur.
 - **Pas encore l'application finale** : pas de changement de modèle, pas de
-  stockage persistant, pas d'export `.pgb` (setlist/backup) ni `.hlx`.
+  stockage persistant, pas d'export `.hlx`.
 - **Validation matérielle** : le flux WebUSB est couvert par un appareil
   simulé (`ITM`) et par une lecture User réelle sur un **POD Go Wireless**,
   firmware **2.50 (build `6e984472`)** — `ITH` pour la lecture Web Chromium
@@ -302,7 +305,9 @@ démarre un. Il vérifie :
   seule** confirmation ;
 - le collage et le renommage sur le pédalier sans sauvegarde préalable ;
 - l'import `.pgp`/`.pgb` sans écriture vers le pédalier, l'édition hors ligne
-  d'un paramètre et d'un nom, et l'export `.pgp` (y compris depuis un `.pgb`) ;
+  d'un paramètre et d'un nom, l'export `.pgp` (y compris depuis un `.pgb`) et
+  l'export `.pgb` qui laisse les membres non modifiés identiques octet pour
+  octet ;
 - le message hors ligne quand WebUSB est absent.
 
 Le faux appareil ne remplace pas une validation matérielle : il prouve le
@@ -333,9 +338,8 @@ transporter les octets ; il ne réimplémente ni les offsets ni le MessagePack.
 
 - Lecture seule sur le pédalier : pas d'écriture de chaîne, pas de
   remplacement de modèle.
-- Import `.pgp`/`.pgb` et export `.pgp` uniquement ; pas d'export `.pgb`
-  (setlist/backup) ni `.hlx`, et un preset importé ne peut pas être envoyé au
-  pédalier.
+- Import `.pgp`/`.pgb` et export `.pgp`/`.pgb` hors ligne uniquement ; pas
+  d'export `.hlx`, et un preset importé ne peut pas être envoyé au pédalier.
 - Pas de stockage persistant (IndexedDB).
 - Firefox et Safari n'ont pas WebUSB ; ils restent en mode hors ligne.
 - Windows : WebUSB dépend du pilote WinUSB. Si Chrome refuse l'accès, c'est

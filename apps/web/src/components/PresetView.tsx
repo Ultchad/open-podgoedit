@@ -54,6 +54,9 @@ interface Props {
   onSetBlockEnabled?: (block: number, enabled: boolean) => void;
   canExport: boolean;
   onExport: () => void;
+  /** The working copy came from a `.pgb` backup that can be rebuilt. */
+  canExportBackup: boolean;
+  onExportBackup: () => void;
   canRename: boolean;
   onRename: () => void;
 }
@@ -78,6 +81,8 @@ export default function PresetView({
   onSetBlockEnabled,
   canExport,
   onExport,
+  canExportBackup,
+  onExportBackup,
   canRename,
   onRename,
 }: Props) {
@@ -380,6 +385,18 @@ export default function PresetView({
           >
             Export .pgp
           </button>
+          {canExportBackup && (
+            <button
+              id="export-pgb"
+              type="button"
+              className="toolbar-button"
+              disabled={busy}
+              title="Download the imported backup with this slot updated (works offline)"
+              onClick={onExportBackup}
+            >
+              Export .pgb
+            </button>
+          )}
         </div>
       </div>
 
