@@ -6,6 +6,25 @@ semantic versioning once it reaches 1.0.
 
 ## [Unreleased]
 
+### Fixed
+- **Save now stores the preset on the pedal.** The Save button (and Ctrl+S)
+  applies the draft parameters with op 30 and then sends op 71 for the active
+  preset's own User slot, so a change survives a preset switch or a reboot
+  instead of reverting to the value stored on the pedal. The confirmation and
+  the notice say so; a Factory preset points at **Save to slot…** instead.
+- **Restore no longer fails with "the pedal did not acknowledge the restore
+  stream window".** The pedal acknowledges every USB packet, not a fixed
+  1536-byte window; the encoder now waits for a status after each frame and
+  advances the cursor by 17 per status, as `podgo-backup-restore.pcapng` shows.
+- **"Enable writing" stays checked when switching presets.** The session arm
+  switch is cleared only on disconnect or when a file/fixture is loaded; a
+  slot read still blocks writes until the active preset is read again.
+- **Right-click Copy works on a slot that is not open.** When nothing is in
+  memory and the pedal is connected, Copy reads the slot first; offline it now
+  says the pedal is needed instead of "open the slot first".
+- **Connecting loads the pedal.** Both setlists and the active preset are read
+  automatically, so the editor is usable without pressing Read first.
+
 ### Changed
 - **Unofficial-project disclaimer.** The README opens with a plain-language
   disclaimer (not affiliated with Line 6 / Yamaha, not linked to POD Go Edit,

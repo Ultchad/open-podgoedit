@@ -248,14 +248,12 @@ pub const STREAM_FIRST_BYTES: usize = 488;
 /// the 16-byte header).
 pub const STREAM_CHUNK_BYTES: usize = 496;
 
-/// Bytes the device consumes before it answers a stream window with status 1.
-///
-/// The capture shows the status after 1512–1528 body bytes; the host then
-/// advances the command cursor by [`RESTORE_CURSOR_ADVANCE`] and continues.
-pub const RESTORE_WINDOW_BYTES: usize = 1536;
-
-/// Cursor advance after a stream-window status (`8` header bytes + a 9-byte
+/// Cursor advance after a per-frame stream status (`8` header bytes + a 9-byte
 /// status body, exactly like a framed write acknowledgement).
+///
+/// `podgo-backup-restore.pcapng` shows the cursor stepping `0x52fd → 0x530e`
+/// (+17) right after the first status and staying there for the frames that
+/// follow, then stepping again after the next status.
 pub const RESTORE_CURSOR_ADVANCE: u32 = 17;
 
 /// Build the MessagePack body of one op-5 restore message.
@@ -329,9 +327,13 @@ pub struct StreamFrame {
 /// The first frame carries [`STREAM_FIRST_BYTES`] body bytes after an 8-byte
 /// subheader and the complete body length as a `u32`. Continuations carry
 /// [`STREAM_CHUNK_BYTES`] raw body bytes after the 16-byte header. Every frame
-/// body is padded with zeros to a 4-byte boundary. The first window ends
-/// exactly on [`RESTORE_WINDOW_BYTES`] and sets [`StreamFrame::window_end`];
-/// the cursor for later frames is advanced by [`RESTORE_CURSOR_ADVANCE`].
+/// body is padded with zeros to a 4-byte boundary.
+///
+/// The pedal acknowledges **each frame**, not a fixed byte window:
+/// `podgo-backup-restore.pcapng` answers `{102: tx, 103: 1, 104: nil}` after
+/// 488, 917, 1313, … body bytes, i.e. once per USB packet. Every frame is
+/// therefore marked [`StreamFrame::window_end`], and the cursor advances by
+/// [`RESTORE_CURSOR_ADVANCE`] after each granted status.
 ///
 /// # Errors
 ///
@@ -355,39 +357,29 @@ pub fn encode_restore_stream(
         .map_err(|_| ProtocolError::InvalidFrame("restore body length overflow"))?;
     let mut frames = Vec::with_capacity(body.len() / STREAM_CHUNK_BYTES + 2);
     let mut position = 0usize;
-    let mut sent = 0usize;
     let mut seq = seq_start;
     let mut cursor = cursor;
     let mut first = true;
-    let mut window_advanced = false;
 
     while position < body.len() {
-        let mut chunk = if first {
+        let chunk = if first {
             STREAM_FIRST_BYTES.min(body.len() - position)
         } else {
             STREAM_CHUNK_BYTES.min(body.len() - position)
         };
-        let mut window_end = false;
-        if !window_advanced && body.len() > RESTORE_WINDOW_BYTES {
-            let remaining_window = RESTORE_WINDOW_BYTES - sent;
-            if chunk >= remaining_window {
-                chunk = remaining_window;
-                window_end = true;
-            }
-        }
 
         let bytes =
             build_stream_frame(&body[position..position + chunk], total, first, seq, cursor)?;
-        frames.push(StreamFrame { bytes, window_end });
+        // Every frame is acknowledged by the pedal before the next one is sent.
+        frames.push(StreamFrame {
+            bytes,
+            window_end: true,
+        });
 
         position += chunk;
-        sent += chunk;
         seq = seq.wrapping_add(1);
         first = false;
-        if window_end {
-            cursor = cursor.wrapping_add(RESTORE_CURSOR_ADVANCE);
-            window_advanced = true;
-        }
+        cursor = cursor.wrapping_add(RESTORE_CURSOR_ADVANCE);
     }
 
     Ok(frames)
@@ -752,9 +744,9 @@ mod tests {
         assert_eq!(body.len(), 4171);
 
         let frames = encode_restore_stream(&body, 6, 0x52fd).unwrap();
-        // 4 frames for the first window, then 5 full continuations and one
-        // short tail.
-        assert_eq!(frames.len(), 10);
+        // One 488-byte opening frame, then seven full 496-byte continuations
+        // and one short tail: 1 + 7 + 1 = 9 frames.
+        assert_eq!(frames.len(), 9);
 
         // First frame: 8-byte subheader, u32 total length, 488 body bytes.
         let first = &frames[0].bytes;
@@ -765,9 +757,8 @@ mod tests {
         assert_eq!(u16::from_le_bytes([first[0], first[1]]), 504);
         assert_eq!(&first[4..8], &[0x01, 0x10, 0xef, 0x03]);
 
-        // The first window ends at 1536 body bytes and advances the cursor.
+        // The pedal acknowledges every frame, so each one ends a window.
         let mut sent = 0usize;
-        let mut advanced_at = None;
         for (index, frame) in frames.iter().enumerate() {
             let first_frame = index == 0;
             let declared = u16::from_le_bytes([frame.bytes[0], frame.bytes[1]]) as usize;
@@ -777,19 +768,15 @@ mod tests {
                 declared - 8
             };
             sent += carried;
-            if frame.window_end {
-                assert_eq!(sent, RESTORE_WINDOW_BYTES);
-                advanced_at = Some(index);
-            }
+            assert!(frame.window_end, "frame {index} must wait for a status");
         }
         assert_eq!(sent, body.len());
-        assert_eq!(advanced_at, Some(3));
 
-        // Frames up to the window keep the opening cursor; later frames carry
-        // cursor + 17. Only the first frame has the subheader.
+        // The cursor advances by 17 after every granted status, so frame `n`
+        // carries `0x52fd + 17 * n`.
         for (index, frame) in frames.iter().enumerate() {
             let cursor = u32::from_le_bytes(frame.bytes[12..16].try_into().unwrap());
-            let expected = if index <= 3 { 0x52fd } else { 0x52fd + 17 };
+            let expected = 0x52fd + 17 * index as u32;
             assert_eq!(cursor, expected, "frame {index}");
             if index > 0 {
                 assert_ne!(&frame.bytes[16..20], &RESTORE_SUBHEADER);
@@ -804,8 +791,8 @@ mod tests {
         // The last frame carries only the remaining body bytes.
         let last = &frames.last().unwrap().bytes;
         let declared = u16::from_le_bytes([last[0], last[1]]) as usize;
-        let tail = (4171 - RESTORE_WINDOW_BYTES) % STREAM_CHUNK_BYTES;
-        assert_eq!(tail, 155);
+        let tail = (4171 - STREAM_FIRST_BYTES) % STREAM_CHUNK_BYTES;
+        assert_eq!(tail, 211);
         assert_eq!(declared, 8 + tail);
     }
 
@@ -815,7 +802,7 @@ mod tests {
         let body = encode_restore_preset(1, 0, &blob, 7).unwrap();
         let frames = encode_restore_stream(&body, 6, 0x101a).unwrap();
         assert_eq!(frames.len(), 1);
-        assert!(!frames[0].window_end);
+        assert!(frames[0].window_end);
         let frame = &frames[0].bytes;
         assert_eq!(
             u16::from_le_bytes([frame[0], frame[1]]) as usize,
