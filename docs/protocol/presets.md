@@ -6,8 +6,8 @@
 > implements the orchestration against the mock transport. Hardware validation
 > is pending. The web page ships a `.pgp`/`.pgb` adapter
 > (`apps/web/src/podgoEdit.ts`) that reads both formats, edits a preset's name
-> and continuous parameters **offline** and exports a `.pgp`. `.hlx` and
-> JSON → `l6-helix` conversion are still Phase 3 (see the
+> and continuous parameters **offline**, and exports a `.pgp` or a rebuilt
+> `.pgb`. `.hlx` and JSON → `l6-helix` conversion are still Phase 3 (see the
 > [roadmap](../roadmap.md)).
 
 ## 1. `l6-helix` device container
@@ -189,6 +189,21 @@ Rules:
   edit and export it offline, but it cannot write it to the pedal; that needs an
   evidenced JSON → `l6-helix` encoder.
 
+### Exporting a backup
+
+`serializePgb` rebuilds the container from the parsed backup. The header, the
+`IDGP` directory body, the trailer and every untouched member keep their exact
+bytes (impulse responses and `UMDS` included); only the setlist whose slot was
+edited is re-serialized with `JSON.stringify(doc, null, 1)` and recompressed
+with `CompressionStream('deflate')`. Directory offsets and the header directory
+pointer are then patched.
+
+The layout is `ITM`: it reproduces the observed `AF6L` file (48-byte header,
+consecutive members, 36-byte records, 4-byte trailer). POD Go Edit has not been
+asked to open a re-written backup. A local round trip (import → export without
+edits) produced a decompressed setlist that deep-equals the original, and
+`SLNM`, `GLOB`, `I000`, `UMDS` and the unedited `SL00` were byte-identical.
+
 ## 7. Offline edit and `.pgp` export
 
 `apps/web/src/podgoEdit.ts` keeps the parsed `L6Preset` document, so an edit
@@ -209,8 +224,13 @@ fields this build does not understand.
   `meta: {original, pbn, premium}`). That envelope is `ITM` (inferred from the
   observed file), not a confirmed writer contract; the body itself is copied
   verbatim.
-- **Not offered:** setlist (`.pgb`) export, `.hlx`, model swaps, and any write
-  to the pedal from an imported preset.
+- **Backup (`.pgb`) export:** the imported container is rebuilt with the
+  working preset in the slot it came from. A setlist entry keeps the observed
+  body shape (`device`, `device_version`, `meta {build_sha, name}`, `tone`),
+  so fields this build does not understand inside `tone` survive with the
+  draft's parameter changes.
+- **Not offered:** `.hlx`, model swaps, and any write to the pedal from an
+  imported preset.
 
 ## 8. Streamed setlist
 

@@ -542,3 +542,32 @@ output is invented; unavailable tools are recorded as limitations.
   been checked by switching presets after a save from this build.
 - **Next:** save a changed parameter from this build, switch presets and reboot
   to confirm the stored value survives.
+
+## 2026-11-17 — implementation: offline `.pgb` export
+
+- **Input:** the local full backup used above (not committed, not a fixture).
+- **Result (`C` for the container):** the directory has six 36-byte records
+  (`SLNM` stored, `GLOB`/`I000`/`UMDS`/`SL00`/`SL01` zlib), each with a zero
+  `reserved` word and a 4-byte zero trailer. Members are consecutive from
+  offset 48, and the header's `u64` at +8 points at `IDGP`.
+- **Writer:** `serializePgb` copies the 48-byte header, the `IDGP` header body,
+  the trailer and every untouched member's stored bytes verbatim. Only the
+  setlist containing the edited slot is serialized with
+  `JSON.stringify(doc, null, 1)` and recompressed with
+  `CompressionStream('deflate')`; the record offsets and the header pointer are
+  patched.
+- **Round trip (`C` on the local file):** import → export without edits gave
+  byte-identical `SLNM`, `GLOB`, `I000`, `UMDS` and `SL00`; the recompressed
+  `SL01` decompressed to a document that deep-equals the original. The header
+  differs only in the directory offset, as expected.
+- **Confidence:** `C` that the rebuilt container matches the observed layout
+  and preserves untouched members; **`H`** that POD Go Edit (or the pedal)
+  accepts a re-written backup, because no exported file has been opened by the
+  official tool yet.
+- **Limits:** the writer needs the original `IDGP` directory. A backup read
+  through the zlib-scan fallback cannot be rebuilt. The setlist entry keeps the
+  observed body shape (`device`, `device_version`, `meta {build_sha, name}`,
+  `tone`), so unknown fields inside `tone` survive but the richer `.pgp`
+  metadata envelope is not invented.
+- **Next:** open an exported `.pgb` in POD Go Edit, restore it to a pedal, and
+  confirm the edited slot and the untouched IR still load.
