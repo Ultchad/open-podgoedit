@@ -17,7 +17,8 @@ import {
 } from './usb/podgoUsb';
 import { readActivePreset, readPresetSlot } from './usb/preset';
 import { readSetlist, type SetlistKind } from './usb/setlist';
-import { createFullBackup } from './usb/backup';
+import { createFullBackup, createSelectedBackup } from './usb/backup';
+import type { BackupTarget } from './usb/backup';
 import { restoreFullBackup } from './usb/restore';
 import { savePreset, writeParam } from './usb/write';
 import type {
@@ -2634,46 +2635,58 @@ export default function App() {
   }
 
   /**
-   * Read both setlists and every non-empty slot, then download a `.pgbak`.
+   * Read the requested slots (or both setlists) and download a `.pgbak`.
    *
    * The result becomes the session's fresh backup: restore stays disabled until
    * one exists.
    */
-  async function backupToFile() {
+  async function backupToFile(
+    targets: BackupTarget[] | null = null,
+  ) {
     const connection = connectionRef.current;
     if (!connection || backupBusy || restoreBusy) {
       return;
     }
+    const label = targets === null ? 'Full backup' : 'Selected backup';
     setUsbError(null);
     setBackupError(null);
     setRestoreError(null);
     setBackupBusy(true);
-    setUsbBusy('Starting the full backup…');
-    appendLog('Full backup: reading both setlists and every non-empty slot…');
+    setUsbBusy(`Starting the ${label.toLowerCase()}…`);
+    appendLog(
+      targets === null
+        ? 'Full backup: reading both setlists and every non-empty slot…'
+        : `Selected backup: reading ${targets.length} slot(s)…`,
+    );
     try {
-      const result = await createFullBackup(connection, reportProgress);
+      const result =
+        targets === null
+          ? await createFullBackup(connection, reportProgress)
+          : await createSelectedBackup(connection, targets, reportProgress);
       const stamp = new Date()
         .toISOString()
         .replace(/[:.]/g, '-')
         .slice(0, 19);
-      downloadBytes(result.bytes, `podgo-full-backup-${stamp}.pgbak`);
+      const file =
+        targets === null
+          ? `podgo-full-backup-${stamp}.pgbak`
+          : `podgo-selected-backup-${stamp}.pgbak`;
+      downloadBytes(result.bytes, file);
       setFreshBackup(result.summary);
       appendLog(
-        `Full backup: ${result.summary.entries.length} preset(s), ` +
+        `${label}: ${result.summary.entries.length} preset(s), ` +
           `${result.bytes.length} B, SHA-256 ${result.summary.digest}. ` +
           'Download started.',
       );
       if (result.skipped.length > 0) {
-        appendLog(
-          `Full backup: ${result.skipped.length} empty slot(s) skipped.`,
-        );
+        appendLog(`${label}: ${result.skipped.length} empty slot(s) skipped.`);
       }
     } catch (error) {
       const message = errorMessage(error);
       setBackupError(message);
       setUsbError(message);
-      appendLog(`ERROR full backup: ${message}`);
-      console.error('[POD Go] full backup failed', error);
+      appendLog(`ERROR ${label.toLowerCase()}: ${message}`);
+      console.error('[POD Go] backup failed', error);
     } finally {
       setBackupBusy(false);
       setUsbBusy(null);
@@ -3288,7 +3301,7 @@ export default function App() {
           setBackupError(null);
           setRestoreError(null);
         }}
-        onCreateBackup={() => void backupToFile()}
+        onCreateBackup={(targets) => void backupToFile(targets)}
         onRestore={(bytes, summary) => void restoreBackup(bytes, summary)}
       />
 
