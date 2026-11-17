@@ -5,10 +5,11 @@ This page documents the writes this build performs:
 - **`set_param` (operation 30)** — one continuous effect parameter on the
   preset the pedal currently has active. Hardware-validated on a POD Go
   Wireless (fw 2.50) since 2026-11-13, see §2.0.
-- **`save_preset` (operation 71)** — store that active preset under a User
-  slot and name. The command is metadata-only; it does not upload the preset
-  body. Implemented and unit-tested against the editor frame captured on
-  2026-11-13, see §2.5.
+- **`save_preset` (operation 71)** — store the active preset (its current
+  sound, including parameters set with op 30) under a User slot and name. The
+  command carries only the destination and the name: the pedal commits its own
+  edit buffer, so no body upload is needed. Implemented and unit-tested
+  against the editor frame captured on 2026-11-13, see §2.5.
 - **Full backup and restore (`.pgbak` + operation 5)** — read both setlists
   and every non-empty slot into a self-checking container, then stream the raw
   bodies back. The restore frame layout comes from
@@ -29,7 +30,7 @@ not independently reproduced).
 | `set_param` (30), continuous effect parameter | Implemented, gated | Edits the active preset in RAM |
 | `set_param` on input/output/looper | Not implemented | Same op, but the raw chain index and parameter order are not verified for these stages |
 | `set_model` / model swap | Not implemented | Needs the chain blob round-trip |
-| `save_preset` (71), metadata only | Implemented, gated | Writes setlist/slot/name of the active preset; captured from the editor |
+| `save_preset` (71) | Implemented, gated | Stores the active preset (current sound) under a User slot; captured from the editor |
 | Whole-chain write (op 21) | **Not implemented** | High corruption risk, object-14 seal unresolved |
 | Preset copy/move between slots | Not implemented | Needs the chain blob write |
 | Preset restore (op 5, streamed) | Implemented, gated | Op 5 only; **not hardware-validated** |
@@ -37,9 +38,11 @@ not independently reproduced).
 
 `set_param` changes the preset in RAM only. Recalling another preset,
 switching snapshots that restore the parameter, or powering the pedal off
-discards the change. `save_preset` persists the active preset's current sound
-under a slot; it is the only operation in this build that survives a reboot.
-A full restore replaces preset bodies on the pedal and does survive a reboot.
+discards the change unless it is followed by `save_preset`. The Save button
+does exactly that: it applies every draft with op 30, then sends op 71 for the
+active preset's own User slot, so one confirmation both edits and stores the
+preset. A full restore replaces preset bodies on the pedal and also survives a
+reboot.
 
 ## 2. Write channel
 
@@ -178,9 +181,11 @@ Decoded body:
 - name `New Preset` with the trailing NUL the pedal stores;
 - header byte 0 `0x2a` = 16 + 26-byte body; two padding bytes after the body.
 
-The command is **metadata-only**: no object-14 read and no preset-body upload
-appear anywhere in the save capture. Saving is therefore independent of the
-object-14 seal that still blocks whole-chain writes.
+The command carries **no preset body**: no object-14 read and no upload
+appear anywhere in the save capture. The pedal stores its own edit buffer, so
+parameters already applied with op 30 are written to flash by this one
+command, and saving stays independent of the object-14 seal that still blocks
+whole-chain writes.
 
 The response is the usual framed status `{102: 1016, 103: 0, 104: nil}` with
 `62 06 1d` padding, and the event channel reports
@@ -295,23 +300,27 @@ Framing recovered from the 157 messages:
 | Padding | zeros to a 4-byte frame boundary | C |
 | Body transaction | `cd` (u16) when below 65536 | C |
 | Key `110` marker | MessagePack `str` (`da`/`db`), never `bin` | C |
-| Stream window status | `{102: tx, 103: 1, 104: nil}` after 1512–1528 body bytes | C |
-| Cursor after a window | previous + 17 (`8 + 9`) | C |
-| Next message cursor | same as the previous message's last cursor; no extra footprint | C |
+| Stream status | `{102: tx, 103: 1, 104: nil}` after **every** frame | C |
+| Cursor after a status | previous + 17 (`8 + 9`) | C |
+| Next message cursor | the cursor reached after the last status | C |
 
-Window statuses arrive at 1512 or 1528 bytes because the host chose those frame
-boundaries. The encoder deliberately caps the first window at exactly 1536
-body bytes (the protocol constant in this build), waits for status 1 there,
-advances the cursor by 17 and continues. The next message starts at the
-advanced cursor. The first op-5 frame after the preamble uses sequence 6 and
-cursor `0x101a`; the five preamble packets are `READ_SEQUENCE` (the op-254
-packet at `0x1009` is `SESSION_OPEN_2`).
+The pedal acknowledges **each USB packet**, not a fixed byte window. In the
+capture the statuses follow 488, 917, 1313, 1706, 2124, … body bytes, i.e. once
+per 512-byte transfer. The encoder therefore marks every frame as a window end,
+waits for status 1 after each one, and advances the cursor by 17 each time
+(`0x52fd → 0x530e → …`). An earlier build waited for a single 1536-byte window;
+the pedal's per-packet statuses were then consumed as bare acks and the next
+frame was never granted, which is what produced *"the pedal did not
+acknowledge the restore stream window"*.
+
+The first op-5 frame after the preamble uses sequence 6 and cursor `0x101a`;
+the five preamble packets are `READ_SEQUENCE` (the op-254 packet at `0x1009`
+is `SESSION_OPEN_2`).
 
 The capture also contains a 16-byte `cmd = 0x08` host acknowledgement after each
-window status. This build does **not** send those acknowledgements and advances
-the sequence by the frame count alone. The capture's sequence therefore runs
-one number ahead per window. This is a known fidelity gap, not a validated
-requirement.
+status. This build does **not** send those acknowledgements and advances the
+sequence by the frame count alone. This is a known fidelity gap, not a
+validated requirement.
 
 #### 2.7.2 Body and encoder
 
@@ -325,8 +334,8 @@ Key order matters: `102`, `100`, `101`; inside `101`: `107`, `108`, `123`,
 `124`, `125`, `110`. The raw body is stored as a MessagePack `str`; the device
 does not accept a `bin` marker in key `110`. `encode_restore_preset` rejects a
 setlist above 1, a slot above 127, an empty body and a body above the 64 KiB
-stream limit. `encode_restore_stream` performs the framing, padding, window cap
-and cursor advance described above.
+stream limit. `encode_restore_stream` performs the framing, padding, per-frame
+status wait and cursor advance described above.
 
 The restore sends **operation 5 only**. The operation-9 message, the
 operation-86 blob, the 570 operation-113 requests and the final operation-254
@@ -463,5 +472,5 @@ pedal.
 | Frame builders | `cargo test -p podgo-protocol --features device-write` (`set_param`, captured op-71, op-254 and op-5 golden/stream vectors, name validation) |
 | Container | `cargo test -p podgo-domain` (`backup::tests`: round trip, digests, duplicates, tamper, out-of-range entries) |
 | Flow state machine | `apps/web/wasm` `write::tests` (handshake, bare acks, status, rejection, save body) and `backup::tests` (builder round trip, tamper rejection, preamble, window status, cursor advance, timeout) |
-| Browser | `apps/web/tests/usb.spec.ts` → "writes one continuous effect parameter after arming", "saves the active preset after backing up the destination slot" and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-71 frames, serves both setlists, acknowledges the 1536-byte restore window and records the completed op-5 messages) |
+| Browser | `apps/web/tests/usb.spec.ts` → "writes one continuous effect parameter after arming", "saves the active preset after backing up the destination slot" and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-71 frames, serves both setlists, acknowledges every restore frame and records the completed op-5 messages) |
 | Hardware | Manual checklist in `docs/development/manual-testing-todo.md` (all writes; restore is still unvalidated) |

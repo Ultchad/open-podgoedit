@@ -411,15 +411,14 @@ function fakeWebUsb({
 
   // --- Restore stream (op 5 on the read channel) ---------------------------
   //
-  // The app streams one op-5 message per preset. The fake accumulates body
-  // bytes and answers a 1536-byte window with a framed status 1, exactly the
-  // window the Rust encoder waits on. Completed messages are recorded on
+  // The app streams one op-5 message per preset. The fake acknowledges every
+  // frame with a framed status 1, as the pedal does in
+  // `podgo-backup-restore.pcapng`. Completed messages are recorded on
   // `window.__podgoRestore` for the test.
 
   interface RestoreState {
     declared: number;
     received: number;
-    window: number;
     setlist: number;
     slot: number;
   }
@@ -578,7 +577,12 @@ function fakeWebUsb({
     return response;
   }
 
-  /** Accumulate stream bytes and answer the 1536-byte window. */
+  /**
+   * Accumulate stream bytes and acknowledge every frame.
+   *
+   * The pedal answers each USB packet with `{102, 103: 1, 104: nil}`
+   * (`podgo-backup-restore.pcapng`), not a fixed 1536-byte window.
+   */
   function restoreResponse(
     request: Uint8Array,
     data: number,
@@ -588,23 +592,14 @@ function fakeWebUsb({
     }
     const real = Math.min(data, restore.declared - restore.received);
     restore.received += real;
-    restore.window += real;
     const state = restore;
     const done = state.received >= state.declared;
 
-    if (state.window >= 1536) {
-      state.window = 0;
-      if (done) {
-        recordRestore(state);
-        restore = null;
-      }
-      return restoreStatusFrame(request, 1);
-    }
     if (done) {
       recordRestore(state);
       restore = null;
     }
-    return null;
+    return restoreStatusFrame(request, 1);
   }
 
   function recordRestore(state: RestoreState): void {
@@ -626,7 +621,7 @@ function fakeWebUsb({
     if (request[4] === 0x01 && request[5] === 0x10) {
       const start = restoreStart(request);
       if (start) {
-        restore = { ...start, received: 0, window: 0 };
+        restore = { ...start, received: 0 };
         const response = restoreResponse(request, request.length - 24);
         if (response) {
           return response;
@@ -1197,11 +1192,9 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
     /POD Go \(fake\)/,
   );
 
-  // The seeded offline preset is on screen. Connecting shows the write guard;
-  // a pedal read makes the active preset editable as a draft.
-  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
+  // Connecting reads both setlists and the active preset automatically, so the
+  // editor is editable right away. The write guard still starts unchecked.
   await expect(page.locator('#arm-writes')).toBeVisible();
-  await page.locator('#read-preset').click();
   await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
   await expect(page.locator('.readonly-chip')).toHaveText('draft');
 
@@ -1245,7 +1238,7 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   );
   expect(dialogMessage).toContain('Tube Drive');
   await expect(page.locator('#save-notice')).toContainText(
-    '1 change(s) applied',
+    '1 change(s) saved',
   );
 
   // The accepted value is reflected immediately without re-reading the pedal.
@@ -1254,11 +1247,13 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   await expect(row.locator('.param-value')).toHaveText('5.0');
   await expect(page.locator('.report.error')).toHaveCount(0);
 
+  // Two commands: the parameter (op 30) then the store (op 71), so the change
+  // survives a preset switch or a reboot.
   const writes = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
   );
-  expect(writes).toHaveLength(1);
+  expect(writes).toHaveLength(2);
   const decoded = readMsgpack(new Uint8Array(writes[0]), 24).value;
   const body = decoded as { [key: number]: MsgValue };
   expect(body[100]).toBe(30);
@@ -1268,6 +1263,14 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   expect(inner[28]).toBe(0);
   expect(inner[29]).toBe(true);
   expect(inner[119]).toBeCloseTo(0.5, 6);
+
+  const stored = readMsgpack(new Uint8Array(writes[1]), 24).value as {
+    [key: number]: MsgValue;
+  };
+  expect(stored[100]).toBe(71);
+  const destination = stored[101] as { [key: number]: MsgValue };
+  expect(destination[107]).toBe(1);
+  expect(destination[109]).toBe('US Deluxe Nrm\0');
 
   expect(errors).toEqual([]);
 });
@@ -1609,3 +1612,63 @@ test('shows an offline message when WebUSB is missing', async ({ page }) => {
   );
 });
 
+
+test('keeps the write arm when switching presets', async ({ page }) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  await page.locator('#arm-writes').check();
+  await expect(page.locator('#arm-writes')).toBeChecked();
+
+  // Opening another slot from the librarian must not disarm the session.
+  await page.getByRole('tab', { name: /User/ }).click();
+  await page.locator('.preset-item').nth(1).click();
+  await expect(page.locator('.preset-title')).toContainText('Lead Bread-only');
+  await expect(page.locator('#arm-writes')).toBeChecked();
+
+  // Re-reading the active preset keeps it too.
+  await page.locator('#read-preset').click();
+  await expect(page.locator('#arm-writes')).toBeChecked();
+});
+
+test('copies a pedal slot from the right-click menu without opening it', async ({
+  page,
+}) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  await page.getByRole('tab', { name: /User/ }).click();
+  // Slot 2 is not open: the body has to come from a pedal read.
+  await page.locator('.preset-item').nth(1).click({ button: 'right' });
+  await expect(page.locator('#menu-copy')).toBeEnabled();
+  await page.locator('#menu-copy').click();
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Copy: reading User',
+  );
+  await expect(page.locator('#save-notice')).toHaveCount(0);
+  await expect(page.locator('.report.log')).toContainText('Clipboard:');
+  await expect(page.locator('.report.error')).toHaveCount(0);
+});

@@ -543,7 +543,8 @@ mod tests {
         assert_eq!(frame[9], RESTORE_FIRST_SEQ);
         assert_eq!(&frame[12..16], &RESTORE_FIRST_CURSOR.to_le_bytes());
         assert_eq!(&frame[16..20], &podgo_protocol::write::RESTORE_SUBHEADER);
-        assert!(!flow.expects_response());
+        assert!(flow.expects_response());
+        flow.accept_response(&framed_status(1, 1)).unwrap();
         assert!(flow.is_finished());
         assert_eq!(
             flow.result_json().as_deref(),
@@ -553,7 +554,7 @@ mod tests {
 
     #[test]
     fn restore_flow_waits_for_the_window_status() {
-        // 2000 bytes force the 1536-byte window and a status read.
+        // 2000 bytes span several frames; the pedal acks each one.
         let mut blob = vec![0x11u8; 2000];
         blob[0] = 0xa9;
         let mut builder = BackupBuilder::new(String::new(), String::new());
@@ -566,22 +567,21 @@ mod tests {
             flow.accept_response(&[0u8; 16]).unwrap();
         }
 
-        let mut saw_window = false;
+        let mut acked = 0u32;
         while let Some(frame) = flow.next_request() {
-            // Frames sent after the window carry the advanced cursor.
+            // Every frame is acknowledged, so each one carries the cursor
+            // advanced by the number of statuses already granted.
             let cursor = u32::from_le_bytes(frame[12..16].try_into().unwrap());
-            if saw_window {
-                assert_eq!(cursor, RESTORE_FIRST_CURSOR + RESTORE_CURSOR_ADVANCE);
-            } else {
-                assert_eq!(cursor, RESTORE_FIRST_CURSOR);
-            }
-            if flow.expects_response() {
-                saw_window = true;
-                let status = framed_status(1, 1);
-                flow.accept_response(&status).unwrap();
-            }
+            assert_eq!(
+                cursor,
+                RESTORE_FIRST_CURSOR + acked * RESTORE_CURSOR_ADVANCE
+            );
+            assert!(flow.expects_response());
+            acked += 1;
+            let status = framed_status(1, 1);
+            flow.accept_response(&status).unwrap();
         }
-        assert!(saw_window);
+        assert!(acked > 1);
         assert!(flow.is_finished());
         assert_eq!(flow.progress(), 0);
     }
