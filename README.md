@@ -10,6 +10,22 @@ He was inspired by the project [openpodgo](https://github.com/agarat/openpodgo)
 > used only to describe interoperability. See [NOTICE](NOTICE) and
 > [docs/reverse-engineering/legal-notes.md](docs/reverse-engineering/legal-notes.md).
 
+## Disclaimer
+
+- **Unofficial.** This project is not made, endorsed, sponsored or supported by
+  Line 6 or Yamaha Guitar Group, and it is **not linked to** the official
+  POD Go Edit software in any way.
+- **Use at your own risk.** The software is provided "as is", without warranty
+  of any kind. The author is **not responsible** for any damage to your pedal,
+  its firmware, your presets or any other data, nor for any loss arising from
+  its use.
+- **Keep a backup.** Before enabling device writes, export a full backup from
+  POD Go Edit. Writes are opt-in, gated behind the **Enable writing** checkbox,
+  and never enabled by default.
+- Some features (device writes, restore, `.pgb` export) are inferred from
+  observation and are not all validated on hardware. See the
+  [roadmap](docs/roadmap.md) for the evidence level of each feature.
+
 The [open-podgoedit](https://ultchad.github.io/open-podgoedit/) website runs entirely in your browser (only Chromium-based browsers are supported)
 
 ## Status
@@ -35,7 +51,8 @@ arms writes. `set_param` is hardware-validated; save and restore are not. See
   parameters and device state.
 - Edit and organize presets and setlists offline.
 - Import `.pgp` presets and `.pgb` backups, edit a preset offline and export
-  it back as `.pgp`; `.pgb` export is planned.
+  it back as `.pgp`, or rebuild the backup as `.pgb` with untouched members
+  copied byte-for-byte.
 - Synchronize with the device, detect device-side changes, undo/redo locally.
 - Preserve unknown fields byte-for-byte across read/modify/write cycles.
 - Run entirely without a backend or cloud service.
@@ -105,7 +122,10 @@ nginx):
 docker compose up --build   # http://127.0.0.1:8080
 ```
 
-The `.github/workflows/pages.yml` workflow publishes the same static build to
+The `.github/workflows/ci.yml` workflow runs the Rust formatting, Clippy and
+offline tests, the WASM host tests, the TypeScript build and the Playwright
+browser suite on pull requests and pushes to `dev`/`main`. The
+`.github/workflows/pages.yml` workflow publishes the same static build to
 GitHub Pages on every push to `main`.
 
 ## Local web app
@@ -138,7 +158,8 @@ npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. Click **Connect POD Go**, select the Line 6
+Open <http://127.0.0.1:5173>. Click **Connect** (the same button turns into
+**Disconnect** while a pedal is open), select the Line 6
 device, then **Read User**, **Read Factory** or **Read active preset**. After a
 setlist read, click any preset in the librarian to open that slot's chain
 without recalling it on the pedal. Reads are always safe; writes stay off until

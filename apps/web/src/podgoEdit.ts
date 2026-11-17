@@ -51,6 +51,53 @@ export interface EditSetlist {
   name: string;
   /** 128 entries; `null` marks an empty slot (`{}` in the file). */
   presets: (EditPreset | null)[];
+  /**
+   * The parsed `L6Setlist` document, kept so an export only rewrites the
+   * slots that changed. Absent when the member was read without a directory.
+   */
+  document?: Record<string, unknown> | null;
+  /**
+   * The stored bytes of this setlist member, as they appear in the file, so
+   * an untouched setlist is copied verbatim instead of being re-serialized.
+   */
+  stored?: Uint8Array | null;
+  /**
+   * Tag of the container member this setlist was read from (`SL00`, …).
+   * The export rewrites this exact member instead of guessing from its index.
+   */
+  memberTag?: string;
+}
+
+/**
+ * One member of the `AF6L` container, as read from the file.
+ *
+ * `stored` is the exact byte range the directory points at (still
+ * compressed when `codec` is 1). Unchanged members are written back verbatim,
+ * which preserves impulse responses, the model archive and any member this
+ * build does not understand.
+ */
+export interface PgbMember {
+  /** Four-character tag, already un-reversed (`SL00`, `GLOB`, …). */
+  tag: string;
+  /** `0` = stored, `1` = zlib. */
+  codec: number;
+  /** Uncompressed size, as recorded in the directory. */
+  original: number;
+  /** Stored bytes: the compressed stream when `codec` is 1. */
+  stored: Uint8Array;
+  /** The `u32` in front of the tag (0 in observed files). */
+  reserved: number;
+}
+
+/** Everything needed to rebuild an `AF6L` backup byte-for-byte. */
+export interface PgbContainer {
+  /** The original 48-byte header; offsets are patched on export. */
+  header: Uint8Array;
+  /** The 24-byte directory header body (between `IDGP` and the records). */
+  directoryHeader: Uint8Array;
+  /** The 4-byte zero trailer after the last record. */
+  trailer: Uint8Array;
+  members: PgbMember[];
 }
 
 export interface EditBackup {
@@ -60,6 +107,13 @@ export interface EditBackup {
   irCount: number;
   device: number | null;
   deviceVersion: number | null;
+  /** Container structure for a lossless `.pgb` export; `null` if unreadable. */
+  container: PgbContainer | null;
+  /**
+   * Where the preset being edited sat in this backup, when it was opened from
+   * a `.pgb` entry. `Export .pgb` replaces that slot and keeps the rest.
+   */
+  source?: { setlist: number; slot: number };
 }
 
 export interface EditSingle {
@@ -109,6 +163,8 @@ interface DirEntry {
   /** `0` = stored, `1` = zlib. */
   codec: number;
   original: number;
+  /** The `u32` in front of the tag (0 in observed files). */
+  reserved: number;
 }
 
 function readDirectory(
@@ -148,6 +204,7 @@ function readDirectory(
       size,
       codec,
       original,
+      reserved: nameLength,
     });
     pos += 36 + nameLength;
   }
@@ -216,6 +273,7 @@ async function parsePgb(bytes: Uint8Array): Promise<EditBackup> {
   const entries = readDirectory(view, bytes, directoryOffset);
 
   const members: Uint8Array[] = [];
+  let container: PgbContainer | null = null;
   if (entries) {
     try {
       for (const entry of entries) {
@@ -224,6 +282,28 @@ async function parsePgb(bytes: Uint8Array): Promise<EditBackup> {
       }
     } catch {
       members.length = 0;
+    }
+    if (members.length === entries.length) {
+      const headerLength = view.getUint32(directoryOffset + 4, true);
+      const recordsStart = directoryOffset + 8 + headerLength;
+      // The trailer is whatever follows the last record; observed files use
+      // four zero bytes, but keep the exact bytes so the export matches.
+      const lastRecord = recordsStart + entries.length * 36;
+      container = {
+        header: bytes.slice(0, 48),
+        directoryHeader: bytes.slice(
+          directoryOffset + 8,
+          directoryOffset + 8 + headerLength,
+        ),
+        trailer: bytes.slice(lastRecord),
+        members: entries.map((entry) => ({
+          tag: entry.tag,
+          codec: entry.codec,
+          original: entry.original,
+          stored: bytes.slice(entry.offset, entry.offset + entry.size),
+          reserved: entry.reserved,
+        })),
+      };
     }
   }
   if (members.length === 0) {
@@ -242,7 +322,7 @@ async function parsePgb(bytes: Uint8Array): Promise<EditBackup> {
   let device: number | null = null;
   let deviceVersion: number | null = null;
 
-  for (const member of members) {
+  for (const [memberIndex, member] of members.entries()) {
     if (
       member.length >= 4 &&
       member[0] === 0x52 &&
@@ -305,6 +385,9 @@ async function parsePgb(bytes: Uint8Array): Promise<EditBackup> {
       setlists.push({
         name: asString(meta?.name) ?? `Setlist ${setlists.length}`,
         presets,
+        document: doc,
+        stored: container ? container.members[memberIndex].stored : null,
+        memberTag: container ? container.members[memberIndex].tag : undefined,
       });
     } else if (schema === null && globals === null && 'System' in doc) {
       globals = doc;
@@ -323,6 +406,7 @@ async function parsePgb(bytes: Uint8Array): Promise<EditBackup> {
     irCount,
     device,
     deviceVersion,
+    container,
   };
 }
 
@@ -1175,4 +1259,217 @@ export function presetFileName(name: string): string {
     .replace(/[^A-Za-z0-9_-]+/g, '_')
     .replace(/^_+|_+$/g, '');
   return `${clean || 'podgo-preset'}.pgp`;
+}
+
+// --- `.pgb` export ---------------------------------------------------------
+//
+// A backup is rebuilt from the container read at import time. Members that
+// were not edited keep their exact stored bytes, so impulse responses, the
+// model archive and any unknown member survive untouched. Only the setlists
+// that changed are re-serialized and recompressed; the header, the directory
+// header and the trailer are copied, and the offsets are patched.
+//
+// The layout is `ITM`: it reproduces the observed `AF6L` file (48-byte header,
+// consecutive members, `IDGP` directory, 36-byte records). POD Go Edit has not
+// been asked to open a re-written backup yet.
+
+/** The body of one setlist entry (`data` of an `.pgp`'s `L6Preset`). */
+function presetBody(preset: EditPreset): Record<string, unknown> {
+  if (preset.document) {
+    const data = asObject(preset.document.data);
+    if (data) {
+      return data;
+    }
+  }
+  // A `.pgb` setlist entry stores exactly these four keys; `meta` carries
+  // only the build and the name. Keep that observed shape rather than the
+  // richer `.pgp` metadata envelope.
+  return {
+    device: preset.device,
+    device_version: preset.deviceVersion,
+    meta: {
+      build_sha: preset.buildSha,
+      name: preset.name,
+    },
+    tone: preset.tone,
+  };
+}
+
+/** Replace one slot in a setlist document, keeping every other entry. */
+function withSlot(
+  document: Record<string, unknown>,
+  slot: number,
+  preset: EditPreset | null,
+): Record<string, unknown> {
+  const data = asObject(document.data) ?? {};
+  const rawPresets = Array.isArray(data.presets) ? [...data.presets] : [];
+  while (rawPresets.length < SLOT_COUNT) {
+    rawPresets.push({});
+  }
+  rawPresets[slot] = preset ? presetBody(preset) : {};
+  return { ...document, data: { ...data, presets: rawPresets } };
+}
+
+/**
+ * Apply the edited presets to a parsed backup.
+ *
+ * `edits` maps a setlist index to the slots that changed; each value is the
+ * draft to store, or `null` to empty the slot. The returned backup keeps the
+ * original container and documents, so `serializePgb` can preserve them.
+ */
+export function applyBackupEdits(
+  backup: EditBackup,
+  edits: Map<number, Map<number, EditPreset | null>>,
+): EditBackup {
+  if (edits.size === 0) {
+    return backup;
+  }
+  const setlists = backup.setlists.map((setlist, index) => {
+    const slots = edits.get(index);
+    if (!slots || !setlist.document) {
+      return setlist;
+    }
+    let document = setlist.document;
+    const presets = [...setlist.presets];
+    for (const [slot, preset] of slots) {
+      if (slot < 0 || slot >= SLOT_COUNT) {
+        continue;
+      }
+      document = withSlot(document, slot, preset);
+      presets[slot] = preset;
+    }
+    return { ...setlist, presets, document, stored: null };
+  });
+  return { ...backup, setlists };
+}
+
+async function deflate(bytes: Uint8Array): Promise<Uint8Array> {
+  if (typeof CompressionStream === 'undefined') {
+    throw new Error(
+      'This browser cannot write .pgb files (CompressionStream is missing). Use Chrome or Edge.',
+    );
+  }
+  const body = new Blob([new Uint8Array(bytes)]).stream();
+  const stream = body.pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+interface StoredMember {
+  tag: string;
+  reserved: number;
+  codec: number;
+  original: number;
+  stored: Uint8Array;
+}
+
+/**
+ * Rebuild the `AF6L` container from a parsed backup.
+ *
+ * Only the setlist members whose `stored` bytes were cleared by
+ * `applyBackupEdits` are re-encoded; every other member (and the header,
+ * directory header and trailer) is copied verbatim. Throws when the backup
+ * was read without a directory, because the member order would be unknown.
+ */
+export async function serializePgb(backup: EditBackup): Promise<Uint8Array> {
+  const container = backup.container;
+  if (!container) {
+    throw new Error(
+      'This .pgb was read without its directory, so it cannot be rebuilt. ' +
+        'Re-import a backup that POD Go Edit exported.',
+    );
+  }
+
+  const encoder = new TextEncoder();
+  const setlistByTag = new Map<string, EditSetlist>();
+  for (const setlist of backup.setlists) {
+    if (setlist.memberTag) {
+      setlistByTag.set(setlist.memberTag, setlist);
+    }
+  }
+
+  const members: StoredMember[] = [];
+  for (const member of container.members) {
+    const setlist = setlistByTag.get(member.tag);
+    if (!setlist || setlist.stored) {
+      members.push({
+        tag: member.tag,
+        reserved: member.reserved,
+        codec: member.codec,
+        original: member.original,
+        stored: member.stored,
+      });
+      continue;
+    }
+    if (!setlist.document) {
+      throw new Error(
+        `Setlist ${member.tag} has no document to write.`,
+      );
+    }
+    const plain = encoder.encode(JSON.stringify(setlist.document, null, 1));
+    const compressed = await deflate(plain);
+    members.push({
+      tag: member.tag,
+      reserved: member.reserved,
+      codec: 1,
+      original: plain.length,
+      stored: compressed,
+    });
+  }
+
+  const header = new Uint8Array(container.header);
+  const headerView = new DataView(header.buffer, header.byteOffset);
+  const headerLength = header.length >= 48 ? 48 : header.length;
+  let offset = headerLength;
+  for (const member of members) {
+    offset += member.stored.length;
+  }
+  const directoryOffset = offset;
+
+  const directorySize =
+    8 + container.directoryHeader.length + members.length * 36 + container.trailer.length;
+  const directory = new Uint8Array(directorySize);
+  const directoryView = new DataView(directory.buffer);
+  directory.set([0x49, 0x44, 0x47, 0x50], 0); // "IDGP"
+  directoryView.setUint32(4, container.directoryHeader.length, true);
+  directory.set(container.directoryHeader, 8);
+  let pos = 8 + container.directoryHeader.length;
+  let dataOffset = headerLength;
+  for (const member of members) {
+    directoryView.setUint32(pos, member.reserved, true);
+    for (let index = 0; index < 4; index += 1) {
+      directory[pos + 4 + index] = member.tag.charCodeAt(3 - index);
+    }
+    directoryView.setBigUint64(pos + 8, BigInt(dataOffset), true);
+    directoryView.setBigUint64(pos + 16, BigInt(member.stored.length), true);
+    directoryView.setUint32(pos + 24, member.codec, true);
+    directoryView.setBigUint64(pos + 28, BigInt(member.original), true);
+    dataOffset += member.stored.length;
+    pos += 36;
+  }
+  directory.set(container.trailer, pos);
+
+  headerView.setBigUint64(8, BigInt(directoryOffset), true);
+
+  const total =
+    headerLength +
+    members.reduce((sum, member) => sum + member.stored.length, 0) +
+    directorySize;
+  const out = new Uint8Array(total);
+  out.set(header, 0);
+  let cursor = headerLength;
+  for (const member of members) {
+    out.set(member.stored, cursor);
+    cursor += member.stored.length;
+  }
+  out.set(directory, cursor);
+  return out;
+}
+
+/** Filename-safe export name for a `.pgb` backup. */
+export function backupFileName(name: string): string {
+  const clean = name
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return `${clean || 'podgo-backup'}.pgb`;
 }

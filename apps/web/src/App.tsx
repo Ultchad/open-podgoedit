@@ -46,9 +46,12 @@ import PresetMenu, {
 } from './components/PresetMenu';
 import { validatePresetName, validateSnapshotName } from './presetName';
 import {
+  applyBackupEdits,
+  backupFileName,
   clonePreset,
   hasImportedSnapshotParam,
   presetFileName,
+  serializePgb,
   serializePgp,
   moveImportedBlock,
   setImportedBlockEnabled,
@@ -62,6 +65,7 @@ import {
   setImportedSnapshotParam,
   SNAPSHOT_CONTROLLER,
   toneToStructure,
+  type EditBackup,
   type EditPreset,
 } from './podgoEdit';
 import { createDefaultPreset } from './defaultPreset';
@@ -295,6 +299,16 @@ export default function App() {
   } | null>(null);
   /** Slot chosen by the right-click "Import .pgp…" action. */
   const [importTarget, setImportTarget] = useState<WorkingSlot | null>(null);
+  /**
+   * The `.pgb` backup the working copy came from, when it came from one.
+   *
+   * Kept so **Export .pgb** can rebuild the container: unchanged members are
+   * copied verbatim and only the edited setlist slot is rewritten.
+   */
+  const [importedBackup, setImportedBackup] = useState<EditBackup | null>(null);
+  /** User slot the imported backup's preset was opened into. */
+  const [backupExportKey, setBackupExportKey] = useState<string | null>(null);
+  const [backupExportBusy, setBackupExportBusy] = useState(false);
   const [clipboard, setClipboard] = useState<ClipboardEntry | null>(null);
   /** Raw body of the clipboard preset; the entry keeps only the metadata. */
   const [clipboardBlob, setClipboardBlob] = useState<Uint8Array | null>(null);
@@ -480,6 +494,9 @@ export default function App() {
       setDeviceInfo(connection.info);
       setSaveNotice(null);
       appendLog(`Connected: ${describeDevice(connection.info)}`);
+      // Fill the page from the pedal right away: both setlists and the active
+      // preset, so the editor is usable without pressing Read first.
+      await loadFromPedalOnConnect(connection);
     } catch (error) {
       if (isUserCancellation(error)) {
         setUsbError(null);
@@ -490,6 +507,78 @@ export default function App() {
         appendLog(`ERROR connect: ${message}`);
         console.error('[POD Go] connect failed', error);
       }
+    } finally {
+      setUsbBusy(null);
+    }
+  }
+
+  /**
+   * Read both setlists and the active preset after connecting.
+   *
+   * This is the same work as the three Read buttons, run once on connect so
+   * the page is usable immediately. Each step is independent: a setlist that
+   * fails to read leaves the offline seed in place, and an active-preset read
+   * that fails only logs. Unsaved pedal drafts are never discarded.
+   */
+  async function loadFromPedalOnConnect(connection: PodgoUsbConnection) {
+    for (const setlist of [0, 1] as const) {
+      const label = SETLIST_LABELS[setlist];
+      try {
+        setUsbBusy(`Reading the ${label} setlist…`);
+        appendLog(`Connect: reading the ${label} setlist…`);
+        const result = await readSetlist(connection, setlist, reportProgress);
+        setSetlists((current) => ({ ...current, [setlist]: result.entries }));
+        clearPendingForSetlist(setlist);
+        setActiveSetlist(setlist);
+        setDeviceReport({ kind: 'setlist', setlist, ...result });
+        if (setlist === 1) {
+          // Keep unexported offline drafts, drop clean local copies so a click
+          // reads the pedal instead of a stale document.
+          setLocalDocs((current) => {
+            const kept: Record<string, EditPreset> = {};
+            for (const [key, doc] of Object.entries(current)) {
+              if (dirtySlots[key]) {
+                kept[key] = doc;
+              }
+            }
+            return kept;
+          });
+        }
+        appendLog(
+          `Connect: ${label} setlist read, ${result.entries.length} entries.`,
+        );
+      } catch (error) {
+        const message = errorMessage(error);
+        appendLog(`WARNING connect (${label} setlist): ${message}`);
+        console.warn(`[POD Go] connect ${label} setlist read failed`, error);
+      }
+    }
+
+    try {
+      setUsbBusy('Reading the active preset…');
+      appendLog('Connect: reading the active preset…');
+      const result = await readActivePreset(connection, reportProgress);
+      const slot = result.structure.preset.slot;
+      const setlist: SetlistKind =
+        result.structure.preset.setlist === 0 ? 0 : 1;
+      showPreset(
+        result,
+        'active preset from pedal',
+        'Active preset',
+        setlist,
+        slot,
+      );
+      setActivePresetLoaded(true);
+      appendLog(
+        `Connect: active preset "${result.structure.preset.name || 'unnamed'}" ` +
+          `(${SETLIST_LABELS[setlist]} ${
+            slot === null ? 'slot unknown' : slotLabel(slot)
+          }).`,
+      );
+    } catch (error) {
+      const message = errorMessage(error);
+      appendLog(`WARNING connect (active preset): ${message}`);
+      console.warn('[POD Go] connect active preset read failed', error);
     } finally {
       setUsbBusy(null);
     }
@@ -676,9 +765,9 @@ export default function App() {
       );
       showPreset(result, `${label} from pedal`, label, setlist, entry.slot);
       // A slot read fetches a preset without recalling it, so the pedal still
-      // runs another sound: never write from this view.
+      // runs another sound: writes stay blocked by `activePresetLoaded` until
+      // the active preset is read again. The session arm switch is kept.
       setActivePresetLoaded(false);
-      setWriteEnabled(false);
       setUsbBusy(null);
       appendLog(
         `Read ${label}: ${result.chunks} chunk(s)${
@@ -695,12 +784,13 @@ export default function App() {
   }
 
   /**
-   * Save the working copy.
+   * Save the working copy to the pedal.
    *
    * Offline this is deliberately an error: the export path is the supported
    * way to keep a preset without a pedal. On the pedal, drafts are applied as
-   * one batch with operation 30 after a single confirmation. The body is still
-   * RAM-only: operation 71 stores metadata, not parameters.
+   * one batch with operation 30, then operation 71 stores the active preset
+   * (parameters included) in its User slot, so the change survives a preset
+   * switch or a reboot. One confirmation covers the whole save.
    */
   async function saveWorkingPreset() {
     const connection = connectionRef.current;
@@ -744,11 +834,33 @@ export default function App() {
       return;
     }
     const entries = Object.entries(pendingParams);
-    if (entries.length === 0) {
-      setSaveNotice({ kind: 'info', text: 'No changes to save.' });
+    if (writing || busy) {
       return;
     }
-    if (writing || busy) {
+
+    // Operation 71 stores the active preset in a User slot, so the destination
+    // must be known. Factory presets cannot be overwritten in place.
+    const slot = structure?.preset.slot ?? null;
+    const setlist = structure?.preset.setlist ?? null;
+    const name = (structure?.preset.name ?? '').trim();
+    if (setlist !== 1 || slot === null) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'The active preset is not in the User setlist, so it cannot be ' +
+          'stored in place. Use “Save to slot…” to store it in a User slot.',
+      });
+      return;
+    }
+    if (name.length === 0) {
+      setSaveNotice({
+        kind: 'error',
+        text: 'The active preset has no name; rename it before saving.',
+      });
+      return;
+    }
+    if (entries.length === 0) {
+      setSaveNotice({ kind: 'info', text: 'No changes to save.' });
       return;
     }
 
@@ -759,10 +871,11 @@ export default function App() {
     const more =
       entries.length > 8 ? `\n… and ${entries.length - 8} more` : '';
     const confirmed = window.confirm(
-      `Apply ${entries.length} change(s) to the active preset on the pedal?\n\n` +
+      `Save ${entries.length} change(s) to the pedal?\n\n` +
         `${lines}${more}\n\n` +
-        'This edits the active preset in RAM. Operation 71 stores metadata ' +
-        'only, so this build cannot persist the preset body.',
+        `Destination: User ${slotLabel(slot)} "${name}"\n\n` +
+        'The parameters are applied first, then the preset is stored in its ' +
+        'slot so the change survives a preset switch or a reboot.',
     );
     if (!confirmed) {
       appendLog('Save cancelled by the user.');
@@ -789,18 +902,58 @@ export default function App() {
         );
         applied += 1;
       }
+      appendLog(
+        `Save: ${applied} change(s) applied in RAM; storing User ${slotLabel(
+          slot,
+        )}…`,
+      );
+      reportProgress(`Storing User ${slotLabel(slot)} "${name}"…`);
+      const stored = await savePreset(
+        connection,
+        { slot, name },
+        reportProgress,
+      );
+      appendLog(
+        `Save: stored after ${stored.attempts} attempt(s); frame ` +
+          `${frameHex(stored.frame)}.`,
+      );
       setPendingParams({});
       setDirty(false);
       setFreshBackup(null);
       setSaveNotice({
         kind: 'info',
         text:
-          `${applied} change(s) applied to the active preset in RAM. ` +
-          'Not persisted: operation 71 stores metadata only.',
+          `${applied} change(s) saved to User ${slotLabel(slot)} "${name}". ` +
+          'The preset is stored on the pedal.',
       });
       appendLog(
-        `Save: ${applied} change(s) applied in RAM (not persisted by this build).`,
+        `Save: ${applied} change(s) applied and stored at User ${slotLabel(
+          slot,
+        )}.`,
       );
+
+      // Confirm the pedal's setlist still reports the stored slot.
+      try {
+        const list = await readSetlist(connection, 1, reportProgress);
+        setSetlists((current) => ({ ...current, 1: list.entries }));
+        clearPendingForSetlist(1);
+        const entry = list.entries[slot];
+        if (entry && entry.name === name) {
+          appendLog(
+            `Save verified: User ${slotLabel(slot)} reads "${entry.name}".`,
+          );
+        } else {
+          appendLog(
+            `WARNING save verification: User ${slotLabel(slot)} reads "${
+              entry?.name ?? '—'
+            }", expected "${name}".`,
+          );
+        }
+      } catch (error) {
+        appendLog(
+          `WARNING save verification failed: ${errorMessage(error)}`,
+        );
+      }
     } catch (error) {
       const message = errorMessage(error);
       setUsbError(message);
@@ -1056,7 +1209,12 @@ export default function App() {
     setlist: SetlistKind,
     slot: number,
     source?: EditPreset,
-    options?: { fresh?: boolean; draftsConfirmed?: boolean },
+    options?: {
+      fresh?: boolean;
+      draftsConfirmed?: boolean;
+      /** The `.pgb` this copy came from, when **Export .pgb** is available. */
+      backup?: EditBackup | null;
+    },
   ): boolean {
     const preset = source ?? localDocs[localKey(setlist, slot)];
     if (!preset) {
@@ -1069,6 +1227,10 @@ export default function App() {
     const working = clonePreset(preset);
     working.setlist = setlist;
     working.slot = slot;
+    // Only the preset that came from a backup can rebuild it; opening any
+    // other slot drops the offer so the wrong preset is never exported.
+    setImportedBackup(options?.backup ?? null);
+    setBackupExportKey(options?.backup ? key : null);
     setWorkingDoc(working);
     setWorkingSlot({ setlist: 1, slot });
     setStructure(toneToStructure(working));
@@ -1169,6 +1331,7 @@ export default function App() {
     preset: EditPreset,
     label: string,
     source: { setlist: number; slot: number } | null = null,
+    backup: EditBackup | null = null,
   ) {
     // Explicit right-click target, then the slot the .pgb entry came from,
     // then the first empty User slot.
@@ -1191,11 +1354,23 @@ export default function App() {
     updateSetlistName(1, target.slot, name);
     setImportTarget(null);
     setImportOpen(false);
-    openLocalPreset(1, target.slot, stored, { fresh: true });
+    // Remember the backup and where this preset sits in it, so Export .pgb
+    // can rebuild the container with this slot replaced. The preset itself
+    // opens in a User slot; `source` stays the slot inside the backup.
+    const fromBackup =
+      backup && source && backup.container
+        ? { ...backup, source: { setlist: source.setlist, slot: source.slot } }
+        : null;
+    openLocalPreset(1, target.slot, stored, {
+      fresh: true,
+      backup: fromBackup,
+    });
     appendLog(
       `Imported "${name}" from ${label} into User ${slotLabel(
         target.slot,
-      )} (offline copy, exports as .pgp).`,
+      )} (offline copy, exports as .pgp${
+        fromBackup ? ' or .pgb' : ''
+      }).`,
     );
   }
 
@@ -1606,6 +1781,72 @@ export default function App() {
     setSaveNotice({ kind: 'info', text: 'Exported. The offline copy is up to date.' });
   }
 
+  /**
+   * Download the imported `.pgb` with the working draft in its original slot.
+   *
+   * Every other member keeps its stored bytes, so impulse responses, globals
+   * and unknown members survive. Only the source setlist is re-serialized and
+   * recompressed. The file is rebuilt in this tab; nothing is uploaded.
+   */
+  async function exportBackup(): Promise<void> {
+    const preset = workingDoc;
+    const backup = importedBackup;
+    const key = workingSlot
+      ? localKey(workingSlot.setlist, workingSlot.slot)
+      : null;
+    if (
+      !preset ||
+      !backup ||
+      !backup.source ||
+      key === null ||
+      key !== backupExportKey
+    ) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'Export .pgb needs a backup imported from a .pgb file. Open one ' +
+          'with Import… first.',
+      });
+      return;
+    }
+    if (backupExportBusy) {
+      return;
+    }
+    setBackupExportBusy(true);
+    try {
+      const edits = new Map<number, Map<number, EditPreset | null>>([
+        [backup.source.setlist, new Map([[backup.source.slot, preset]])],
+      ]);
+      const bytes = await serializePgb(applyBackupEdits(backup, edits));
+      const file = backupFileName(`podgo-backup-${new Date()
+        .toISOString()
+        .slice(0, 10)}`);
+      downloadBytes(bytes, file);
+      appendLog(
+        `Export: ${file} (${bytes.length} B). Setlist ${
+          backup.source.setlist
+        } slot ${slotLabel(backup.source.slot)} updated; other members copied ` +
+          'unchanged.',
+      );
+      setSaveNotice({
+        kind: 'info',
+        text: `Exported ${file}. Only the edited slot changed; every other member is byte-identical.`,
+      });
+      setLocalDocs((current) => ({
+        ...current,
+        [key]: clonePreset(preset),
+      }));
+      clearSlotDirty(key);
+      setDirty(false);
+    } catch (error) {
+      const message = errorMessage(error);
+      setSaveNotice({ kind: 'error', text: `Export .pgb failed: ${message}` });
+      appendLog(`ERROR export .pgb: ${message}`);
+    } finally {
+      setBackupExportBusy(false);
+    }
+  }
+
   /** Export one slot's offline document, when it has one. */
   function exportSlot(kind: SetlistKind, slot: number): void {
     if (workingSlot?.setlist === kind && workingSlot.slot === slot && workingDoc) {
@@ -1675,26 +1916,75 @@ export default function App() {
     appendLog(`Local rename: ${SETLIST_LABELS[kind]} ${slotLabel(slot)} → "${next}".`);
   }
 
-  /** Copy one slot into the in-page clipboard. */
-  function copySlot(kind: SetlistKind, slot: number): void {
+  /**
+   * Copy one slot into the in-page clipboard.
+   *
+   * The body is taken from the working copy, the offline document, or — when
+   * the pedal is connected — a fresh slot read, so right-clicking any named
+   * slot works without opening it first. Copying only reads.
+   */
+  async function copySlot(kind: SetlistKind, slot: number): Promise<void> {
     const name = slotName(kind, slot);
     const isWorking =
       workingSlot?.setlist === kind && workingSlot.slot === slot;
     const preset = (isWorking ? workingDoc : null) ?? localDocs[localKey(kind, slot)];
-    if (!preset && !(isWorking && presetBlob)) {
+    const blob = isWorking ? presetBlob : null;
+    if (preset || blob) {
+      setClipboard({ name: name || preset?.name || 'Preset', setlist: kind, slot });
+      setClipboardDoc(preset ? clonePreset(preset) : null);
+      setClipboardBlob(blob);
+      setSaveNotice(null);
+      appendLog(
+        `Clipboard: "${name || preset?.name || 'unnamed'}" (${SETLIST_LABELS[kind]} ${slotLabel(slot)}).`,
+      );
+      return;
+    }
+
+    // Nothing in memory: read the slot from the pedal (read-only).
+    const connection = connectionRef.current;
+    if (!connected || !connection) {
       setSaveNotice({
         kind: 'error',
-        text: 'Nothing to copy: open the slot first (or connect the pedal).',
+        text:
+          name
+            ? 'Nothing to copy yet: connect the pedal to read this slot, or open it first.'
+            : 'Nothing to copy: this slot is empty.',
       });
       return;
     }
-    setClipboard({ name: name || preset?.name || 'Preset', setlist: kind, slot });
-    setClipboardDoc(preset ? clonePreset(preset) : null);
-    setClipboardBlob(isWorking ? presetBlob : null);
+    if (busy) {
+      return;
+    }
     setSaveNotice(null);
+    setUsbBusy('Handshake…');
     appendLog(
-      `Clipboard: "${name || preset?.name || 'unnamed'}" (${SETLIST_LABELS[kind]} ${slotLabel(slot)}).`,
+      `Copy: reading ${SETLIST_LABELS[kind]} ${slotLabel(slot)} (${
+        name || 'unnamed'
+      }) from the pedal…`,
     );
+    try {
+      const result = await readPresetSlot(
+        connection,
+        kind,
+        slot,
+        name,
+        reportProgress,
+      );
+      setClipboard({ name: name || result.structure.preset.name, setlist: kind, slot });
+      setClipboardDoc(null);
+      setClipboardBlob(result.blob);
+      appendLog(
+        `Clipboard: "${name || result.structure.preset.name || 'unnamed'}" ` +
+          `(${SETLIST_LABELS[kind]} ${slotLabel(slot)}, ${result.blob.length} B).`,
+      );
+    } catch (error) {
+      const message = errorMessage(error);
+      setSaveNotice({ kind: 'error', text: `Copy failed: ${message}` });
+      appendLog(`ERROR copy (${SETLIST_LABELS[kind]} ${slotLabel(slot)}): ${message}`);
+      console.error('[POD Go] slot copy failed', error);
+    } finally {
+      setUsbBusy(null);
+    }
   }
 
   /** Paste or move the clipboard into a User slot, locally. */
@@ -1892,7 +2182,7 @@ export default function App() {
         id: 'menu-copy',
         label: 'Copy',
         disabled: !name && !hasDoc,
-        onSelect: () => copySlot(kind, slot),
+        onSelect: () => void copySlot(kind, slot),
       },
       {
         id: 'menu-paste',
@@ -2517,6 +2807,11 @@ export default function App() {
   const busy = usbBusy !== null;
   const connected = deviceInfo !== null;
   const canExport = workingDoc !== null;
+  /** **Export .pgb** is only offered for the preset opened from a backup. */
+  const canExportBackup =
+    importedBackup !== null &&
+    workingSlot !== null &&
+    backupExportKey === localKey(workingSlot.setlist, workingSlot.slot);
   /** User slots that live only in the browser (offline copy or draft). */
   const browserSlots = new Set(Object.keys(localDocs));
   const canEditHere = workingDoc !== null || (connected && activePresetLoaded);
@@ -2524,8 +2819,8 @@ export default function App() {
   const editHint = workingDoc
     ? 'Edits change this offline copy. Use Export .pgp to keep them.'
     : writeEnabled
-      ? 'Changes are drafts until you press Save (Ctrl+S), which applies them to the active preset in RAM.'
-      : 'Changes are drafts. Enable writing, then press Save (Ctrl+S) to apply them to the pedal.';
+      ? 'Changes are drafts until you press Save (Ctrl+S), which writes them to the pedal and stores the preset in its slot.'
+      : 'Changes are drafts. Enable writing, then press Save (Ctrl+S) to write and store them on the pedal.';
 
   /**
    * Ctrl+S / Cmd+S saves the working copy, exactly like the header button:
@@ -2582,8 +2877,8 @@ export default function App() {
             POD Go <span>Editor</span>
           </h1>
           <p className="subtitle">
-            Preset editor — Rust core in WebAssembly. Works offline; connect a
-            pedal for live reads and writes.
+            Unofficial preset editor — Rust core in WebAssembly. Works offline;
+            connect a pedal for live reads and writes.
           </p>
         </div>
 
@@ -2592,19 +2887,18 @@ export default function App() {
             id="connect"
             type="button"
             className="toolbar-button"
-            disabled={!moduleReady || !usbSupported || busy || connected}
-            onClick={() => void connect()}
+            disabled={
+              busy || (!connected && (!moduleReady || !usbSupported))
+            }
+            data-connected={connected}
+            title={
+              connected
+                ? 'Disconnect from this POD Go'
+                : 'Connect a POD Go over WebUSB'
+            }
+            onClick={() => void (connected ? disconnect() : connect())}
           >
-            Connect
-          </button>
-          <button
-            id="disconnect"
-            type="button"
-            className="toolbar-button"
-            disabled={!connected || busy}
-            onClick={() => void disconnect()}
-          >
-            Disconnect
+            {connected ? 'Disconnect' : 'Connect'}
           </button>
 
           {connected && (
@@ -2650,7 +2944,7 @@ export default function App() {
                   ? 'Check “Enable writing” first. Export .pgp needs no pedal.'
                   : !activePresetLoaded
                     ? 'Read the active preset from the pedal first.'
-                    : 'Save the drafts to the pedal (Ctrl+S)'
+                    : 'Write the drafts to the pedal and store the preset in its slot (Ctrl+S)'
             }
           >
             Save
@@ -2760,6 +3054,8 @@ export default function App() {
               onSetBlockEnabled={workingDoc ? setBlockEnabled : undefined}
               canExport={canExport}
               onExport={exportWorkingPreset}
+              canExportBackup={canExportBackup}
+              onExportBackup={() => void exportBackup()}
               canRename={workingDoc !== null}
               onRename={renameWorkingPreset}
             />
@@ -3033,6 +3329,13 @@ export default function App() {
         onRenameWrite={(name) => void writeRename(name)}
         onPasteWrite={(slot, name, mode) => void writePaste(slot, name, mode)}
       />
+
+      <p id="unofficial-disclaimer" className="disclaimer" role="note">
+        <strong>Unofficial project.</strong> Not made, endorsed or supported by
+        Line 6 / Yamaha Guitar Group, and not linked to the official POD Go Edit
+        software. Use it at your own risk: the author is not responsible for any
+        damage to your pedal, presets or data. Always keep a backup.
+      </p>
 
       <footer>
         <span>

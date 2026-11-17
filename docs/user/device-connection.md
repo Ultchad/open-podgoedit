@@ -88,5 +88,7 @@ unverified and will only be claimed after hardware testing.
 
 ## 9. Safe disconnect
 
-Use **Disconnect** in the app before unplugging. If the cable is pulled during
-an operation, the app marks the session failed and requires a fresh connection.
+Use the same header button — it reads **Connect** while idle and
+**Disconnect** while a pedal is open — before unplugging. If the cable is
+pulled during an operation, the app marks the session failed and requires a
+fresh connection.

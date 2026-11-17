@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { deflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
 
 // Synthetic POD Go Edit files. They use the observed shapes (L6Preset,
 // L6Setlist, AF6L header + zlib members + IDGP directory) but contain only
@@ -371,4 +371,175 @@ test('edits an imported preset offline and exports a .pgp', async ({ page }) => 
   expect(fromBackup.meta).toEqual({ original: 0, pbn: 0, premium: 0 });
   expect(fromBackup.data.meta.name).toBe('User Lead');
   expect(fromBackup.data.tone.dsp0.block1.Mix).toBe(1);
+});
+
+/** Read the `AF6L` directory of an exported backup (synthetic files only). */
+function readPgbMembers(bytes: Buffer) {
+  const directoryOffset = Number(bytes.readBigUInt64LE(8));
+  expect(bytes.toString('latin1', 0, 4)).toBe('AF6L');
+  expect(bytes.toString('latin1', directoryOffset, directoryOffset + 4)).toBe(
+    'IDGP',
+  );
+  const headerLength = bytes.readUInt32LE(directoryOffset + 4);
+  let pos = directoryOffset + 8 + headerLength;
+  const members: {
+    tag: string;
+    offset: number;
+    size: number;
+    codec: number;
+    original: number;
+    stored: Buffer;
+  }[] = [];
+  while (pos + 36 <= bytes.length) {
+    const tag = Buffer.from(bytes.subarray(pos + 4, pos + 8))
+      .reverse()
+      .toString('latin1');
+    if (!/^[A-Z0-9]{4}$/.test(tag)) {
+      break;
+    }
+    const offset = Number(bytes.readBigUInt64LE(pos + 8));
+    const size = Number(bytes.readBigUInt64LE(pos + 16));
+    members.push({
+      tag,
+      offset,
+      size,
+      codec: bytes.readUInt32LE(pos + 24),
+      original: Number(bytes.readBigUInt64LE(pos + 28)),
+      stored: bytes.subarray(offset, offset + size),
+    });
+    pos += 36;
+  }
+  return { directoryOffset, members };
+}
+
+test('exports a .pgb with the edited slot and untouched members', async ({
+  page,
+}) => {
+  const pgb = buildPgb([
+    { name: 'Factory', presets: [presetBody('Factory Clean')] },
+    { name: 'User', presets: [{}, {}, {}, {}, {}, presetBody('User Lead')] },
+  ]);
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'backup.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: pgb,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+  await page.locator('.import-setlist-tab').nth(1).click();
+  await page.locator('.import-slot[data-slot="5"]').click();
+  await page.locator('#import-open').click();
+
+  // A .pgp import has no backup to rebuild; a .pgb entry does.
+  await expect(page.locator('#export-pgb')).toBeEnabled();
+
+  // Change the Wah Mix, then export the whole backup.
+  await page.locator('.block-tile').nth(1).click();
+  await page.locator('#param-value-3').click();
+  await page.locator('#param-input-3').fill('2.5');
+  await page.locator('#param-input-3').press('Enter');
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#export-pgb').click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^podgo-backup-\d{4}-\d{2}-\d{2}\.pgb$/);
+  const path = await download.path();
+  const exported = readFileSync(path ?? '');
+  const original = readPgbMembers(pgb);
+  const rebuilt = readPgbMembers(exported);
+
+  // Same members, same order: nothing was added or dropped.
+  expect(rebuilt.members.map((member) => member.tag)).toEqual(
+    original.members.map((member) => member.tag),
+  );
+  // Members that were not edited keep their exact stored bytes.
+  for (const tag of ['SLNM', 'GLOB', 'SL00']) {
+    const before = original.members.find((member) => member.tag === tag);
+    const after = rebuilt.members.find((member) => member.tag === tag);
+    expect(after?.codec).toBe(before?.codec);
+    expect(after?.original).toBe(before?.original);
+    expect(after?.stored.equals(before?.stored ?? Buffer.alloc(0))).toBe(true);
+  }
+
+  // Only the edited setlist was recompressed, and it carries the new value.
+  const userBefore = original.members.find((member) => member.tag === 'SL01');
+  const userAfter = rebuilt.members.find((member) => member.tag === 'SL01');
+  expect(userAfter?.codec).toBe(1);
+  expect(userAfter?.original).toBeGreaterThan(0);
+  const userDocument = JSON.parse(
+    inflateSync(userAfter?.stored ?? Buffer.alloc(0)).toString('utf8'),
+  );
+  expect(userDocument.schema).toBe('L6Setlist');
+  expect(userDocument.data.presets[5].tone.dsp0.block1.Mix).toBeCloseTo(
+    0.25,
+    6,
+  );
+  expect(userDocument.data.presets[5].meta.name).toBe('User Lead');
+  expect(userDocument.data.presets[0]).toEqual({});
+  expect(userDocument.data.presets.length).toBe(128);
+  expect(userDocument.data.presets[5].tone.dsp0.block1.FcHigh).toBe(2155);
+
+  // The exported backup re-opens in this reader with the edited value.
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'rebuilt.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: exported,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+  await page.locator('.import-setlist-tab').nth(1).click();
+  await page.locator('.import-slot[data-slot="5"]').click();
+  await expect(page.locator('#import-detail')).toContainText('User Lead');
+  await page.locator('#import-open').click();
+  await expect(page.locator('.preset-title-name')).toHaveText('User Lead');
+});
+
+test('shows the unofficial-project disclaimer', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  const disclaimer = page.locator('#unofficial-disclaimer');
+  await expect(disclaimer).toContainText('Unofficial project');
+  await expect(disclaimer).toContainText('not linked to the official POD Go Edit');
+  await expect(disclaimer).toContainText('at your own risk');
+});
+
+test('drops Export .pgb when another preset becomes the working copy', async ({
+  page,
+}) => {
+  const pgb = buildPgb([
+    { name: 'Factory', presets: [presetBody('Factory Clean')] },
+    { name: 'User', presets: [{}, {}, {}, {}, {}, presetBody('User Lead')] },
+  ]);
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'backup.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: pgb,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+  await page.locator('.import-setlist-tab').nth(1).click();
+  await page.locator('.import-slot[data-slot="5"]').click();
+  await page.locator('#import-open').click();
+  await expect(page.locator('#export-pgb')).toHaveCount(1);
+
+  // Starting another preset replaces the working copy; the backup offer must
+  // disappear so the new preset is never written into the imported slot.
+  page.on('dialog', (dialog) => void dialog.accept());
+  await page.locator('#new-preset').click();
+  await expect(page.locator('#export-pgb')).toHaveCount(0);
+  await expect(page.locator('#export-pgp')).toBeEnabled();
 });

@@ -495,3 +495,79 @@ output is invented; unavailable tools are recorded as limitations.
 - **Next:** open an exported `.pgp` (original and edited) in the official POD
   Go Edit to confirm acceptance; if the vendor app rejects it, compare the
   rejected file byte-for-byte with a vendor-saved file.
+
+## 2026-11-17 — correction: restore acks every frame, not a 1536-byte window
+
+- **Tool:** Python (stdlib pcapng + USBPCAP header reader) over
+  `reverse/exports/podgo-backup-restore.pcapng`.
+- **Input:** the first op-5 message (transaction 1579, Factory slot 0, 4171-byte
+  body), starting at packet 52352.
+- **Result (`C`):** the pedal answers `{102: 1579, 103: 1, 104: nil}` after
+  **488, 917, 1313, 1706, 2124, 2518, 2867, 3246, …** body bytes — that is,
+  once per USB packet (512-byte transfer), not once per fixed byte window.
+  The statuses arrive on the read-response pair `0x03EF → 0x1001` with
+  subheader `00 00 02 00`, interleaved with `0x48` event frames.
+- **Cursor (`C`):** the cursor steps `0x52fd → 0x530e` (+17) right after the
+  first status and stays there for the frames that follow, then steps again
+  after the next status. So the rule is *advance by 17 per granted status*.
+- **Interpretation:** the previous encoder capped a single window at 1536 body
+  bytes and waited for one status there. The pedal's per-packet statuses were
+  consumed as bare acknowledgements, so the frame after the 1536-byte boundary
+  was never granted and the flow aborted with *"the pedal did not acknowledge
+  the restore stream window"*. The encoder now marks every frame as a window
+  end and advances the cursor after each status.
+- **Confidence:** `C` for the per-frame status, the response channel and the
+  cursor step (all read directly from the capture). Restore itself is still
+  **not hardware-validated**: the framing now matches the capture, but no op-5
+  write from this build has been applied to a pedal.
+- **Next:** apply a one-slot restore to a backed-up User slot and confirm the
+  body survives a preset switch and a reboot.
+
+## 2026-11-17 — correction: op 71 stores the current sound
+
+- **Input:** `reverse/exports/podgo-preset-save.pcapng`, the single op-71
+  request at packet 11296 and the status at 11335.
+- **Result (`C`):** the save capture contains **one** command frame, op 71,
+  and no preset-body upload anywhere. The pedal answers
+  `{102: 1016, 103: 0, 104: nil}` and then pushes the save events
+  `{121: 3, 106: {107, 108, 116}}` and `{121: 8, 106: {107, 108, 109}}`.
+- **Interpretation:** op 71 commits the pedal's **own edit buffer** to the
+  slot. Parameters applied with op 30 are therefore persisted by a following
+  op 71; no body stream is needed. The earlier note that op 71 is
+  "metadata-only" described the *frame contents*, not the effect: the command
+  does store the current sound.
+- **Confidence:** `C` for the frame contents and the status/event sequence;
+  `H` for the claim that a parameter set with op 30 is included in the stored
+  preset, which follows from the pedal committing its edit buffer but has not
+  been checked by switching presets after a save from this build.
+- **Next:** save a changed parameter from this build, switch presets and reboot
+  to confirm the stored value survives.
+
+## 2026-11-17 — implementation: offline `.pgb` export
+
+- **Input:** the local full backup used above (not committed, not a fixture).
+- **Result (`C` for the container):** the directory has six 36-byte records
+  (`SLNM` stored, `GLOB`/`I000`/`UMDS`/`SL00`/`SL01` zlib), each with a zero
+  `reserved` word and a 4-byte zero trailer. Members are consecutive from
+  offset 48, and the header's `u64` at +8 points at `IDGP`.
+- **Writer:** `serializePgb` copies the 48-byte header, the `IDGP` header body,
+  the trailer and every untouched member's stored bytes verbatim. Only the
+  setlist containing the edited slot is serialized with
+  `JSON.stringify(doc, null, 1)` and recompressed with
+  `CompressionStream('deflate')`; the record offsets and the header pointer are
+  patched.
+- **Round trip (`C` on the local file):** import → export without edits gave
+  byte-identical `SLNM`, `GLOB`, `I000`, `UMDS` and `SL00`; the recompressed
+  `SL01` decompressed to a document that deep-equals the original. The header
+  differs only in the directory offset, as expected.
+- **Confidence:** `C` that the rebuilt container matches the observed layout
+  and preserves untouched members; **`H`** that POD Go Edit (or the pedal)
+  accepts a re-written backup, because no exported file has been opened by the
+  official tool yet.
+- **Limits:** the writer needs the original `IDGP` directory. A backup read
+  through the zlib-scan fallback cannot be rebuilt. The setlist entry keeps the
+  observed body shape (`device`, `device_version`, `meta {build_sha, name}`,
+  `tone`), so unknown fields inside `tone` survive but the richer `.pgp`
+  metadata envelope is not invented.
+- **Next:** open an exported `.pgb` in POD Go Edit, restore it to a pedal, and
+  confirm the edited slot and the untouched IR still load.

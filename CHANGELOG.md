@@ -6,7 +6,49 @@ semantic versioning once it reaches 1.0.
 
 ## [Unreleased]
 
+### Added
+- **Rebuild a `.pgb` backup offline.** After opening a preset from a `.pgb`
+  backup, **Export .pgb** writes a new `AF6L` container with that preset in its
+  original slot. The header, `IDGP` directory body, trailer and every untouched
+  member keep their exact bytes (impulse responses and `UMDS` included); only
+  the edited setlist is re-serialized and recompressed with
+  `CompressionStream('deflate')`, and the directory offsets are patched. The
+  offer disappears when another preset becomes the working copy, so the wrong
+  slot is never written. The writer layout is `ITM` until POD Go Edit opens an
+  exported backup.
+
+### Fixed
+- **Save now stores the preset on the pedal.** The Save button (and Ctrl+S)
+  applies the draft parameters with op 30 and then sends op 71 for the active
+  preset's own User slot, so a change survives a preset switch or a reboot
+  instead of reverting to the value stored on the pedal. The confirmation and
+  the notice say so; a Factory preset points at **Save to slot…** instead.
+- **Restore no longer fails with "the pedal did not acknowledge the restore
+  stream window".** The pedal acknowledges every USB packet, not a fixed
+  1536-byte window; the encoder now waits for a status after each frame and
+  advances the cursor by 17 per status, as `podgo-backup-restore.pcapng` shows.
+- **"Enable writing" stays checked when switching presets.** The session arm
+  switch is cleared only on disconnect or when a file/fixture is loaded; a
+  slot read still blocks writes until the active preset is read again.
+- **Right-click Copy works on a slot that is not open.** When nothing is in
+  memory and the pedal is connected, Copy reads the slot first; offline it now
+  says the pedal is needed instead of "open the slot first".
+- **Connecting loads the pedal.** Both setlists and the active preset are read
+  automatically, so the editor is usable without pressing Read first.
+
 ### Changed
+- **One connection button.** The header now shows a single **Connect** button
+  that becomes **Disconnect** while a pedal is open, instead of two buttons
+  that were alternately disabled.
+- **Unofficial-project disclaimer.** The README opens with a plain-language
+  disclaimer (not affiliated with Line 6 / Yamaha, not linked to POD Go Edit,
+  use at your own risk, keep a backup) and the web UI shows the same notice
+  under the editor plus a one-line "unofficial" subtitle in the header.
+- **CI quality gates.** `.github/workflows/ci.yml` now runs on every pull
+  request and every push to `dev`/`main`: Rust formatting, Clippy and offline
+  workspace tests, the WASM host tests, `tsc` and the production build, then
+  the Playwright suite (28 tests). Failed browser runs upload their traces.
+  GitHub Pages deployment remains a separate `main`-only workflow.
 - **Offline-first editor, draft edits and a compact UI.** The page now loads
   without a pedal: Factory names come from the bundled
   `factory_setlist_fw250.bin`, and User `01A` is seeded with a neutral
