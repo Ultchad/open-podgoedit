@@ -308,8 +308,8 @@ export default function App() {
   /** Sticky message under the header (no pedal, save unavailable, …). */
   const [saveNotice, setSaveNotice] = useState<Notice | null>(null);
   const [contextMenu, setContextMenu] = useState<{
-    kind?: number;
-    slot?: number;
+    kind: SetlistKind;
+    slot: number;
     x: number;
     y: number;
   } | null>(null);
@@ -2433,26 +2433,13 @@ export default function App() {
       },
       {
         id: 'menu-move',
-        label: 'Move preset…',
-        disabled: kind === 0,
-        onSelect: () => {
-          const dest = prompt('Move preset to slot (1-128):', String(slot + 1));
-          if (dest === null) {
-            return;
-          }
-          const target = Number(dest);
-          if (!Number.isInteger(target) || target < 1 || target > 128) {
-            setSaveNotice({
-              kind: 'error',
-              text: `“${dest.trim()}” is not a slot number between 1 and 128.`,
-            });
-            return;
-          }
-          if (target - 1 === slot) {
-            return;
-          }
-          moveSlot(slot, target - 1);
-        },
+        label: 'Move here',
+        disabled:
+          kind === 0 ||
+          !clipboard ||
+          !clipboardDoc ||
+          (clipboard.setlist === 1 && clipboard.slot === slot),
+        onSelect: () => pasteSlot(1, slot, 'move'),
       },
       'separator',
       {
@@ -3529,10 +3516,7 @@ export default function App() {
         <PresetMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          items={menuItems(
-            (contextMenu.kind ?? 0) as SetlistKind,
-            contextMenu.slot ?? 0,
-          )}
+          items={menuItems(contextMenu.kind, contextMenu.slot)}
           onClose={() => setContextMenu(null)}
         />
       )}

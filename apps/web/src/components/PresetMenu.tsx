@@ -22,7 +22,7 @@ interface Props {
   onClose: () => void;
 }
 
-export default function PresetMenu({ x, y, items, onClose}: Props) {
+export default function PresetMenu({ x, y, items, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
