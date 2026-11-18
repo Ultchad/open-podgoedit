@@ -8,7 +8,6 @@
 // Every slot has a right-click menu, and User presets can be dragged onto
 // another slot to move them in the local setlist.
 
-import { useState } from 'react';
 import { slotLabel } from '../catalog';
 import type { SetlistEntry } from '../types';
 
@@ -30,7 +29,7 @@ export interface PresetListProps {
   onSetlist: (kind: 0 | 1) => void;
   /** Open one slot (read from the pedal or open the local copy). */
   onOpenSlot: (kind: 0 | 1, entry: SetlistEntry) => void;
-  /** Right-click or long-press on a slot. */
+  /** Right-click on a slot. */
   onContextMenu: (
     kind: 0 | 1,
     entry: SetlistEntry,
@@ -114,7 +113,7 @@ export default function PresetList({
                 role="option"
                 data-slot={entry.slot}
                 aria-selected={loaded}
-                draggable={user && !empty}
+
                 className={[
                   'preset-item',
                   loaded ? 'is-loaded' : '',
@@ -125,31 +124,6 @@ export default function PresetList({
                   .filter(Boolean)
                   .join(' ')}
                 onClick={() => onOpenSlot(activeSetlist, entry)}
-                onTouchStart={(e) => {
-                  if (!empty) {
-                    const timer = window.setTimeout(() => {
-                      onContextMenu(
-                        activeSetlist,
-                        entry,
-                        e.touches[0].clientX,
-                        e.touches[0].clientY,
-                      );
-                    }, 500);
-                    setLongPressTimer(timer as unknown as number);
-                  }
-                }}
-                onTouchEnd={() => {
-                  if (longPressTimer) {
-                    window.clearTimeout(longPressTimer);
-                    setLongPressTimer(null);
-                  }
-                }}
-                onTouchCancel={() => {
-                  if (longPressTimer) {
-                    window.clearTimeout(longPressTimer);
-                    setLongPressTimer(null);
-                  }
-                }}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   onContextMenu(

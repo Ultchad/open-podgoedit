@@ -308,6 +308,12 @@ export default function App() {
   /** Sticky message under the header (no pedal, save unavailable, …). */
   const [saveNotice, setSaveNotice] = useState<Notice | null>(null);
   const [contextMenu, setContextMenu] = useState<{
+    kind?: number;
+    slot?: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [moveToSlot, setMoveToSlot] = useState<number | null>(null);
     kind: SetlistKind;
     slot: number;
     x: number;
@@ -2378,6 +2384,10 @@ export default function App() {
     setContextMenu({ kind, slot: entry.slot, x, y });
   }
 
+  function openMoveToMenu(kind: SetlistKind, slot: number, x: number, y: number): void {
+    setContextMenu({ kind, slot, x, y });
+  }
+
   function menuItems(kind: SetlistKind, slot: number): PresetMenuEntry[] {
     const name = slotName(kind, slot);
     const isWorking =
@@ -2433,13 +2443,20 @@ export default function App() {
       },
       {
         id: 'menu-move',
-        label: 'Move here',
-        disabled:
-          kind === 0 ||
-          !clipboard ||
-          !clipboardDoc ||
-          (clipboard.setlist === 1 && clipboard.slot === slot),
-        onSelect: () => pasteSlot(1, slot, 'move'),
+        label: 'Move preset…',
+        disabled: kind === 0,
+        onSelect: () => {
+          const dest = prompt(
+            `Move preset to slot (1-128):`,
+            String(slot + 1)
+          );
+          if (dest) {
+            const d = Number(dest);
+            if (d >= 1 && d <= 128) {
+              onMoveSlot(slot, d - 1);
+            }
+          }
+        },
       },
       'separator',
       {
