@@ -76,6 +76,12 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      # The browser bundle has no runtime npm advisories. The dev-only
+      # picomatch ReDoS has no patched release yet; see SECURITY.md.
+      - name: Audit runtime dependencies
+        working-directory: apps/web
+        run: npm run audit:runtime
+
       # `npm run build` runs prebuild → wasm + fixtures → tsc + vite.
       - name: Type-check and build
         working-directory: apps/web

@@ -747,6 +747,216 @@ export function toneToStructure(preset: EditPreset): PresetStructure {
   };
 }
 
+/**
+ * Rebuild an editable JSON document from a preset read over the pedal.
+ *
+ * A device read is an `l6-helix` MessagePack body, not a `.pgp` document, so
+ * this is a lossy rebuild: it materializes the fields the editor displays
+ * (models, parameter values, snapshots, switches and controllers). Unknown
+ * `l6-helix` fields cannot be recovered and are not invented. The result is an
+ * offline draft for model swaps and `.pgp` export; it is deliberately **not**
+ * a path to writing a preset body back to the pedal.
+ *
+ * Values are copied into the `L6Preset` v6 shape the rest of the offline
+ * editor already understands, so `toneToStructure` renders the same chain.
+ */
+export function structureToEditPreset(
+  structure: PresetStructure,
+  setlist: number | null = null,
+  slot: number | null = null,
+): EditPreset {
+  const bySlot = new Map(structure.chain.map((entry) => [entry.slot, entry]));
+  const valueAt = (
+    params: ChainParamValue[] | undefined,
+    index: number,
+    fallback: number,
+  ): number => {
+    const value = params?.[index];
+    return typeof value === 'number' ? value : fallback;
+  };
+
+  const dsp0: Record<string, unknown> = {};
+  const input = bySlot.get(0);
+  dsp0.input = {
+    '@input': 3,
+    '@model': 'P34_AppDSPFlowInput',
+    noiseGate: input?.kind === 'input' ? input.params[0] === true : true,
+    threshold: valueAt(
+      input?.kind === 'input' ? input.params : undefined,
+      1,
+      -48,
+    ),
+    decay: valueAt(
+      input?.kind === 'input' ? input.params : undefined,
+      2,
+      0.5,
+    ),
+  };
+
+  for (let index = 0; index < BLOCK_COUNT; index += 1) {
+    const entry = bySlot.get(index + 1);
+    if (!entry || (entry.kind !== 'block' && entry.kind !== 'looper')) {
+      dsp0[`block${index}`] = { '@position': index };
+      continue;
+    }
+    const model =
+      entry.modelId !== null ? MODEL_BY_ID.get(entry.modelId) : undefined;
+    const block: Record<string, unknown> = {
+      '@enabled': entry.enabled,
+      '@model': model?.name ?? `unknown_${entry.modelId}`,
+      '@no_snapshot_bypass':
+        entry.kind === 'block' ? entry.noSnapshotBypass : false,
+      '@position': index,
+      '@type':
+        model?.type ??
+        (model?.category === 'Amp' ? 1 : model?.category === 'Cab' ? 2 : 0),
+    };
+    model?.params.forEach((param, paramIndex) => {
+      const value = entry.params[paramIndex];
+      if (value !== null && value !== undefined) {
+        block[param.n] = value;
+      }
+    });
+    dsp0[`block${index}`] = block;
+  }
+
+  const output = structure.chain.find((entry) => entry.kind === 'output');
+  dsp0.output = {
+    '@model': 'P34_AppDSPFlowOutput',
+    '@output': 1,
+    gain: valueAt(
+      output?.kind === 'output' ? output.params : undefined,
+      1,
+      0,
+    ),
+    pan: valueAt(
+      output?.kind === 'output' ? output.params : undefined,
+      0,
+      0.5,
+    ),
+  };
+
+  const footswitch: Record<string, unknown> = {};
+  for (const assignment of structure.footswitches ?? []) {
+    footswitch[`block${assignment.block - 1}`] = {
+      '@fs_enabled': assignment.enabled,
+      '@fs_index': assignment.group + 1,
+      '@fs_label': assignment.label,
+    };
+  }
+
+  const controller: Record<string, unknown> = {};
+  for (const assignment of structure.controllers ?? []) {
+    const entry = bySlot.get(assignment.block + 1);
+    const model =
+      entry && (entry.kind === 'block' || entry.kind === 'looper') &&
+      entry.modelId !== null
+        ? MODEL_BY_ID.get(entry.modelId)
+        : null;
+    const param = model?.params[assignment.paramIndex];
+    if (!param) {
+      continue;
+    }
+    const block = (controller[`block${assignment.block}`] ??= {}) as Record<
+      string,
+      unknown
+    >;
+    block[param.n] = {
+      '@controller': assignment.controller,
+      '@min': assignment.min,
+      '@max': assignment.max,
+    };
+  }
+
+  const snapshots: Record<string, unknown> = {};
+  (structure.snapshots ?? []).forEach((snapshot, index) => {
+    const blocks: Record<string, boolean> = {};
+    (snapshot.blocks ?? []).forEach((value, blockIndex) => {
+      if (typeof value === 'boolean') {
+        blocks[`block${blockIndex}`] = value;
+      }
+    });
+    const values: Record<string, unknown> = {};
+    for (const stored of snapshot.controllers ?? []) {
+      const entry = bySlot.get(stored.block + 1);
+      const model =
+        entry && (entry.kind === 'block' || entry.kind === 'looper') &&
+        entry.modelId !== null
+          ? MODEL_BY_ID.get(entry.modelId)
+          : null;
+      const param = model?.params[stored.paramIndex];
+      if (!param) {
+        continue;
+      }
+      const block = (values[`block${stored.block}`] ??= {}) as Record<
+        string,
+        unknown
+      >;
+      block[param.n] = {
+        '@value': stored.value,
+        '@fs_enabled': stored.fsEnabled,
+      };
+    }
+    snapshots[`snapshot${index}`] = {
+      '@name': snapshot.name ?? '',
+      '@valid': snapshot.valid === true,
+      '@tempo': snapshot.tempo ?? structure.tempo ?? 120,
+      '@ledcolor': snapshot.ledColor ?? 0,
+      blocks: { dsp0: blocks },
+      controllers: { dsp0: values },
+    };
+  });
+
+  const name = structure.preset.name || 'POD Go preset';
+  const document: Record<string, unknown> = {
+    meta: { original: 0, pbn: 0, premium: 0 },
+    schema: 'L6Preset',
+    version: 6,
+    data: {
+      device: deviceNumber(structure.product),
+      device_version: firmwareNumber(structure.firmware),
+      meta: {
+        application: 'Open POD Go Edit',
+        build_sha: `device-read:${structure.product || 'POD Go'}:${
+          structure.firmware || 'unknown'
+        }`,
+        name,
+      },
+      tone: {
+        controller: { dsp0: controller },
+        dsp0,
+        footswitch: { dsp0: footswitch },
+        global: {
+          '@current_snapshot': structure.currentSnapshot ?? 0,
+          '@model': '@global_params',
+          '@pedalstate': 2,
+          '@tempo': structure.tempo ?? 120,
+        },
+        meta: { name },
+        ...snapshots,
+      },
+    },
+  };
+  return presetFromDocument(document, setlist, slot);
+}
+
+/** Extract the `0x…` product id from `productLabel`; default to a POD Go. */
+function deviceNumber(product: string): number {
+  const match = /0x([0-9a-f]+)/i.exec(product);
+  return match ? Number.parseInt(match[1], 16) : 0x210008;
+}
+
+/** Encode `2.50` as POD Go Edit's packed `0x02500000` firmware number. */
+function firmwareNumber(firmware: string): number {
+  const match = /^(\d+)\.(\d{2})$/.exec(firmware.trim());
+  if (!match) {
+    return 0x02500000;
+  }
+  const major = Number.parseInt(match[1], 10) & 0xff;
+  const minor = Number.parseInt(match[2], 16) & 0xff;
+  return ((major << 24) | (minor << 16)) >>> 0;
+}
+
 /** Number of non-empty slots in a setlist (for summaries). */
 export function presetCount(setlist: EditSetlist): number {
   return setlist.presets.filter((preset) => preset !== null).length;

@@ -7,6 +7,13 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Edit a pedal preset's amp or effect as an offline copy.** Model tiles are
+  now tappable on a preset read from the pedal. The first change asks to build
+  an editable copy from the decoded structure (the toolbar **Edit copy** button
+  does the same explicitly); the copy keeps the current chain and parameter
+  values, exports as `.pgp`, and is clearly marked as not writable back to the
+  pedal. This also fixes model taps doing nothing on touch browsers such as
+  Brave on Android.
 - **Selective backup and restore.** A `.pgbak` can now cover both setlists, one
   setlist, or an arbitrary set of slots (chosen in the backup dialog). On
   restore, the dialog lists every preset in the file with a checkbox; only the

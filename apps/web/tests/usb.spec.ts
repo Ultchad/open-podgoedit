@@ -1875,3 +1875,108 @@ test('copies a pedal slot from the right-click menu without opening it', async (
   await expect(page.locator('.report.log')).toContainText('Clipboard:');
   await expect(page.locator('.report.error')).toHaveCount(0);
 });
+
+test.describe('editing a connected preset on a phone viewport', () => {
+  test.use({
+    viewport: { width: 412, height: 915 },
+    hasTouch: true,
+    isMobile: true,
+  });
+
+  test('taps a block and loads a model into an editable copy', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        errors.push(message.text());
+      }
+    });
+    page.on('pageerror', (error) => errors.push(error.message));
+
+    const fixture = readFileSync(
+      new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+    ).toString('base64');
+    const preset = readFileSync(
+      new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+    ).toString('base64');
+    await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+    await page.goto('/');
+    await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+    await openDevTools(page);
+    await page.locator('#connect').click();
+    await expect(page.locator('.device-card .badge')).toHaveText(
+      /POD Go \(fake\)/,
+    );
+
+    // A tap on the chain selects the block, including on a touch viewport.
+    const amp = page
+      .locator('.block-tile')
+      .filter({ has: page.locator('.block-foot', { hasText: 'Amp' }) })
+      .first();
+    await amp.tap();
+    await expect(amp).toHaveClass(/is-selected/);
+
+    await page.getByRole('tab', { name: 'Models' }).tap();
+    const current = await page.locator('.inspector-model').textContent();
+    const tiles = page.locator('.model-tile.is-selectable:not(.is-blocked)');
+    await expect(tiles.first()).toBeVisible();
+    let target = tiles.first();
+    for (let index = 0; index < (await tiles.count()); index += 1) {
+      const tile = tiles.nth(index);
+      const name = await tile.locator('.model-name').textContent();
+      if (name !== current) {
+        target = tile;
+        break;
+      }
+    }
+    const chosen = await target.locator('.model-name').textContent();
+
+    let message = '';
+    page.once('dialog', (dialog) => {
+      message = dialog.message();
+      void dialog.accept();
+    });
+    await target.tap();
+
+    expect(message).toContain('editable copy');
+    await expect(page.locator('.editor-source')).toContainText('editable copy');
+    await expect(page.locator('.inspector-model')).toHaveText(chosen ?? '');
+    await expect(page.locator('#export-pgp')).toBeEnabled();
+    await expect(page.locator('#save-notice')).toContainText(
+      'editable offline copy',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  test('creates an editable copy with the toolbar button', async ({ page }) => {
+    const fixture = readFileSync(
+      new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+    ).toString('base64');
+    const preset = readFileSync(
+      new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+    ).toString('base64');
+    await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+    await page.goto('/');
+    await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+    await openDevTools(page);
+    await page.locator('#connect').click();
+    await expect(page.locator('.device-card .badge')).toHaveText(
+      /POD Go \(fake\)/,
+    );
+
+    // The pedal preset is read-only until the user asks for a copy.
+    await expect(page.locator('#export-pgp')).toBeDisabled();
+    await page.locator('#edit-copy').tap();
+    await expect(page.locator('.editor-source')).toContainText('editable copy');
+    await expect(page.locator('#export-pgp')).toBeEnabled();
+    await expect(page.locator('#save-notice')).toContainText(
+      'Editable offline copy created',
+    );
+    await expect(page.locator('.report.log')).toContainText(
+      'Created an editable copy',
+    );
+  });
+});
