@@ -7,6 +7,17 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Model changes on a connected pedal (operation 40, unvalidated).** On the
+  active preset read from the pedal, tapping a model now drafts the change on
+  the pedal instead of building an offline copy: the block shows the new model
+  and its catalog defaults, and **Save** sends operation 40 (load the model),
+  then the queued parameter drafts (op 30), then operation 71 to store the
+  preset. Renaming the model in a slot that already holds one and adding one to
+  an empty slot both use the same path. The request layout comes from the MIT
+  reference's annotated capture; there is no op-40 capture in this repository
+  and nothing has been validated on hardware, so a rejection is reported in the
+  log and leaves the draft queued. **Edit copy** still builds an editable
+  offline copy on demand.
 - **Edit a pedal preset's amp or effect as an offline copy.** Model tiles are
   now tappable on a preset read from the pedal. The first change asks to build
   an editable copy from the decoded structure (the toolbar **Edit copy** button

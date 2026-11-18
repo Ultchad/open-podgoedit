@@ -44,6 +44,43 @@ export function modelByName(name: string): CatalogModel | null {
   return BY_NAME.get(name) ?? null;
 }
 
+const WIRE_IDS = new Map<string, number>();
+for (const [key, model] of Object.entries(MODELS)) {
+  WIRE_IDS.set(model.name, Number(key));
+}
+
+/**
+ * On-wire id (`wire_id`, key 25 of the model node) of a catalog model.
+ *
+ * Returns `null` when the catalog has no numeric id for it, which would make a
+ * `set_model` write meaningless.
+ */
+export function wireIdOf(model: CatalogModel | null): number | null {
+  if (!model) {
+    return null;
+  }
+  const id = WIRE_IDS.get(model.name);
+  return id === undefined ? null : id;
+}
+
+/**
+ * Vendor default parameter values of a model, positionally.
+ *
+ * Mirrors what the pedal loads for a model: boolean knobs default to `false`,
+ * continuous knobs to their catalog minimum. Used when a model change is
+ * reflected locally before the pedal reports its own defaults.
+ */
+export function modelDefaultParams(model: CatalogModel): ChainParamValue[] {
+  const defaults = model.defaults ?? {};
+  return model.params.map((param) => {
+    const value = defaults[param.n];
+    if (typeof value === 'boolean' || typeof value === 'number') {
+      return value;
+    }
+    return param.k === 'bool' ? false : (param.min ?? 0);
+  });
+}
+
 /** Official category colours (POD Go Edit) plus the app fallbacks. */
 export const CATEGORY_COLORS: Readonly<Record<string, string>> =
   document.categories;

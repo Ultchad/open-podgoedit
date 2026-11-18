@@ -21,9 +21,9 @@
 //! write-channel commands between these frames.
 
 use podgo_protocol::write::{
-    decode_write_status, encode_save_preset, encode_set_param, validate_preset_name,
-    write_cursor_advance, WriteStatus, WRITE_FIRST_COMMAND_SEQ, WRITE_OPEN_2_CURSOR,
-    WRITE_SEQUENCE,
+    decode_write_status, encode_save_preset, encode_set_model, encode_set_param,
+    validate_preset_name, write_cursor_advance, WriteStatus, WRITE_FIRST_COMMAND_SEQ,
+    WRITE_OPEN_2_CURSOR, WRITE_SEQUENCE,
 };
 use wasm_bindgen::prelude::*;
 
@@ -48,6 +48,12 @@ enum Command {
         value: f32,
         transaction: u32,
     },
+    SetModel {
+        block: u32,
+        wire_id: u32,
+        no_snapshot_bypass: bool,
+        transaction: u32,
+    },
     SavePreset {
         setlist: u32,
         slot: u32,
@@ -66,6 +72,20 @@ impl Command {
                 transaction,
             } => encode_set_param(*block, *param, *value, u64::from(*transaction), seq, cursor)
                 .map_err(|err| err.to_string()),
+            Self::SetModel {
+                block,
+                wire_id,
+                no_snapshot_bypass,
+                transaction,
+            } => encode_set_model(
+                *block,
+                *wire_id,
+                *no_snapshot_bypass,
+                u64::from(*transaction),
+                seq,
+                cursor,
+            )
+            .map_err(|err| err.to_string()),
             Self::SavePreset {
                 setlist,
                 slot,
@@ -84,6 +104,14 @@ impl Command {
                 value,
                 transaction,
             } => format!("block={block} param={param} value={value:.4} transaction={transaction}"),
+            Self::SetModel {
+                block,
+                wire_id,
+                no_snapshot_bypass,
+                transaction,
+            } => format!(
+                "block={block} wire_id={wire_id} no_snapshot_bypass={no_snapshot_bypass} transaction={transaction}"
+            ),
             Self::SavePreset {
                 setlist,
                 slot,
@@ -250,6 +278,104 @@ impl ParamWriteFlow {
     ///
     /// The pedal routinely ignores the first handshake after a read session, so
     /// the driver resends the four packets instead of restarting the flow.
+    #[wasm_bindgen]
+    pub fn restart_handshake(&mut self) {
+        self.driver.restart_handshake();
+    }
+
+    /// Current phase: `handshake`, `command` or `done`.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn phase(&self) -> String {
+        self.driver.phase().to_owned()
+    }
+
+    /// Timeout the page should apply to the next read.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn timeout_ms(&self) -> u32 {
+        self.driver.timeout_ms()
+    }
+
+    /// Next frame to send, or `undefined` when the flow is finished.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn next_request(&self) -> Option<Vec<u8>> {
+        self.driver.next_request()
+    }
+
+    /// Consume one response for the last request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the flow is already finished or a response
+    /// arrives out of order.
+    #[wasm_bindgen]
+    pub fn accept_response(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.driver.accept_response(bytes)
+    }
+
+    /// True once the device answered with a status (or the flow failed).
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.driver.is_finished()
+    }
+
+    /// JSON result: `{"ok":true}` or `{"ok":false,"message":"…"}`.
+    ///
+    /// `undefined` until the flow is finished.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn result_json(&self) -> Option<String> {
+        self.driver.result_json()
+    }
+
+    /// Configuration used for diagnostics.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn describe(&self) -> String {
+        self.driver.describe()
+    }
+}
+
+/// One `set_model` command (operation 40), driven packet by packet.
+///
+/// The command loads a catalog model into one raw chain slot. The pedal builds
+/// the block with its own defaults; the page must read the active preset first
+/// and keep writes armed. The request layout comes from the MIT reference's
+/// annotated capture and is not hardware-validated in this repository.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ModelWriteFlow {
+    driver: WriteDriver,
+}
+
+#[wasm_bindgen]
+impl ModelWriteFlow {
+    /// Create a flow that loads `wire_id` into raw chain slot `block`.
+    ///
+    /// `block` is the raw chain index (input is `0`), like `set_param`.
+    /// `no_snapshot_bypass` mirrors the block's existing `l6-helix` flag.
+    /// `transaction` is the request id echoed by the device.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        block: u32,
+        wire_id: u32,
+        no_snapshot_bypass: bool,
+        transaction: u32,
+    ) -> Result<ModelWriteFlow, String> {
+        Ok(Self {
+            driver: WriteDriver::new(Command::SetModel {
+                block,
+                wire_id,
+                no_snapshot_bypass,
+                transaction,
+            }),
+        })
+    }
+
+    /// Replay the handshake from its first packet after a timeout.
     #[wasm_bindgen]
     pub fn restart_handshake(&mut self) {
         self.driver.restart_handshake();
@@ -488,6 +614,10 @@ mod tests {
         drive_handshake(&mut flow.driver);
     }
 
+    fn drive_model(flow: &mut ModelWriteFlow) {
+        drive_handshake(&mut flow.driver);
+    }
+
     fn drive_save(flow: &mut SavePresetFlow) {
         drive_handshake(&mut flow.driver);
     }
@@ -571,6 +701,38 @@ mod tests {
     fn nan_is_refused_before_any_frame() {
         let err = ParamWriteFlow::new(0, 0, f32::NAN, 1).unwrap_err();
         assert!(err.contains("not finite"), "{err}");
+    }
+
+    #[test]
+    fn model_command_carries_the_raw_block_and_nested_model_node() {
+        let mut flow = ModelWriteFlow::new(5, 433, false, 1013).unwrap();
+        drive_model(&mut flow);
+        assert_eq!(flow.phase(), "command");
+
+        let command = flow.next_request().unwrap();
+        let parsed = podgo_protocol::frame::Frame::parse(&command).unwrap();
+        let body = podgo_protocol::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(40));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(inner.get_u64(98).unwrap().as_u64(), Some(5));
+        let model = inner.get_u64(100).unwrap();
+        assert_eq!(model.get_u64(23).unwrap().as_bool(), Some(false));
+        assert_eq!(model.get_u64(25).unwrap().as_u64(), Some(433));
+        assert_eq!(model.get_u64(26).unwrap().as_i64(), Some(-1));
+        assert!(flow.describe().contains("wire_id=433"));
+    }
+
+    #[test]
+    fn model_reports_a_rejected_status() {
+        let mut flow = ModelWriteFlow::new(5, 433, false, 42).unwrap();
+        drive_model(&mut flow);
+        flow.accept_response(&framed_status(42, 255, Some(7)))
+            .unwrap();
+        assert!(flow.is_finished());
+        let result = flow.result_json().unwrap();
+        assert!(result.contains("\"ok\":false"), "{result}");
+        assert!(result.contains("status 255"), "{result}");
     }
 
     #[test]
