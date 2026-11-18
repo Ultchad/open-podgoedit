@@ -428,6 +428,13 @@ button:disabled:hover {
   border-top: 1px solid #232529;
 }
 
+/* Rule between bank groups (01A…01D | 02A…), mirroring the pedal's layout. */
+.preset-bank-divider {
+  height: 0;
+  margin: 0.3rem 0.55rem;
+  border-top: 1px solid #232529;
+}
+
 .preset-item {
   display: grid;
   grid-template-columns: auto 1fr;

@@ -32,6 +32,7 @@ import {
   modelById,
   modelDefaultParams,
   paramAt,
+  parseSlotLabel,
   slotLabel,
   wireIdOf,
 } from './catalog';
@@ -2438,15 +2439,24 @@ export default function App() {
         disabled: kind === 0,
         onSelect: () => {
           const dest = prompt(
-            `Move preset to slot (1-128):`,
-            String(slot + 1)
+            `Move preset to slot (e.g. ${slotLabel(slot)}, 01A…32D):`,
+            slotLabel(slot),
           );
-          if (dest) {
-            const d = Number(dest);
-            if (d >= 1 && d <= 128) {
-              moveSlot(slot, d - 1);
-            }
+          if (dest === null) {
+            return;
           }
+          const target = parseSlotLabel(dest);
+          if (target === null) {
+            setSaveNotice({
+              kind: 'error',
+              text: `“${dest.trim()}” is not a slot. Use a label such as 01A, 12C or 32D.`,
+            });
+            return;
+          }
+          if (target === slot) {
+            return;
+          }
+          moveSlot(slot, target);
         },
       },
       'separator',
@@ -3636,8 +3646,7 @@ function ModuleBadge({ module }: { module: ModuleState }) {
   if (module.status === 'error') {
     return <span className="badge error">WASM unavailable</span>;
   }
-  // return <span className="badge ready">WASM v{module.version}</span>;
-  return <span className="badge ready">WASM</span>;
+  return <span className="badge ready">WASM ready · v{module.version}</span>;
 }
 
 function DeviceBadge({
