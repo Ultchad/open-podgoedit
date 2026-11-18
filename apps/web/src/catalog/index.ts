@@ -449,33 +449,6 @@ export function slotLabel(slot: number): string {
   return `${bank.toString().padStart(2, '0')}${letter}`;
 }
 
-/**
- * Parse a POD Go slot label (`01A`, `01a`, `1A`, `01 A`, …) to a 0-based slot.
- *
- * Returns `null` when the text is not a valid bank letter and number. A plain
- * number (`3`) is also accepted as the 1-based slot, so both notations work.
- */
-export function parseSlotLabel(text: string): number | null {
-  const raw = text.trim().toUpperCase().replace(/\s+/g, '');
-  if (!raw) {
-    return null;
-  }
-  const numeric = /^\d+$/.test(raw) ? Number(raw) : null;
-  if (numeric !== null) {
-    return numeric >= 1 && numeric <= 128 ? numeric - 1 : null;
-  }
-  const match = raw.match(/^(\d{1,2})([A-D])$/);
-  if (!match) {
-    return null;
-  }
-  const bank = Number(match[1]);
-  const letter = 'ABCD'.indexOf(match[2]);
-  if (bank < 1 || bank > 32 || letter < 0) {
-    return null;
-  }
-  return (bank - 1) * 4 + letter;
-}
-
 /** Kind of block for badges. */
 export function paramKindLabel(kind: ParamKind): string {
   switch (kind) {
