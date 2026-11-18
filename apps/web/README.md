@@ -28,10 +28,14 @@ setlist depuis un POD Go branché en **WebUSB**.
   incompatibles sont grisés et l'onglet est désactivé pour Input/Output. Les
   blocs se réordonnent par glisser-déposer dans la chaîne (le déplacement
   emporte l'affectation footswitch et les snapshots). Sur un preset lu du
-  pédalier, le premier changement de modèle propose de créer une **copie hors
-  ligne éditable** (bouton **Edit copy**) : elle se modifie et s'exporte en
-  `.pgp`, mais l'écriture d'un modèle par le corps de chaîne (op 40) n'est pas
-  implémentée, donc elle ne repart pas vers le pédalier.
+  pédalier, un changement de modèle est un brouillon : le bloc affiche le
+  nouveau modèle et ses valeurs par défaut, puis **Save** envoie l'opération
+  40 (chargement du modèle), les brouillons de paramètres (op 30) et
+  l'opération 71 qui stocke le preset. L'écriture d'un modèle n'a pas été
+  validée sur matériel, surtout dans un emplacement vide : si le pédalier la
+  refuse, **Save** affiche l'erreur et le brouillon reste en attente. Le bouton
+  **Edit copy** crée toujours une copie hors ligne éditable, qui s'exporte en
+  `.pgp`.
 - **Repères visuels** : le nom d'un preset qui n'existe que dans le navigateur
   (copie hors ligne ou brouillon non exporté) est en italique, dans le titre et
   dans la liste, pour montrer qu'il n'est pas encore sur le pédalier.

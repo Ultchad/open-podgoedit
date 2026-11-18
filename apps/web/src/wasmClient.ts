@@ -61,6 +61,7 @@ export function subsetBackup(
 
 export {
   BackupBuilder,
+  ModelWriteFlow,
   ParamWriteFlow,
   PresetFlow,
   ReadFlow,

@@ -60,7 +60,7 @@ use crate::constants::{
 };
 use crate::error::ProtocolError;
 use crate::frame::{Frame, HEADER_LEN};
-use crate::notification::{OP_SAVE_PRESET, OP_SET_PARAM};
+use crate::notification::{OP_SAVE_PRESET, OP_SET_MODEL, OP_SET_PARAM};
 
 /// Write-channel handshake packet 1 (20 bytes).
 ///
@@ -144,6 +144,59 @@ pub fn encode_set_param(
                 (Value::uint(28), Value::uint(u64::from(param))),
                 // The device expects a 32-bit float (MessagePack `ca`).
                 (Value::uint(119), Value::F32(value)),
+            ]),
+        ),
+    ]);
+    let body_bytes = msgpack::encode(&body)?;
+    build_write_command(&body_bytes, seq, cursor)
+}
+
+/// Build a `set_model` write frame (operation 40).
+///
+/// Body: `{102: transaction, 100: 40, 101: {98: block, 100: {23:
+/// no_snapshot_bypass, 25: wire_id, 26: -1}}}`.
+///
+/// `block` is the **raw** chain index (input is 0), exactly like
+/// [`encode_set_param`]. `wire_id` is the catalog's on-wire model id. The pedal
+/// loads the model with its own defaults; parameter values are not part of the
+/// command.
+///
+/// # Evidence
+///
+/// The layout comes from the MIT reference's annotated
+/// `change-pedal-from-app.pcapng` (packet 35), not from a capture stored in
+/// this repository. It is therefore `ITM`: unit-tested offline, not yet
+/// validated on hardware. The model node mirrors the `l6-helix` key 24 body
+/// documented in `docs/protocol/presets.md`.
+///
+/// # Errors
+///
+/// Returns a MessagePack error when encoding fails, or
+/// [`ProtocolError::InvalidFrame`] when the body does not fit the header.
+pub fn encode_set_model(
+    block: u32,
+    wire_id: u32,
+    no_snapshot_bypass: bool,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    let body = Value::map(vec![
+        (Value::uint(102), Value::uint(transaction)),
+        (Value::uint(100), Value::uint(OP_SET_MODEL)),
+        (
+            Value::uint(101),
+            Value::map(vec![
+                (Value::uint(98), Value::uint(u64::from(block))),
+                (
+                    Value::uint(100),
+                    Value::map(vec![
+                        (Value::uint(23), Value::Bool(no_snapshot_bypass)),
+                        (Value::uint(25), Value::uint(u64::from(wire_id))),
+                        // The reference sends -1, not nil or 0.
+                        (Value::uint(26), Value::int(-1)),
+                    ]),
+                ),
             ]),
         ),
     ]);
@@ -532,6 +585,41 @@ mod tests {
     fn set_param_rejects_a_non_finite_value() {
         let err = encode_set_param(0, 0, f32::NAN, 1, 5, 0).unwrap_err();
         assert!(err.to_string().contains("not finite"), "{err}");
+    }
+
+    #[test]
+    fn set_model_frame_carries_the_raw_block_and_nested_model_node() {
+        // Layout from the MIT reference's `change-pedal-from-app.pcapng`
+        // packet 35 (op 40). No capture of this request is stored in the
+        // repository, so this is an offline structure test only.
+        let frame = encode_set_model(5, 433, false, 1013, 0x70, 0x203f).unwrap();
+        assert_eq!(&frame[4..8], &[0x80, 0x10, 0xed, 0x03]);
+        assert_eq!(frame[9], 0x70);
+        assert_eq!(frame[11], 0x04);
+        assert_eq!(&frame[12..16], &0x203fu32.to_le_bytes());
+        assert_eq!(&frame[16..20], &WRITE_SUBHEADER);
+
+        let parsed = Frame::parse(&frame).unwrap();
+        let body = crate::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        assert_eq!(value.get_u64(102).unwrap().as_u64(), Some(1013));
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(40));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(inner.get_u64(98).unwrap().as_u64(), Some(5));
+        let model = inner.get_u64(100).unwrap();
+        assert_eq!(model.get_u64(23).unwrap().as_bool(), Some(false));
+        assert_eq!(model.get_u64(25).unwrap().as_u64(), Some(433));
+        assert_eq!(model.get_u64(26).unwrap().as_i64(), Some(-1));
+    }
+
+    #[test]
+    fn set_model_can_flag_no_snapshot_bypass() {
+        let frame = encode_set_model(1, 7, true, 1, 5, 0).unwrap();
+        let parsed = Frame::parse(&frame).unwrap();
+        let body = crate::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        let model = value.get_u64(101).unwrap().get_u64(100).unwrap();
+        assert_eq!(model.get_u64(23).unwrap().as_bool(), Some(true));
     }
 
     #[test]

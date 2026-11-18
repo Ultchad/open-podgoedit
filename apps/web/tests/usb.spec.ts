@@ -1277,7 +1277,7 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   await page.keyboard.press('Control+s');
 
   await expect(page.locator('.report.log')).toContainText(
-    'Save: 1 change(s) applied in RAM',
+    'Save: 0 model(s) and 1 parameter(s) applied in RAM',
   );
   // The pedal ignored the first write handshake; the driver replayed it.
   await expect(page.locator('.report.log')).toContainText(
@@ -1285,7 +1285,7 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   );
   expect(dialogMessage).toContain('Tube Drive');
   await expect(page.locator('#save-notice')).toContainText(
-    '1 change(s) saved',
+    '0 model(s) and 1 parameter(s) saved',
   );
 
   // The accepted value is reflected immediately without re-reading the pedal.
@@ -1883,9 +1883,7 @@ test.describe('editing a connected preset on a phone viewport', () => {
     isMobile: true,
   });
 
-  test('taps a block and loads a model into an editable copy', async ({
-    page,
-  }) => {
+  test('drafts a model change and saves it with op 40', async ({ page }) => {
     const errors: string[] = [];
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -1893,6 +1891,13 @@ test.describe('editing a connected preset on a phone viewport', () => {
       }
     });
     page.on('pageerror', (error) => errors.push(error.message));
+    let dialogSeen = false;
+    const dialogMessages: string[] = [];
+    page.on('dialog', (dialog) => {
+      dialogSeen = true;
+      dialogMessages.push(dialog.message());
+      void dialog.accept();
+    });
 
     const fixture = readFileSync(
       new URL('../public/fixtures/user_setlist.bin', import.meta.url),
@@ -1909,14 +1914,20 @@ test.describe('editing a connected preset on a phone viewport', () => {
     await expect(page.locator('.device-card .badge')).toHaveText(
       /POD Go \(fake\)/,
     );
+    await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
+    await page.locator('#arm-writes').check();
 
-    // A tap on the chain selects the block, including on a touch viewport.
-    const amp = page
-      .locator('.block-tile')
-      .filter({ has: page.locator('.block-foot', { hasText: 'Amp' }) })
-      .first();
-    await amp.tap();
-    await expect(amp).toHaveClass(/is-selected/);
+    // Select the Amp block and note its processing index (raw chain = +1).
+    const ampIndex = await page.locator('.block-tile').evaluateAll((nodes) =>
+      nodes.findIndex((node) =>
+        node.querySelector('.block-foot')?.textContent?.includes('Amp'),
+      ),
+    );
+    expect(ampIndex).toBeGreaterThanOrEqual(0);
+    await page.locator('.block-tile').nth(ampIndex).tap();
+    await expect(
+      page.locator('.block-tile').nth(ampIndex),
+    ).toHaveClass(/is-selected/);
 
     await page.getByRole('tab', { name: 'Models' }).tap();
     const current = await page.locator('.inspector-model').textContent();
@@ -1931,22 +1942,73 @@ test.describe('editing a connected preset on a phone viewport', () => {
         break;
       }
     }
-    const chosen = await target.locator('.model-name').textContent();
+    const chosen = (await target.locator('.model-name').textContent()) ?? '';
+    const catalog = JSON.parse(
+      readFileSync(
+        new URL('../src/catalog/catalog.json', import.meta.url),
+        'utf8',
+      ),
+    ) as {
+      models: Record<string, { short: string; category: string | null }>;
+    };
+    let expectedWireId: number | null = null;
+    for (const [id, model] of Object.entries(catalog.models)) {
+      if (model.short === chosen && model.category === 'Amp') {
+        expectedWireId = Number(id);
+        break;
+      }
+    }
+    expect(expectedWireId).not.toBeNull();
 
-    let message = '';
-    page.once('dialog', (dialog) => {
-      message = dialog.message();
-      void dialog.accept();
-    });
+    // No confirmation and no offline copy: the change is a pedal draft.
     await target.tap();
-
-    expect(message).toContain('editable copy');
-    await expect(page.locator('.editor-source')).toContainText('editable copy');
-    await expect(page.locator('.inspector-model')).toHaveText(chosen ?? '');
-    await expect(page.locator('#export-pgp')).toBeEnabled();
-    await expect(page.locator('#save-notice')).toContainText(
-      'editable offline copy',
+    expect(dialogSeen).toBe(false);
+    await expect(page.locator('.editor-source')).not.toContainText(
+      'editable copy',
     );
+    await expect(page.locator('.inspector-model')).toHaveText(chosen);
+    await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+    await expect(page.locator('#export-pgp')).toBeDisabled();
+
+    const writesBefore = await page.evaluate(
+      () =>
+        (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ??
+        [],
+    );
+    expect(writesBefore).toHaveLength(0);
+
+    await page.locator('#save-preset').tap();
+    await expect(page.locator('.report.log')).toContainText(
+      'Save: 1 model(s) and 0 parameter(s) applied in RAM',
+    );
+    expect(dialogMessages.at(-1)).toContain('model');
+    await expect(page.locator('#save-notice')).toContainText(
+      '1 model(s) and 0 parameter(s) saved',
+    );
+
+    // Operation 40 carries the raw block and the nested model node; operation
+    // 71 then stores the preset. The layout follows the MIT reference capture.
+    const writes = await page.evaluate(
+      () =>
+        (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ??
+        [],
+    );
+    expect(writes).toHaveLength(2);
+    const modelBody = readMsgpack(new Uint8Array(writes[0]), 24).value as {
+      [key: number]: MsgValue;
+    };
+    expect(modelBody[100]).toBe(40);
+    const modelInner = modelBody[101] as { [key: number]: MsgValue };
+    expect(modelInner[98]).toBe(ampIndex + 1);
+    const node = modelInner[100] as { [key: number]: MsgValue };
+    expect(typeof node[23]).toBe('boolean');
+    expect(node[25]).toBe(expectedWireId);
+    expect(node[26]).toBe(-1);
+
+    const stored = readMsgpack(new Uint8Array(writes[1]), 24).value as {
+      [key: number]: MsgValue;
+    };
+    expect(stored[100]).toBe(71);
     expect(errors).toEqual([]);
   });
 
@@ -1978,5 +2040,75 @@ test.describe('editing a connected preset on a phone viewport', () => {
     await expect(page.locator('.report.log')).toContainText(
       'Created an editable copy',
     );
+  });
+
+  test('adds an effect to an empty slot and sends op 40 there', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        errors.push(message.text());
+      }
+    });
+    page.on('pageerror', (error) => errors.push(error.message));
+
+    const fixture = readFileSync(
+      new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+    ).toString('base64');
+    const preset = readFileSync(
+      new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+    ).toString('base64');
+    await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+    await page.goto('/');
+    await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+    await openDevTools(page);
+    await page.locator('#connect').click();
+    await expect(page.locator('.device-card .badge')).toHaveText(
+      /POD Go \(fake\)/,
+    );
+    await page.locator('#arm-writes').check();
+
+    // Pick an empty slot: the raw chain index is its processing index + 1.
+    const emptyIndex = await page.locator('.block-tile').evaluateAll((nodes) =>
+      nodes.findIndex((node) => node.classList.contains('is-empty')),
+    );
+    expect(emptyIndex).toBeGreaterThanOrEqual(0);
+    await page.locator('.block-tile').nth(emptyIndex).tap();
+    await expect(
+      page.locator('.block-tile').nth(emptyIndex),
+    ).toHaveClass(/is-selected/);
+
+    await page.getByRole('tab', { name: 'Models' }).tap();
+    const tile = page
+      .locator('.model-tile.is-selectable:not(.is-blocked)')
+      .first();
+    await expect(tile).toBeVisible();
+    await tile.tap();
+    await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+    // The slot shows the new model, not the empty-slot placeholder.
+    await expect(page.locator('.block-tile').nth(emptyIndex)).not.toHaveClass(
+      /is-empty/,
+    );
+
+    page.once('dialog', (dialog) => void dialog.accept());
+    await page.locator('#save-preset').tap();
+    await expect(page.locator('#save-notice')).toContainText(
+      '1 model(s) and 0 parameter(s) saved',
+    );
+    const writes = await page.evaluate(
+      () =>
+        (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ??
+        [],
+    );
+    expect(writes).toHaveLength(2);
+    const modelBody = readMsgpack(new Uint8Array(writes[0]), 24).value as {
+      [key: number]: MsgValue;
+    };
+    expect(modelBody[100]).toBe(40);
+    const inner = modelBody[101] as { [key: number]: MsgValue };
+    expect(inner[98]).toBe(emptyIndex + 1);
+    expect(errors).toEqual([]);
   });
 });

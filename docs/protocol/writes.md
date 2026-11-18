@@ -10,6 +10,9 @@ This page documents the writes this build performs:
   command carries only the destination and the name: the pedal commits its own
   edit buffer, so no body upload is needed. Implemented and unit-tested
   against the editor frame captured on 2026-11-13, see §2.5.
+- **`set_model` (operation 40)** — load a catalog model into one chain slot;
+  the pedal creates the block with its own defaults. Implemented from the MIT
+  reference's annotated capture, **not hardware-validated**, see §2.9.
 - **Full backup and restore (`.pgbak` + operation 5)** — read both setlists
   and every non-empty slot into a self-checking container, then stream the raw
   bodies back. The restore frame layout comes from
@@ -29,7 +32,7 @@ not independently reproduced).
 |---|---|---|
 | `set_param` (30), continuous effect parameter | Implemented, gated | Edits the active preset in RAM |
 | `set_param` on input/output/looper | Not implemented | Same op, but the raw chain index and parameter order are not verified for these stages |
-| `set_model` / model swap | Not implemented | Needs the chain blob round-trip |
+| `set_model` / model swap (40) | Implemented, gated | Adds or replaces the model in one slot; layout from the reference capture, **not hardware-validated** |
 | `save_preset` (71) | Implemented, gated | Stores the active preset (current sound) under a User slot; captured from the editor |
 | Whole-chain write (op 21) | **Not implemented** | High corruption risk, object-14 seal unresolved |
 | Preset copy/move between slots | Not implemented | Needs the chain blob write |
@@ -416,6 +419,47 @@ Limits, stated in the dialog:
   not change.
 - Neither write path is hardware-validated; both are `ITM`.
 
+### 2.9 `set_model` (operation 40)
+
+#### 2.9.1 Evidence
+
+This repository has **no capture of an op-40 request**. The layout comes from
+the MIT-licensed `openpodgo` reference, which annotates it from
+`change-pedal-from-app.pcapng` packet 35 and reports that the pedal loads the
+model with its defaults and then reports them on the event channel:
+
+```text
+{102: <transaction>, 100: 40, 101: {98: <raw block>,
+                                    100: {23: <no_snapshot_bypass>,
+                                          25: <wire_id>, 26: -1}}}
+```
+
+- `98` is the **raw** chain index in `DSP_CHAIN`, exactly like `set_param`
+  (input = 0), so processing slot `i` is `i + 1`.
+- `100` inside `101` is the model node, the same shape as the `l6-helix`
+  block model (`25` = on-wire id, `23` = `@no_snapshot_bypass`, `26` = `-1`).
+- The reference's capture used block 5 and wire id 433
+  (`HD2_DistDeezOneVintageMono`).
+
+Status: **`ITM`** — the encoder and its tests are offline only; no frame from
+this build has been sent to a pedal yet.
+
+#### 2.9.2 Interaction with op 30 and op 71
+
+Parameters are not part of op 40: the pedal creates the block with its own
+defaults. The page therefore:
+
+1. updates the in-memory chain (catalog defaults, existing bypass flags) as a
+   draft and drops the old model's parameter drafts and controller/snapshot
+   overrides for that slot;
+2. on Save, sends one op 40 per changed slot, then the queued op-30 parameter
+   drafts, then op 71 for the active User slot.
+
+An **empty slot** is the least proven case: op 40 is expected to create the
+block, but nothing here has seen it on hardware. If the pedal rejects it, Save
+reports the status and the draft stays queued. Structural writes that reorder
+the chain (op 21) are still not implemented.
+
 ## 3. Runtime gates (ADR-0007)
 
 A write is sent only when **all** of these hold:
@@ -459,6 +503,10 @@ pedal.
 - The op-30 *notification* (`{98, 119, …}` on the event channel) is captured
   (fw 2.50), which confirms that the pedal reports the same keys after a
   change.
+- `set_model` (op 40) has no capture in this repository. Its layout is the
+  reference's annotated frame only (`ITM`), and it is the youngest write path
+  here: neither a filled slot nor an empty one has been confirmed on
+  hardware.
 - `save_preset` is stronger: its frame is taken from an editor capture, and
   the destination, name and status/event sequence match byte for byte. It is
   not yet hardware-validated from this build.
@@ -484,8 +532,8 @@ pedal.
 
 | Layer | Test |
 |---|---|
-| Frame builders | `cargo test -p podgo-protocol --features device-write` (`set_param`, captured op-71, op-254 and op-5 golden/stream vectors, name validation) |
+| Frame builders | `cargo test -p podgo-protocol --features device-write` (`set_param`, captured op-71, op-254 and op-5 golden/stream vectors, name validation, op-40 structure) |
 | Container | `cargo test -p podgo-domain` (`backup::tests`: round trip, digests, duplicates, tamper, out-of-range entries) |
-| Flow state machine | `apps/web/wasm` `write::tests` (handshake, bare acks, status, rejection, save body) and `backup::tests` (builder round trip, tamper rejection, preamble, window status, cursor advance, timeout) |
-| Browser | `apps/web/tests/usb.spec.ts` → "writes one continuous effect parameter after arming", "saves the active preset after backing up the destination slot" and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-71 frames, serves both setlists, acknowledges every restore frame and records the completed op-5 messages) |
+| Flow state machine | `apps/web/wasm` `write::tests` (handshake, bare acks, status, rejection, save body, model body) and `backup::tests` (builder round trip, tamper rejection, preamble, window status, cursor advance, timeout) |
+| Browser | `apps/web/tests/usb.spec.ts` → "writes one continuous effect parameter after arming", "batch-saves parameter drafts with Ctrl+S after arming", "saves the active preset after backing up the destination slot", the phone-viewport "drafts a model change and saves it with op 40" / "adds an effect to an empty slot and sends op 40 there", and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-40/op-71 frames, serves both setlists, acknowledges every restore frame and records the completed op-5 messages) |
 | Hardware | Manual checklist in `docs/development/manual-testing-todo.md` (all writes; restore is still unvalidated) |
