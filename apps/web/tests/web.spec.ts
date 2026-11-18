@@ -175,8 +175,11 @@ test('right-click menu copies, pastes, renames and drags presets', async ({
   await page.locator('#menu-rename').click();
   await expect(items.nth(1)).toContainText('Lead Tone');
 
-  // Drag it to slot 3: slots swap, so 01C becomes "Lead Tone".
-  await items.nth(1).dragTo(items.nth(2));
+  // Move it to slot 3 from the context menu: slots swap, so 01C becomes
+  // "Lead Tone" and 01B becomes empty.
+  page.once('dialog', (dialog) => void dialog.accept('3'));
+  await items.nth(1).click({ button: 'right' });
+  await page.locator('#menu-move').click();
   await expect(items.nth(2)).toContainText('Lead Tone');
   await expect(items.nth(1)).toHaveClass(/is-empty/);
 
@@ -338,7 +341,12 @@ test('links to GitHub and edits snapshot bypass, values and LED colours', async 
   await secondDrive.fill('2');
   await secondDrive.press('Enter');
   await expect(page.locator('#param-value-0')).toHaveText('2.0');
-  await page.getByLabel('Snapshot LED colour').selectOption('8');
+  // The LED colour now lives in the snapshot right-click menu.
+  await chips.nth(1).click({ button: 'right' });
+  await page
+    .getByRole('menu', { name: 'Snapshot 2 actions' })
+    .getByRole('menuitemradio', { name: 'Blue' })
+    .click();
 
   const download = page.waitForEvent('download');
   await page.locator('#export-pgp').click();
