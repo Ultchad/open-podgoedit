@@ -29,7 +29,7 @@ export interface PresetListProps {
   onSetlist: (kind: 0 | 1) => void;
   /** Open one slot (read from the pedal or open the local copy). */
   onOpenSlot: (kind: 0 | 1, entry: SetlistEntry) => void;
-  /** Right-click or long-press on a slot. */
+  /** Right-click on a slot. */
   onContextMenu: (
     kind: 0 | 1,
     entry: SetlistEntry,
@@ -112,7 +112,7 @@ export default function PresetList({
                 role="option"
                 data-slot={entry.slot}
                 aria-selected={loaded}
-                draggable={user && !empty}
+
                 className={[
                   'preset-item',
                   loaded ? 'is-loaded' : '',
