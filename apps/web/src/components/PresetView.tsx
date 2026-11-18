@@ -12,10 +12,7 @@ import {
   slotLabel,
 } from '../catalog';
 import { MAX_SNAPSHOT_NAME_LENGTH } from '../presetName';
-import {
-  SNAPSHOT_LED_COLORS,
-  snapshotLedColor,
-} from '../snapshot';
+import { snapshotLedColor } from '../snapshot';
 import type { CatalogModel, PresetStructure, Selection } from '../types';
 import BlockInspector from './BlockInspector';
 import SignalChain from './SignalChain';
@@ -86,8 +83,6 @@ export default function PresetView({
   onExport,
   canExportBackup,
   onExportBackup,
-  canRename,
-  onRename,
 }: Props) {
   const processing = processingChain(structure.chain);
   const [selected, setSelected] = useState<Selection>(() =>
@@ -158,7 +153,6 @@ export default function PresetView({
       ? structure.currentSnapshot
       : 0;
   const activeSnapshot = structure.snapshots[snapshotIndex] ?? null;
-  const activeLed = snapshotLedColor(activeSnapshot?.ledColor ?? 0);
   const snapshotEditable = Boolean(
     onRenameSnapshot || onSelectSnapshot || onSetSnapshotLedColor,
   );
