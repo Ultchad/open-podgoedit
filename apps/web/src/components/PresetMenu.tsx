@@ -59,22 +59,6 @@ export default function PresetMenu({ x, y, items, onClose}: Props) {
       {items.map((item, index) =>
         item === 'separator' ? (
           <hr key={`sep-${index}`} />
-        ) : item.id === 'preset-menu-move' ? (
-          <button
-            key="move-to"
-            type="button"
-            role="menuitem"
-            className=""
-            disabled={!onMove}
-            title="Choose destination slot to move this preset"
-            onClick={() => {
-              onClose();
-              onMove?.(item.slot ?? -1);
-            }}
-          >
-            <span>{item.label}</span>
-            {item.hint && <small>{item.hint}</small>}
-          </button>
         ) : (
           <button
             key={item.id}

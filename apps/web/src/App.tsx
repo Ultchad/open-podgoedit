@@ -2444,7 +2444,7 @@ export default function App() {
           if (dest) {
             const d = Number(dest);
             if (d >= 1 && d <= 128) {
-              onMoveSlot(slot, d - 1);
+              moveSlot(slot, d - 1);
             }
           }
         },
@@ -3524,7 +3524,7 @@ export default function App() {
         <PresetMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          items={menuItems(contextMenu.kind, contextMenu.slot)}
+          items={menuItems((contextMenu.kind ?? 0) as SetlistKind, contextMenu.slot ?? 0)}
           onClose={() => setContextMenu(null)}
         />
       )}

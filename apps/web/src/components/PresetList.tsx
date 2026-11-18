@@ -56,7 +56,6 @@ export default function PresetList({
 }: PresetListProps) {
   const entries = setlists[activeSetlist];
   const user = activeSetlist === 1;
-  const [longPressTimer, setLongPressTimer] = useState<number | null>(null);
 
   return (
     <aside className="librarian" aria-label="Preset librarian">
