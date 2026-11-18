@@ -254,7 +254,7 @@ export default function PresetView({
             {dirty
               ? 'unsaved changes'
               : offline
-                ? 'offline preset'
+                ? 'offline'
                 : editable
                   ? 'draft'
                   : 'read-only'}
@@ -348,7 +348,7 @@ export default function PresetView({
               </button>
             );
           })}
-          {onSetSnapshotLedColor && (
+          {/* {onSetSnapshotLedColor && (
             <button
               type="button"
               className="snapshot-led-picker"
@@ -377,7 +377,7 @@ export default function PresetView({
               />
               <span>LED colour</span>
             </button>
-          )}
+          )} */}
         </div>
 
         <div className="toolbar-right">
@@ -396,7 +396,7 @@ export default function PresetView({
               Edit copy
             </button>
           )}
-          <button
+          {/* <button
             id="rename-preset"
             type="button"
             className="toolbar-button"
@@ -409,7 +409,7 @@ export default function PresetView({
             onClick={onRename}
           >
             Rename…
-          </button>
+          </button> */}
           <button
             id="export-pgp"
             type="button"
@@ -422,7 +422,7 @@ export default function PresetView({
             }
             onClick={onExport}
           >
-            Export .pgp
+            Export
           </button>
           {canExportBackup && (
             <button

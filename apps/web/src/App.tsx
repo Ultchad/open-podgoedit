@@ -3146,9 +3146,12 @@ export default function App() {
     <main className="app">
       <header className="app-bar">
         <div className="brand">
-          <h1>
-            POD Go <span>Editor</span>
-          </h1>
+          <div className="brand-title">
+            <h1>
+              POD Go <span>Editor</span>
+            </h1>
+            <ModuleBadge module={module} />
+          </div>
           <p className="subtitle">
             Unofficial preset editor — Rust core in WebAssembly. Works offline;
             connect a pedal for live reads and writes.
@@ -3245,8 +3248,7 @@ export default function App() {
           >
             Import…
           </button>
-
-          <ModuleBadge module={module} />
+          
           <a
             className="github-link"
             href="https://github.com/Ultchad/open-podgoedit"
@@ -3634,7 +3636,8 @@ function ModuleBadge({ module }: { module: ModuleState }) {
   if (module.status === 'error') {
     return <span className="badge error">WASM unavailable</span>;
   }
-  return <span className="badge ready">WASM ready · v{module.version}</span>;
+  // return <span className="badge ready">WASM v{module.version}</span>;
+  return <span className="badge ready">WASM</span>;
 }
 
 function DeviceBadge({
