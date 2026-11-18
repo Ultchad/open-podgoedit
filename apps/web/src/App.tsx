@@ -65,6 +65,7 @@ import {
   setImportedSnapshotName,
   setImportedSnapshotParam,
   SNAPSHOT_CONTROLLER,
+  structureToEditPreset,
   toneToStructure,
   type EditBackup,
   type EditPreset,
@@ -1452,14 +1453,6 @@ export default function App() {
   }
 
   /**
-   * Load a catalog model into the selected block of an offline preset.
-   *
-   * This is a JSON edit: it replaces the block object with the model's vendor
-   * defaults and rebuilds the view, so it shows up immediately and exports in
-   * `.pgp`. Pedal presets stay read-only here: writing a model needs the
-   * chain-body path (op 40), which this build does not ship.
-   */
-  /**
    * Categories already used by the other blocks. Amp, Cab, Vol, Wah,
    * Send/Return and Looper are single-role blocks, so a second one is
    * refused before anything is written.
@@ -1481,22 +1474,96 @@ export default function App() {
     return used;
   }
 
-  function changeModel(index: number | null, model: CatalogModel): void {
-    if (index === null) {
-      return;
+  /**
+   * Turn the preset read from the pedal into an editable offline copy.
+   *
+   * A device body is not a `.pgp` document, so this rebuilds one from the
+   * structure the editor already shows. The copy stays in the browser: it can
+   * be edited and exported as `.pgp`, but this build cannot write a preset
+   * body back to the pedal. The user is asked to confirm only when a model tap
+   * triggers the conversion implicitly.
+   */
+  function createEditableCopy(options?: {
+    confirm?: boolean;
+  }): { doc: EditPreset; slot: number } | null {
+    if (!structure) {
+      return null;
     }
-    if (!workingDoc) {
-      setSaveNotice({
-        kind: 'error',
-        text:
-          'Changing a model writes the preset body. Open an offline preset ' +
-          '(or import a .pgp) to change it here; writing a model to the pedal ' +
-          'is not implemented.',
-      });
+    if (workingDoc) {
+      return {
+        doc: workingDoc,
+        slot: workingSlot?.slot ?? structure.preset.slot ?? 0,
+      };
+    }
+    if (
+      options?.confirm &&
+      !window.confirm(
+        'Change the amp or effect on an editable copy?\n\n' +
+          'A preset body read from the pedal is read-only in this build. ' +
+          'The copy stays in the browser: you can edit it and export a .pgp, ' +
+          'but it cannot be written back to the pedal.\n\n' +
+          'Continue?',
+      )
+    ) {
+      return null;
+    }
+
+    const sourceSlot =
+      structure.preset.setlist === 1 ? structure.preset.slot : null;
+    const slotIsFree = (slot: number) =>
+      !(localKey(1, slot) in localDocs) &&
+      !setlists[1]?.find((entry) => entry.slot === slot)?.name;
+    const slot =
+      sourceSlot !== null &&
+      !dirtySlots[localKey(1, sourceSlot)] &&
+      !localDocs[localKey(1, sourceSlot)]
+        ? sourceSlot
+        : ((setlists[1] ?? []).find((entry) => slotIsFree(entry.slot))
+            ?.slot ?? sourceSlot ?? 0);
+    const doc = structureToEditPreset(structure, 1, slot);
+    setWorkingDoc(doc);
+    setWorkingSlot({ setlist: 1, slot });
+    setActiveSetlist(1);
+    setLoaded({ setlist: 1, slot });
+    setPresetSource(`${SETLIST_LABELS[1]} ${slotLabel(slot)} · editable copy`);
+    setLocalDocs((current) => ({
+      ...current,
+      [localKey(1, slot)]: clonePreset(doc),
+    }));
+    markSlotDirty(localKey(1, slot));
+    setDirty(true);
+    setActivePresetLoaded(false);
+    setPendingParams({});
+    setSaveNotice({
+      kind: 'info',
+      text:
+        'Editable offline copy created. Model and parameter changes stay in ' +
+        'the browser and export as .pgp; this build cannot write a preset ' +
+        'body back to the pedal.',
+    });
+    appendLog(
+      `Created an editable copy of "${doc.name || 'unnamed'}" at User ` +
+        `${slotLabel(slot)} (offline draft, not written to the pedal).`,
+    );
+    return { doc, slot };
+  }
+
+  /**
+   * Load a catalog model into the selected block.
+   *
+   * Offline drafts are edited directly. A preset read from the pedal has no
+   * JSON document, so the first model change asks to rebuild one as an
+   * editable copy (see `createEditableCopy`). The update is a JSON edit:
+   * vendor defaults replace the block object and the view is rebuilt, so it
+   * shows immediately and exports in `.pgp`. Writing a model to the pedal
+   * still needs the chain-body path (op 40), which this build does not ship.
+   */
+  function changeModel(index: number | null, model: CatalogModel): void {
+    if (index === null || !structure) {
       return;
     }
     const block = index;
-    const entry = structure?.chain.find((item) => item.slot === block + 1);
+    const entry = structure.chain.find((item) => item.slot === block + 1);
     const current =
       entry && (entry.kind === 'block' || entry.kind === 'looper')
         ? modelById(entry.modelId)
@@ -1508,12 +1575,21 @@ export default function App() {
       });
       return;
     }
-    setImportedModel(workingDoc, block, model);
-    const next = { ...workingDoc };
+    const created = workingDoc ? null : createEditableCopy({ confirm: true });
+    if (!workingDoc && !created) {
+      return;
+    }
+    const doc = created?.doc ?? workingDoc;
+    if (!doc) {
+      return;
+    }
+    setImportedModel(doc, block, model);
+    const next = { ...doc };
     setWorkingDoc(next);
     setStructure(toneToStructure(next));
-    if (workingSlot) {
-      const key = localKey(workingSlot.setlist, workingSlot.slot);
+    const slot = created?.slot ?? workingSlot?.slot ?? null;
+    if (slot !== null) {
+      const key = localKey(1, slot);
       setLocalDocs((currentDocs) => ({
         ...currentDocs,
         [key]: clonePreset(next),
@@ -1522,7 +1598,17 @@ export default function App() {
     } else {
       setDirty(true);
     }
-    setSaveNotice(null);
+    setSaveNotice(
+      created
+        ? {
+            kind: 'info',
+            text:
+              `${model.display} loaded on the editable offline copy. ` +
+              'Export .pgp to keep it; this build cannot write a preset body ' +
+              'back to the pedal.',
+          }
+        : null,
+    );
     appendLog(
       `Draft: block ${block + 1} → ${model.display} (${model.name}), ` +
         'vendor defaults, not written to the pedal.',
@@ -3054,7 +3140,10 @@ export default function App() {
               editable={editable}
               editHint={editHint}
               onEditParam={editWorkingParam}
-              onSelectModel={workingDoc ? changeModel : undefined}
+              onSelectModel={changeModel}
+              onEditCopy={
+                workingDoc ? undefined : () => createEditableCopy()
+              }
               onMoveBlock={workingDoc ? moveBlock : undefined}
               onSelectSnapshot={workingDoc ? selectSnapshot : undefined}
               onRenameSnapshot={workingDoc ? renameSnapshot : undefined}

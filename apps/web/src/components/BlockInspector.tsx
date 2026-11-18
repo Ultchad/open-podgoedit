@@ -54,7 +54,7 @@ interface Props {
   /** Short explanation above the parameter list (`null` = no hint). */
   editHint: string | null;
   onEditParam: (block: number, paramIndex: number, value: number) => void;
-  /** Load a model into the selected block; absent when this preset is read-only. */
+  /** Load a model into the selected block (may build an editable copy). */
   onSelectModel?: (model: CatalogModel) => void;
   /** Categories already used by the other blocks (single-role models). */
   usedModelCategories: ReadonlySet<string>;
@@ -568,8 +568,8 @@ function ModelBrowser({
 
       <p className="model-hint">
         {onSelect
-          ? `${models.length} models · click one to load it into the selected block (draft, exported with .pgp)`
-          : `${models.length} models · changing a model needs an offline preset; pedal model writes are not implemented.`}
+          ? `${models.length} models · click one to load it into the selected block (offline draft; exports as .pgp)`
+          : `${models.length} models · changing a model needs an editable preset.`}
       </p>
 
       <div className="model-grid">

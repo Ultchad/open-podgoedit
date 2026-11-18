@@ -44,4 +44,20 @@ for the full model, including known residual risks.
 
 - `cargo-audit` runs in CI for known advisories.
 - `cargo-deny` enforces license allow-lists and bans duplicate/unknown sources.
+- `npm audit --omit=dev` runs in CI for the browser bundle.
 - New dependencies need a justification in the pull request.
+
+### npm advisory CVE-2026-112366 (picomatch)
+
+As of 2026-11-18, `npm audit` in `apps/web` reports five high-severity entries
+from one advisory: picomatch's ReDoS through single-branch repeated extglobs
+(`<= 4.0.7`, no patched release). It reaches the project through Vite's
+development/build toolchain (`vite → tinyglobby/fdir → picomatch`).
+
+- picomatch is **not** in the browser bundle and never processes input at
+  runtime; the app ships no server-side glob matching.
+- The exposure is limited to local build tooling with attacker-controlled glob
+  patterns, which this repository does not use.
+- `npm run audit:runtime` is clean and gates CI; the dev-only advisory is
+  tracked until an upstream release exists. Do not force a Vite downgrade to
+  silence it.
