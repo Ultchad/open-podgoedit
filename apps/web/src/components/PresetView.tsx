@@ -34,8 +34,10 @@ interface Props {
   /** Hint shown above the parameter controls. */
   editHint: string | null;
   onEditParam: (block: number, paramIndex: number, value: number) => void;
-  /** Load a model into the selected block; absent for read-only presets. */
+  /** Load a model into the selected block (may build an editable copy). */
   onSelectModel?: (index: number | null, model: CatalogModel) => void;
+  /** Create an editable offline copy of a pedal-read preset. */
+  onEditCopy?: () => void;
   /** Reorder blocks by drag and drop; absent for read-only presets. */
   onMoveBlock?: (from: number, to: number) => void;
   /** Select one snapshot in an offline draft. */
@@ -73,6 +75,7 @@ export default function PresetView({
   editHint,
   onEditParam,
   onSelectModel,
+  onEditCopy,
   onMoveBlock,
   onSelectSnapshot,
   onRenameSnapshot,
@@ -357,6 +360,18 @@ export default function PresetView({
           <span className="tempo" title="Preset tempo">
             ♩ {structure.tempo !== null ? formatTempo(structure.tempo) : '—'}
           </span>
+          {onEditCopy && (
+            <button
+              id="edit-copy"
+              type="button"
+              className="toolbar-button"
+              disabled={busy}
+              title="Create an editable offline copy of this pedal preset (exports as .pgp, not written back to the pedal)"
+              onClick={onEditCopy}
+            >
+              Edit copy
+            </button>
+          )}
           <button
             id="rename-preset"
             type="button"

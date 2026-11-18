@@ -28,8 +28,14 @@ setlist depuis un POD Go branché en **WebUSB**.
   incompatibles sont grisés et l'onglet est désactivé pour Input/Output. Les
   blocs se réordonnent par glisser-déposer dans la chaîne (le déplacement
   emporte l'affectation footswitch et les snapshots). Sur un preset lu du
-  pédalier, l'onglet reste en lecture seule : l'écriture d'un modèle par le
-  corps de chaîne (op 40) n'est pas implémentée.
+  pédalier, un changement de modèle est un brouillon : le bloc affiche le
+  nouveau modèle et ses valeurs par défaut, puis **Save** envoie l'opération
+  40 (chargement du modèle), les brouillons de paramètres (op 30) et
+  l'opération 71 qui stocke le preset. L'écriture d'un modèle n'a pas été
+  validée sur matériel, surtout dans un emplacement vide : si le pédalier la
+  refuse, **Save** affiche l'erreur et le brouillon reste en attente. Le bouton
+  **Edit copy** crée toujours une copie hors ligne éditable, qui s'exporte en
+  `.pgp`.
 - **Repères visuels** : le nom d'un preset qui n'existe que dans le navigateur
   (copie hors ligne ou brouillon non exporté) est en italique, dans le titre et
   dans la liste, pour montrer qu'il n'est pas encore sur le pédalier.
@@ -82,8 +88,8 @@ setlist depuis un POD Go branché en **WebUSB**.
   octets exacts et seule la setlist éditée est recompressée.
 - **Hors ligne** : aucune requête sortante après l'installation. Les fichiers
   restent dans le navigateur.
-- **Pas encore l'application finale** : pas de changement de modèle, pas de
-  stockage persistant, pas d'export `.hlx`.
+- **Pas encore l'application finale** : pas de stockage persistant, pas
+  d'export `.hlx`.
 - **Validation matérielle** : le flux WebUSB est couvert par un appareil
   simulé (`ITM`) et par une lecture User réelle sur un **POD Go Wireless**,
   firmware **2.50 (build `6e984472`)** — `ITH` pour la lecture Web Chromium
@@ -339,8 +345,9 @@ transporter les octets ; il ne réimplémente ni les offsets ni le MessagePack.
 
 ## Limitations
 
-- Lecture seule sur le pédalier : pas d'écriture de chaîne, pas de
-  remplacement de modèle.
+- Lecture seule sur le pédalier : pas d'écriture de chaîne ni de
+  remplacement de modèle sur l'appareil. Un modèle changé devient un
+  brouillon local exportable en `.pgp`.
 - Import `.pgp`/`.pgb` et export `.pgp`/`.pgb` hors ligne uniquement ; pas
   d'export `.hlx`, et un preset importé ne peut pas être envoyé au pédalier.
 - Pas de stockage persistant (IndexedDB).

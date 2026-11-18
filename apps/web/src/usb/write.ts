@@ -9,7 +9,7 @@
 // `set_param` edits the preset in RAM; `save_preset` writes its metadata
 // (setlist, slot and name) to the pedal's User list.
 
-import { ParamWriteFlow, SavePresetFlow } from '../wasmClient';
+import { ModelWriteFlow, ParamWriteFlow, SavePresetFlow } from '../wasmClient';
 import { PodgoUsbError, type PodgoUsbConnection } from './podgoUsb';
 
 /** The pedal often ignores the first write handshake after a read. */
@@ -40,6 +40,16 @@ export interface SavePresetRequest {
   slot: number;
   /** Visible name, 1..=16 printable ASCII bytes. */
   name: string;
+}
+
+/** One `set_model` request: raw chain index plus the catalog's on-wire id. */
+export interface ModelWriteRequest {
+  /** Raw chain index (input is 0), as stored in key 98. */
+  block: number;
+  /** Catalog on-wire model id, stored in key 25. */
+  wireId: number;
+  /** Existing block flag, stored in key 23. */
+  noSnapshotBypass: boolean;
 }
 
 export interface WriteResult {
@@ -221,6 +231,33 @@ export async function writeParam(
       }
     },
     'Écriture',
+    onProgress,
+  );
+}
+
+/**
+ * Send one `set_model` command over the write channel.
+ *
+ * The pedal loads the model with its own defaults and reports them on the
+ * event channel. The layout comes from the MIT reference's annotated capture
+ * (`change-pedal-from-app.pcapng`, packet 35) and is not yet validated on
+ * hardware in this repository.
+ */
+export async function writeModel(
+  device: PodgoUsbConnection,
+  request: ModelWriteRequest,
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () =>
+      new ModelWriteFlow(
+        request.block,
+        request.wireId,
+        request.noSnapshotBypass,
+        (transactionCounter += 1),
+      ),
+    'Changement de modèle',
     onProgress,
   );
 }

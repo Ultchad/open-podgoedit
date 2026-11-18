@@ -53,6 +53,13 @@ pub const OP_SET_PARAM: u64 = 30;
 /// Captured as an editor request (not an event) in
 /// `reverse/exports/podgo-preset-save.pcapng`; see `docs/protocol/writes.md`.
 pub const OP_SAVE_PRESET: u64 = 71;
+/// Write command: load a model into one chain slot `{98, 100: {23, 25, 26}}`.
+///
+/// Same value as [`OP_MODEL_CHANGED`], which is the event the pedal emits after
+/// the change. The request layout comes from the MIT reference's annotated
+/// capture (`change-pedal-from-app.pcapng` packet 35); it is not present in
+/// this repository's own captures and has not been validated on hardware here.
+pub const OP_SET_MODEL: u64 = 40;
 /// Event opcode: footswitch assignment added `{98: block, 70: footswitch, 79}`.
 pub const OP_FOOTSWITCH_ASSIGN: u64 = 31;
 /// Event opcode: footswitch assignment removed `{98: block, 70: footswitch}`.

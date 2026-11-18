@@ -20,7 +20,7 @@ import { readSetlist, type SetlistKind } from './usb/setlist';
 import { createFullBackup, createSelectedBackup } from './usb/backup';
 import type { BackupTarget } from './usb/backup';
 import { restoreFullBackup } from './usb/restore';
-import { savePreset, writeParam } from './usb/write';
+import { savePreset, writeModel, writeParam } from './usb/write';
 import type {
   BackupVerify,
   CatalogModel,
@@ -30,8 +30,10 @@ import type {
 import {
   canSwapModel,
   modelById,
+  modelDefaultParams,
   paramAt,
   slotLabel,
+  wireIdOf,
 } from './catalog';
 import PresetList from './components/PresetList';
 import PresetView from './components/PresetView';
@@ -65,6 +67,7 @@ import {
   setImportedSnapshotName,
   setImportedSnapshotParam,
   SNAPSHOT_CONTROLLER,
+  structureToEditPreset,
   toneToStructure,
   type EditBackup,
   type EditPreset,
@@ -136,6 +139,14 @@ interface PendingParam {
   block: number;
   param: number;
   value: number;
+  label: string;
+}
+
+/** A model swap drafted on the pedal's active preset, applied by Save (op 40). */
+interface PendingModel {
+  block: number;
+  modelId: number;
+  noSnapshotBypass: boolean;
   label: string;
 }
 
@@ -290,6 +301,10 @@ export default function App() {
   const [pendingParams, setPendingParams] = useState<
     Record<string, PendingParam>
   >({});
+  /** Model swaps for the active pedal preset, applied by Save (op 40). */
+  const [pendingModels, setPendingModels] = useState<
+    Record<string, PendingModel>
+  >({});
   /** Sticky message under the header (no pedal, save unavailable, …). */
   const [saveNotice, setSaveNotice] = useState<Notice | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -351,6 +366,7 @@ export default function App() {
           setWorkingSlot(null);
           setDirty(false);
           setPendingParams({});
+          setPendingModels({});
           setLoaded(null);
           // A file or fixture is not the pedal's active preset: writes would
           // target a different sound, so disarm until the device is re-read.
@@ -650,6 +666,7 @@ export default function App() {
         setWorkingSlot(null);
         setDirty(false);
         setPendingParams({});
+        setPendingModels({});
         setSaveNotice(null);
       }
       setUsbBusy(null);
@@ -681,6 +698,7 @@ export default function App() {
     setWorkingSlot(null);
     setDirty(false);
     setPendingParams({});
+    setPendingModels({});
     setSaveNotice(null);
     setPanels((current) => ({
       ...current,
@@ -788,10 +806,14 @@ export default function App() {
    * Save the working copy to the pedal.
    *
    * Offline this is deliberately an error: the export path is the supported
-   * way to keep a preset without a pedal. On the pedal, drafts are applied as
-   * one batch with operation 30, then operation 71 stores the active preset
-   * (parameters included) in its User slot, so the change survives a preset
-   * switch or a reboot. One confirmation covers the whole save.
+   * way to keep a preset without a pedal. On the pedal, queued model swaps
+   * (operation 40) and parameter drafts (operation 30) are applied first, then
+   * operation 71 stores the active preset (parameters included) in its User
+   * slot, so the change survives a preset switch or a reboot. One confirmation
+   * covers the whole save.
+   *
+   * Model writes come from the MIT reference's annotated capture and are not
+   * yet validated on hardware here.
    */
   async function saveWorkingPreset() {
     const connection = connectionRef.current;
@@ -835,6 +857,8 @@ export default function App() {
       return;
     }
     const entries = Object.entries(pendingParams);
+    const models = Object.entries(pendingModels);
+    const changeCount = entries.length + models.length;
     if (writing || busy) {
       return;
     }
@@ -860,23 +884,25 @@ export default function App() {
       });
       return;
     }
-    if (entries.length === 0) {
+    if (changeCount === 0) {
       setSaveNotice({ kind: 'info', text: 'No changes to save.' });
       return;
     }
 
-    const lines = entries
-      .slice(0, 8)
-      .map(([, edit]) => `• ${edit.label}`)
-      .join('\n');
+    const labels = [
+      ...models.map(([, model]) => `• model ${model.label}`),
+      ...entries.map(([, edit]) => `• ${edit.label}`),
+    ];
+    const lines = labels.slice(0, 8).join('\n');
     const more =
-      entries.length > 8 ? `\n… and ${entries.length - 8} more` : '';
+      labels.length > 8 ? `\n… and ${labels.length - 8} more` : '';
     const confirmed = window.confirm(
-      `Save ${entries.length} change(s) to the pedal?\n\n` +
+      `Save ${changeCount} change(s) to the pedal?\n\n` +
         `${lines}${more}\n\n` +
         `Destination: User ${slotLabel(slot)} "${name}"\n\n` +
-        'The parameters are applied first, then the preset is stored in its ' +
-        'slot so the change survives a preset switch or a reboot.',
+        'Model changes and parameters are applied first, then the preset is ' +
+        'stored in its slot so the change survives a preset switch or a ' +
+        'reboot. Model writes are not yet validated on hardware.',
     );
     if (!confirmed) {
       appendLog('Save cancelled by the user.');
@@ -886,27 +912,11 @@ export default function App() {
     setUsbError(null);
     setSaveNotice(null);
     setWriting(true);
-    let applied = 0;
     try {
-      for (const [, edit] of entries) {
-        reportProgress(
-          `Saving ${applied + 1}/${entries.length}: ${edit.label}…`,
-        );
-        await writeParam(
-          connection,
-          {
-            block: edit.block,
-            param: edit.param,
-            value: edit.value,
-          },
-          reportProgress,
-        );
-        applied += 1;
-      }
+      const applied = await applyPendingDrafts(connection);
       appendLog(
-        `Save: ${applied} change(s) applied in RAM; storing User ${slotLabel(
-          slot,
-        )}…`,
+        `Save: ${applied.models} model(s) and ${applied.params} parameter(s) ` +
+          `applied in RAM; storing User ${slotLabel(slot)}…`,
       );
       reportProgress(`Storing User ${slotLabel(slot)} "${name}"…`);
       const stored = await savePreset(
@@ -919,18 +929,19 @@ export default function App() {
           `${frameHex(stored.frame)}.`,
       );
       setPendingParams({});
+      setPendingModels({});
       setDirty(false);
       setFreshBackup(null);
       setSaveNotice({
         kind: 'info',
         text:
-          `${applied} change(s) saved to User ${slotLabel(slot)} "${name}". ` +
+          `${applied.models} model(s) and ${applied.params} parameter(s) ` +
+          `saved to User ${slotLabel(slot)} "${name}". ` +
           'The preset is stored on the pedal.',
       });
       appendLog(
-        `Save: ${applied} change(s) applied and stored at User ${slotLabel(
-          slot,
-        )}.`,
+        `Save: ${applied.models} model(s) and ${applied.params} ` +
+          `parameter(s) applied and stored at User ${slotLabel(slot)}.`,
       );
 
       // Confirm the pedal's setlist still reports the stored slot.
@@ -986,6 +997,98 @@ export default function App() {
       });
       return { ...current, chain };
     });
+  }
+
+  /**
+   * Reflect a model swap in the in-memory structure.
+   *
+   * `block` is the 0-based `dsp0` index (the inspector's processing index).
+   * The new entry keeps the block's bypass flags and takes the catalog
+   * defaults, which is what the pedal loads. Controllers and snapshot
+   * overrides attached to the old model no longer refer to existing
+   * parameters, so they are dropped for that block.
+   */
+  function applyLocalModel(block: number, model: CatalogModel) {
+    setStructure((current) => {
+      if (!current) {
+        return current;
+      }
+      const rawSlot = block + 1;
+      const chain = current.chain.map((entry) => {
+        if (entry.slot !== rawSlot) {
+          return entry;
+        }
+        const enabled =
+          entry.kind === 'block' || entry.kind === 'looper'
+            ? entry.enabled
+            : true;
+        const noSnapshotBypass =
+          entry.kind === 'block' ? entry.noSnapshotBypass : false;
+        const params = modelDefaultParams(model);
+        const modelId = wireIdOf(model) ?? 0;
+        return model.category === 'Looper'
+          ? { slot: rawSlot, kind: 'looper' as const, modelId, enabled, params }
+          : {
+              slot: rawSlot,
+              kind: 'block' as const,
+              modelId,
+              category: null,
+              enabled,
+              noSnapshotBypass,
+              params,
+            };
+      });
+      const controllers = (current.controllers ?? []).filter(
+        (entry) => entry.block !== block,
+      );
+      const snapshots = (current.snapshots ?? []).map((snapshot) => ({
+        ...snapshot,
+        controllers: (snapshot.controllers ?? []).filter(
+          (entry) => entry.block !== block,
+        ),
+      }));
+      return { ...current, chain, controllers, snapshots };
+    });
+  }
+
+  /**
+   * Apply queued model swaps (op 40) then parameter drafts (op 30) to the
+   * pedal's active preset. Drafts stay queued until operation 71 succeeds.
+   */
+  async function applyPendingDrafts(
+    connection: PodgoUsbConnection,
+  ): Promise<{ models: number; params: number }> {
+    const models = Object.values(pendingModels);
+    const params = Object.values(pendingParams);
+    for (const [index, model] of models.entries()) {
+      reportProgress(
+        `Saving model ${index + 1}/${models.length}: ${model.label}…`,
+      );
+      await writeModel(
+        connection,
+        {
+          block: model.block,
+          wireId: model.modelId,
+          noSnapshotBypass: model.noSnapshotBypass,
+        },
+        reportProgress,
+      );
+    }
+    for (const [index, edit] of params.entries()) {
+      reportProgress(
+        `Saving parameter ${index + 1}/${params.length}: ${edit.label}…`,
+      );
+      await writeParam(
+        connection,
+        {
+          block: edit.block,
+          param: edit.param,
+          value: edit.value,
+        },
+        reportProgress,
+      );
+    }
+    return { models: models.length, params: params.length };
   }
 
   /** Open the save dialog, reusing the active preset's slot and name. */
@@ -1141,15 +1244,18 @@ export default function App() {
 
   /**
    * Offline drafts are kept in `localDocs`, so switching slots no longer
-   * throws them away. Only the pedal's RAM drafts (`pendingParams`) vanish
-   * when another preset is opened, so ask before dropping those.
+   * throws them away. Only the pedal's RAM drafts (`pendingParams` and
+   * `pendingModels`) vanish when another preset is opened, so ask before
+   * dropping those.
    */
   function confirmDiscardPedalDrafts(): boolean {
-    if (Object.keys(pendingParams).length === 0) {
+    const count =
+      Object.keys(pendingParams).length + Object.keys(pendingModels).length;
+    if (count === 0) {
       return true;
     }
     return window.confirm(
-      'Discard the parameter changes that are not saved to the pedal?',
+      'Discard the model and parameter changes that are not saved to the pedal?',
     );
   }
 
@@ -1250,6 +1356,7 @@ export default function App() {
       setDirty(Boolean(dirtySlots[key]));
     }
     setPendingParams({});
+    setPendingModels({});
     setSaveNotice(null);
     setActionsOpen(false);
     setImportOpen(false);
@@ -1452,14 +1559,6 @@ export default function App() {
   }
 
   /**
-   * Load a catalog model into the selected block of an offline preset.
-   *
-   * This is a JSON edit: it replaces the block object with the model's vendor
-   * defaults and rebuilds the view, so it shows up immediately and exports in
-   * `.pgp`. Pedal presets stay read-only here: writing a model needs the
-   * chain-body path (op 40), which this build does not ship.
-   */
-  /**
    * Categories already used by the other blocks. Amp, Cab, Vol, Wah,
    * Send/Return and Looper are single-role blocks, so a second one is
    * refused before anything is written.
@@ -1481,22 +1580,101 @@ export default function App() {
     return used;
   }
 
-  function changeModel(index: number | null, model: CatalogModel): void {
-    if (index === null) {
-      return;
+  /**
+   * Turn the preset read from the pedal into an editable offline copy.
+   *
+   * A device body is not a `.pgp` document, so this rebuilds one from the
+   * structure the editor already shows. The copy stays in the browser: it can
+   * be edited and exported as `.pgp`, but this build cannot write a preset
+   * body back to the pedal. The user is asked to confirm only when a model tap
+   * triggers the conversion implicitly.
+   */
+  function createEditableCopy(options?: {
+    confirm?: boolean;
+  }): { doc: EditPreset; slot: number } | null {
+    if (!structure) {
+      return null;
     }
-    if (!workingDoc) {
-      setSaveNotice({
-        kind: 'error',
-        text:
-          'Changing a model writes the preset body. Open an offline preset ' +
-          '(or import a .pgp) to change it here; writing a model to the pedal ' +
-          'is not implemented.',
-      });
+    if (workingDoc) {
+      return {
+        doc: workingDoc,
+        slot: workingSlot?.slot ?? structure.preset.slot ?? 0,
+      };
+    }
+    if (
+      options?.confirm &&
+      !window.confirm(
+        'Change the amp or effect on an editable copy?\n\n' +
+          'A preset body read from the pedal is read-only in this build. ' +
+          'The copy stays in the browser: you can edit it and export a .pgp, ' +
+          'but it cannot be written back to the pedal.\n\n' +
+          'Continue?',
+      )
+    ) {
+      return null;
+    }
+
+    const sourceSlot =
+      structure.preset.setlist === 1 ? structure.preset.slot : null;
+    const slotIsFree = (slot: number) =>
+      !(localKey(1, slot) in localDocs) &&
+      !setlists[1]?.find((entry) => entry.slot === slot)?.name;
+    const slot =
+      sourceSlot !== null &&
+      !dirtySlots[localKey(1, sourceSlot)] &&
+      !localDocs[localKey(1, sourceSlot)]
+        ? sourceSlot
+        : ((setlists[1] ?? []).find((entry) => slotIsFree(entry.slot))
+            ?.slot ?? sourceSlot ?? 0);
+    const doc = structureToEditPreset(structure, 1, slot);
+    setWorkingDoc(doc);
+    setWorkingSlot({ setlist: 1, slot });
+    setActiveSetlist(1);
+    setLoaded({ setlist: 1, slot });
+    setPresetSource(`${SETLIST_LABELS[1]} ${slotLabel(slot)} · editable copy`);
+    setLocalDocs((current) => ({
+      ...current,
+      [localKey(1, slot)]: clonePreset(doc),
+    }));
+    markSlotDirty(localKey(1, slot));
+    setDirty(true);
+    setActivePresetLoaded(false);
+    setPendingParams({});
+    setPendingModels({});
+    setSaveNotice({
+      kind: 'info',
+      text:
+        'Editable offline copy created. Model and parameter changes stay in ' +
+        'the browser and export as .pgp; this build cannot write a preset ' +
+        'body back to the pedal.',
+    });
+    appendLog(
+      `Created an editable copy of "${doc.name || 'unnamed'}" at User ` +
+        `${slotLabel(slot)} (offline draft, not written to the pedal).`,
+    );
+    return { doc, slot };
+  }
+
+  /**
+   * Load a catalog model into the selected block.
+   *
+   * On the pedal's active preset the change is a draft: the in-memory
+   * structure updates immediately and Save sends operation 40 (load the model,
+   * defaults included) followed by operation 71 (store the active preset).
+   * Offline documents are edited in JSON directly. With no editable target (a
+   * slot read, or no pedal) the first model change asks to rebuild an editable
+   * copy, as before.
+   *
+   * Operation 40 is unit-tested offline but not yet validated on hardware in
+   * this repository, and an empty-slot add is the least proven case: the pedal
+   * may reject it, which Save then reports.
+   */
+  function changeModel(index: number | null, model: CatalogModel): void {
+    if (index === null || !structure) {
       return;
     }
     const block = index;
-    const entry = structure?.chain.find((item) => item.slot === block + 1);
+    const entry = structure.chain.find((item) => item.slot === block + 1);
     const current =
       entry && (entry.kind === 'block' || entry.kind === 'looper')
         ? modelById(entry.modelId)
@@ -1508,12 +1686,64 @@ export default function App() {
       });
       return;
     }
-    setImportedModel(workingDoc, block, model);
-    const next = { ...workingDoc };
+
+    // Pedal draft: queue op 40 and update the structure the panel shows.
+    if (!workingDoc && connected && activePresetLoaded) {
+      const wireId = wireIdOf(model);
+      if (wireId === null) {
+        setSaveNotice({
+          kind: 'error',
+          text: `${model.display} has no on-wire id; it cannot be sent to the pedal.`,
+        });
+        return;
+      }
+      const rawBlock = block + 1;
+      const noSnapshotBypass =
+        entry && entry.kind === 'block' ? entry.noSnapshotBypass : false;
+      setPendingModels((queued) => ({
+        ...queued,
+        [String(rawBlock)]: {
+          block: rawBlock,
+          modelId: wireId,
+          noSnapshotBypass,
+          label: `block ${rawBlock} → ${model.display}`,
+        },
+      }));
+      // The old model's parameter drafts refer to different parameters.
+      setPendingParams((queued) => {
+        const next = { ...queued };
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(`${rawBlock}:`)) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+      applyLocalModel(block, model);
+      setDirty(true);
+      setSaveNotice(null);
+      appendLog(
+        `Draft: block ${rawBlock} → ${model.display} (${model.name}); ` +
+          'Save sends operation 40 then stores the preset. Not written yet.',
+      );
+      return;
+    }
+
+    const created = workingDoc ? null : createEditableCopy({ confirm: true });
+    if (!workingDoc && !created) {
+      return;
+    }
+    const doc = created?.doc ?? workingDoc;
+    if (!doc) {
+      return;
+    }
+    setImportedModel(doc, block, model);
+    const next = { ...doc };
     setWorkingDoc(next);
     setStructure(toneToStructure(next));
-    if (workingSlot) {
-      const key = localKey(workingSlot.setlist, workingSlot.slot);
+    const slot = created?.slot ?? workingSlot?.slot ?? null;
+    if (slot !== null) {
+      const key = localKey(1, slot);
       setLocalDocs((currentDocs) => ({
         ...currentDocs,
         [key]: clonePreset(next),
@@ -1522,7 +1752,17 @@ export default function App() {
     } else {
       setDirty(true);
     }
-    setSaveNotice(null);
+    setSaveNotice(
+      created
+        ? {
+            kind: 'info',
+            text:
+              `${model.display} loaded on the editable offline copy. ` +
+              'Export .pgp to keep it; this build cannot write a preset body ' +
+              'back to the pedal.',
+          }
+        : null,
+    );
     appendLog(
       `Draft: block ${block + 1} → ${model.display} (${model.name}), ` +
         'vendor defaults, not written to the pedal.',
@@ -2390,11 +2630,23 @@ export default function App() {
       `Saving the active preset as "${name}" to User ${slotLabel(slot)}…`,
     );
     try {
+      const applied = await applyPendingDrafts(connection);
+      if (applied.models + applied.params > 0) {
+        appendLog(
+          `Save: ${applied.models} model(s) and ${applied.params} ` +
+            `parameter(s) applied in RAM before storing User ${slotLabel(
+              slot,
+            )}.`,
+        );
+      }
       const result = await savePreset(connection, { slot, name }, reportProgress);
       appendLog(
         `Save accepted after ${result.attempts} attempt(s); frame ` +
           `${frameHex(result.frame)}.`,
       );
+      setPendingParams({});
+      setPendingModels({});
+      setDirty(false);
       applyLocalSave(slot, name);
       setFreshBackup(null);
       setSaveOpen(false);
@@ -3054,7 +3306,10 @@ export default function App() {
               editable={editable}
               editHint={editHint}
               onEditParam={editWorkingParam}
-              onSelectModel={workingDoc ? changeModel : undefined}
+              onSelectModel={changeModel}
+              onEditCopy={
+                workingDoc ? undefined : () => createEditableCopy()
+              }
               onMoveBlock={workingDoc ? moveBlock : undefined}
               onSelectSnapshot={workingDoc ? selectSnapshot : undefined}
               onRenameSnapshot={workingDoc ? renameSnapshot : undefined}

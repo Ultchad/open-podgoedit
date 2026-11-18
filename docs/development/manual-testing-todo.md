@@ -198,7 +198,8 @@ docker run --rm \
 **Statut :** une application web locale existe dans `apps/web/` (React + Vite
 + WASM). Elle lit les setlists et le preset actif en WebUSB, et propose les
 écritures **derrière armement** : `set_param` (op 30, validé matériellement),
-`save_preset` (op 71), et sauvegarde/restauration complète (`.pgbak` + op 5,
+`save_preset` (op 71), `set_model` (op 40, **non validé matériellement**), et
+sauvegarde/restauration complète (`.pgbak` + op 5,
 **non validée matériellement**).
 Le flux WebUSB est couvert par un faux appareil dans Playwright (`ITM`) et a
 été validé sur un POD Go Wireless en firmware 2.50 (`ITH` pour la lecture User
@@ -680,6 +681,31 @@ pédalier connecté. La sauvegarde écrit les métadonnées du preset actif
       téléchargée avant toute autre écriture.
 
 **Résultat :** à compléter (date, firmware, slot, nom, SHA-256, trame).
+
+### 3.11bis Changement de modèle (`set_model`, op 40) — **non validée matériellement**
+
+> Aucune trame op 40 de ce build n'a encore été envoyée. Le format vient de la
+> référence MIT (`change-pedal-from-app.pcapng`, paquet 35) : le pédalier
+> devrait charger le modèle avec ses valeurs par défaut. Commencer par un slot
+> User dédié, sur un preset dont on a une sauvegarde.
+
+- [ ] Connecter, **Read active preset**, armer les écritures, ouvrir l'onglet
+      **Models** sur un bloc existant (ex. l'ampli) et choisir un autre modèle
+      du même rôle : le bloc doit afficher le nouveau modèle et le badge
+      `unsaved changes`, sans dialogue ni copie hors ligne.
+- [ ] Cliquer **Save** : le journal doit afficher
+      `Save: 1 model(s) and 0 parameter(s) applied in RAM`, puis
+      `stored` et la vérification du nom.
+- [ ] Vérifier sur le pédalier (et via **Read active preset**) que le bloc
+      porte le nouveau modèle et des valeurs par défaut ; puis rappeler un
+      autre preset et revenir pour confirmer que le changement est stocké.
+- [ ] Refaire le test dans un **emplacement vide** : si le pédalier refuse
+      l'op 40, le journal doit afficher le statut et le brouillon rester en
+      attente. Archiver le journal et la trame hexadécimale dans les deux cas.
+- [ ] Ne pas réessayer en boucle après un refus : relire le preset et restaurer
+      la sauvegarde si le son a changé.
+
+**Résultat :** à compléter (date, firmware, bloc, modèle, trame, statut).
 
 ### 3.12 Restauration complète (`.pgbak`, op 5) — **non validée matériellement**
 

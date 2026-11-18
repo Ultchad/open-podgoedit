@@ -22,6 +22,11 @@
 ## 3. Editing offline
 
 - Edits apply to a local copy first.
+- A preset read from the pedal is edited as a pedal draft: a model change or a
+  parameter change shows immediately and is applied by **Save** (op 40 for
+  models, op 30 for parameters, then op 71 to store the preset).
+- **Edit copy** builds an editable offline copy instead. The copy exports as
+  `.pgp`; this build cannot write a preset body back to the pedal.
 - The chain view lets you enable/disable and reorder blocks where supported.
 - Parameter edits validate against the model definition's min/max.
 - Undo/redo is local and unlimited within the session (bounded by memory).
