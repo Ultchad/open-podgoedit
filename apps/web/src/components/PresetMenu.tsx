@@ -20,10 +20,9 @@ interface Props {
   y: number;
   items: PresetMenuEntry[];
   onClose: () => void;
-  onMove?: (slot: number) => void;
 }
 
-export default function PresetMenu({ x, y, items, onClose, onMove }: Props) {
+export default function PresetMenu({ x, y, items, onClose}: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

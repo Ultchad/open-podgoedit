@@ -313,12 +313,6 @@ export default function App() {
     x: number;
     y: number;
   } | null>(null);
-  const [moveToSlot, setMoveToSlot] = useState<number | null>(null);
-    kind: SetlistKind;
-    slot: number;
-    x: number;
-    y: number;
-  } | null>(null);
   /** Slot chosen by the right-click "Import .pgp…" action. */
   const [importTarget, setImportTarget] = useState<WorkingSlot | null>(null);
   /**
@@ -2384,9 +2378,6 @@ export default function App() {
     setContextMenu({ kind, slot: entry.slot, x, y });
   }
 
-  function openMoveToMenu(kind: SetlistKind, slot: number, x: number, y: number): void {
-    setContextMenu({ kind, slot, x, y });
-  }
 
   function menuItems(kind: SetlistKind, slot: number): PresetMenuEntry[] {
     const name = slotName(kind, slot);
