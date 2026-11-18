@@ -13,7 +13,7 @@ import {
 } from '../catalog';
 import { MAX_SNAPSHOT_NAME_LENGTH } from '../presetName';
 import {
-  // SNAPSHOT_LED_COLORS,
+  SNAPSHOT_LED_COLORS,
   snapshotLedColor,
 } from '../snapshot';
 import type { CatalogModel, PresetStructure, Selection } from '../types';
@@ -86,8 +86,8 @@ export default function PresetView({
   onExport,
   canExportBackup,
   onExportBackup,
-  // canRename,
-  // onRename,
+  canRename,
+  onRename,
 }: Props) {
   const processing = processingChain(structure.chain);
   const [selected, setSelected] = useState<Selection>(() =>
@@ -158,7 +158,7 @@ export default function PresetView({
       ? structure.currentSnapshot
       : 0;
   const activeSnapshot = structure.snapshots[snapshotIndex] ?? null;
-  // const activeLed = snapshotLedColor(activeSnapshot?.ledColor ?? 0);
+  const activeLed = snapshotLedColor(activeSnapshot?.ledColor ?? 0);
   const snapshotEditable = Boolean(
     onRenameSnapshot || onSelectSnapshot || onSetSnapshotLedColor,
   );
@@ -254,7 +254,7 @@ export default function PresetView({
             {dirty
               ? 'unsaved changes'
               : offline
-                ? 'offline'
+                ? 'offline preset'
                 : editable
                   ? 'draft'
                   : 'read-only'}
@@ -348,10 +348,11 @@ export default function PresetView({
               </button>
             );
           })}
-          {/* {onSetSnapshotLedColor && (
+          {onSetSnapshotLedColor && (
             <button
               type="button"
               className="snapshot-led-picker"
+              aria-label="Snapshot LED colour"
               title={`Footswitch LED colour of snapshot ${snapshotIndex + 1}`}
               onClick={() => {
                 const color = prompt(
@@ -377,7 +378,7 @@ export default function PresetView({
               />
               <span>LED colour</span>
             </button>
-          )} */}
+          )}
         </div>
 
         <div className="toolbar-right">
@@ -396,7 +397,7 @@ export default function PresetView({
               Edit copy
             </button>
           )}
-          {/* <button
+          <button
             id="rename-preset"
             type="button"
             className="toolbar-button"
@@ -409,7 +410,7 @@ export default function PresetView({
             onClick={onRename}
           >
             Rename…
-          </button> */}
+          </button>
           <button
             id="export-pgp"
             type="button"
@@ -422,7 +423,7 @@ export default function PresetView({
             }
             onClick={onExport}
           >
-            Export
+            Export .pgp
           </button>
           {canExportBackup && (
             <button

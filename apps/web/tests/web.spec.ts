@@ -71,7 +71,7 @@ test('edits a draft with the slider and value field, then exports', async ({
   // Offline presets are editable straight away: the only guard is for pedal
   // writes, so no checkbox appears.
   await expect(page.locator('#arm-writes')).toHaveCount(0);
-  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
   await expect(page.locator('#param-input-0')).toHaveCount(0);
 
   // The first block is the amp; drag the Drive bar (keyboard here, same path).
@@ -109,7 +109,7 @@ test('edits a draft with the slider and value field, then exports', async ({
   const doc = JSON.parse(await readFile(path!, 'utf8'));
   expect(doc.schema).toBe('L6Preset');
   expect(doc.data.tone.dsp0.block0.Drive).toBeCloseTo(0.65, 5);
-  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
 });
 
 test('keeps an offline draft when switching to another preset', async ({
@@ -126,7 +126,7 @@ test('keeps an offline draft when switching to another preset', async ({
 
   await page.locator('.preset-item').nth(1).click();
   await expect(page.locator('.preset-title .preset-slot')).toHaveText('01B');
-  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
 
   // Going back restores the draft instead of asking to throw it away.
   await page.locator('.preset-item').nth(0).click();
@@ -140,12 +140,12 @@ test('keeps an offline draft when switching to another preset', async ({
   const file = await download;
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   expect(doc.data.tone.dsp0.block0.Drive).toBeCloseTo(0.65, 5);
-  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
 
   await page.locator('.preset-item').nth(1).click();
   await page.locator('.preset-item').nth(0).click();
   await expect(page.locator('#param-value-0')).toHaveText('6.5');
-  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
 });
 
 test('right-click menu copies, pastes, renames and drags presets', async ({
@@ -175,36 +175,22 @@ test('right-click menu copies, pastes, renames and drags presets', async ({
   await page.locator('#menu-rename').click();
   await expect(items.nth(1)).toContainText('Lead Tone');
 
-  // Move it to slot 3 from the context menu, typed as the pedal's label
-  // (01C): slots swap, so 01C becomes "Lead Tone" and 01B becomes empty.
-  page.once('dialog', (dialog) => void dialog.accept('01C'));
+  // Move it to slot 3 from the context menu: slots swap, so 01C becomes
+  // "Lead Tone" and 01B becomes empty.
+  page.once('dialog', (dialog) => void dialog.accept('3'));
   await items.nth(1).click({ button: 'right' });
   await page.locator('#menu-move').click();
   await expect(items.nth(2)).toContainText('Lead Tone');
   await expect(items.nth(1)).toHaveClass(/is-empty/);
 
-  // A plain number is still accepted (1-based), and a bad label is refused.
+  // A bad slot number is refused and nothing moves.
   page.once('dialog', (dialog) => void dialog.accept('nope'));
   await items.nth(2).click({ button: 'right' });
   await page.locator('#menu-move').click();
-  await expect(page.locator('#save-notice')).toContainText('is not a slot');
+  await expect(page.locator('#save-notice')).toContainText(
+    'is not a slot number',
+  );
   await expect(items.nth(2)).toContainText('Lead Tone');
-
-  // A plain number (3 = 01C), a bare label (2B = 02B) and mixed case all
-  // resolve; an out-of-range or malformed label is refused.
-  page.once('dialog', (dialog) => void dialog.accept('3'));
-  await items.nth(2).click({ button: 'right' });
-  await page.locator('#menu-move').click();
-  await expect(items.nth(2)).toContainText('Lead Tone');
-  page.once('dialog', (dialog) => void dialog.accept('2b'));
-  await items.nth(2).click({ button: 'right' });
-  await page.locator('#menu-move').click();
-  await expect(items.nth(5)).toContainText('Lead Tone');
-  page.once('dialog', (dialog) => void dialog.accept('33A'));
-  await items.nth(5).click({ button: 'right' });
-  await page.locator('#menu-move').click();
-  await expect(page.locator('#save-notice')).toContainText('is not a slot');
-  await expect(items.nth(5)).toContainText('Lead Tone');
 
   // Factory slots expose a read-only menu.
   await page.getByRole('tab', { name: /^Factory/ }).click();
@@ -364,12 +350,10 @@ test('links to GitHub and edits snapshot bypass, values and LED colours', async 
   await secondDrive.fill('2');
   await secondDrive.press('Enter');
   await expect(page.locator('#param-value-0')).toHaveText('2.0');
-  // The LED colour now lives in the snapshot right-click menu.
-  await chips.nth(1).click({ button: 'right' });
-  await page
-    .getByRole('menu', { name: 'Snapshot 2 actions' })
-    .getByRole('menuitemradio', { name: 'Blue' })
-    .click();
+  // The LED picker is a compact button that asks for the palette index
+  // (8 = Blue), same as the snapshot right-click menu's swatch grid.
+  page.once('dialog', (dialog) => void dialog.accept('8'));
+  await page.getByLabel('Snapshot LED colour').click();
 
   const download = page.waitForEvent('download');
   await page.locator('#export-pgp').click();

@@ -32,7 +32,6 @@ import {
   modelById,
   modelDefaultParams,
   paramAt,
-  parseSlotLabel,
   slotLabel,
   wireIdOf,
 } from './catalog';
@@ -2379,7 +2378,6 @@ export default function App() {
     setContextMenu({ kind, slot: entry.slot, x, y });
   }
 
-
   function menuItems(kind: SetlistKind, slot: number): PresetMenuEntry[] {
     const name = slotName(kind, slot);
     const isWorking =
@@ -2438,25 +2436,22 @@ export default function App() {
         label: 'Move preset…',
         disabled: kind === 0,
         onSelect: () => {
-          const dest = prompt(
-            `Move preset to slot (e.g. ${slotLabel(slot)}, 01A…32D):`,
-            slotLabel(slot),
-          );
+          const dest = prompt('Move preset to slot (1-128):', String(slot + 1));
           if (dest === null) {
             return;
           }
-          const target = parseSlotLabel(dest);
-          if (target === null) {
+          const target = Number(dest);
+          if (!Number.isInteger(target) || target < 1 || target > 128) {
             setSaveNotice({
               kind: 'error',
-              text: `“${dest.trim()}” is not a slot. Use a label such as 01A, 12C or 32D.`,
+              text: `“${dest.trim()}” is not a slot number between 1 and 128.`,
             });
             return;
           }
-          if (target === slot) {
+          if (target - 1 === slot) {
             return;
           }
-          moveSlot(slot, target);
+          moveSlot(slot, target - 1);
         },
       },
       'separator',
@@ -3156,12 +3151,9 @@ export default function App() {
     <main className="app">
       <header className="app-bar">
         <div className="brand">
-          <div className="brand-title">
-            <h1>
-              POD Go <span>Editor</span>
-            </h1>
-            <ModuleBadge module={module} />
-          </div>
+          <h1>
+            POD Go <span>Editor</span>
+          </h1>
           <p className="subtitle">
             Unofficial preset editor — Rust core in WebAssembly. Works offline;
             connect a pedal for live reads and writes.
@@ -3258,7 +3250,8 @@ export default function App() {
           >
             Import…
           </button>
-          
+
+          <ModuleBadge module={module} />
           <a
             className="github-link"
             href="https://github.com/Ultchad/open-podgoedit"
@@ -3536,7 +3529,10 @@ export default function App() {
         <PresetMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          items={menuItems((contextMenu.kind ?? 0) as SetlistKind, contextMenu.slot ?? 0)}
+          items={menuItems(
+            (contextMenu.kind ?? 0) as SetlistKind,
+            contextMenu.slot ?? 0,
+          )}
           onClose={() => setContextMenu(null)}
         />
       )}

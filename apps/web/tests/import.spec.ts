@@ -288,7 +288,7 @@ test('edits an imported preset offline and exports a .pgp', async ({ page }) => 
   await page.locator('#import-open').click();
 
   // The preset is an offline copy: export is offered, device writes are not.
-  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
   await expect(page.locator('#export-pgp')).toBeEnabled();
   await expect(page.locator('#arm-writes')).toHaveCount(0);
 
@@ -303,14 +303,10 @@ test('edits an imported preset offline and exports a .pgp', async ({ page }) => 
   await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
   await expect(page.locator('.report.log')).toContainText('Draft:');
 
-  // Rename the offline copy through the Advanced preset actions dialog (the
-  // toolbar Rename button is hidden on narrow layouts).
-  await page.locator('#developer-tools > summary').click();
-  await page.locator('#preset-actions').click();
-  await page.locator('#rename-name').fill('Renamed Clean');
-  await page.locator('#rename-local').click();
+  // Rename the offline copy.
+  page.once('dialog', (dialog) => void dialog.accept('Renamed Clean'));
+  await page.locator('#rename-preset').click();
   await expect(page.locator('.preset-title-name')).toHaveText('Renamed Clean');
-  await page.getByRole('button', { name: 'Close' }).first().click();
 
   // Export and inspect the JSON.
   const [download] = await Promise.all([
@@ -328,7 +324,7 @@ test('edits an imported preset offline and exports a .pgp', async ({ page }) => 
   expect(exported.data.tone.dsp0.block1['@custom_tag']).toBe('keep-me');
   expect(exported.data.tone.dsp0.block1.FcHigh).toBe(2155);
   expect(exported.data.tone.snapshot0['@name']).toBe('SNAPSHOT 1');
-  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline preset');
 
   // The exported file re-opens in this reader with the edited values.
   await page.locator('#import-edit-file').click();
