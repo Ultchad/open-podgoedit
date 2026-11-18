@@ -8,6 +8,7 @@
 // Every slot has a right-click menu, and User presets can be dragged onto
 // another slot to move them in the local setlist.
 
+import { useState } from 'react';
 import { slotLabel } from '../catalog';
 import type { SetlistEntry } from '../types';
 
@@ -56,6 +57,7 @@ export default function PresetList({
 }: PresetListProps) {
   const entries = setlists[activeSetlist];
   const user = activeSetlist === 1;
+  const [longPressTimer, setLongPressTimer] = useState<number | null>(null);
 
   return (
     <aside className="librarian" aria-label="Preset librarian">
@@ -123,6 +125,31 @@ export default function PresetList({
                   .filter(Boolean)
                   .join(' ')}
                 onClick={() => onOpenSlot(activeSetlist, entry)}
+                onTouchStart={(e) => {
+                  if (!empty) {
+                    const timer = window.setTimeout(() => {
+                      onContextMenu(
+                        activeSetlist,
+                        entry,
+                        e.touches[0].clientX,
+                        e.touches[0].clientY,
+                      );
+                    }, 500);
+                    setLongPressTimer(timer as unknown as number);
+                  }
+                }}
+                onTouchEnd={() => {
+                  if (longPressTimer) {
+                    window.clearTimeout(longPressTimer);
+                    setLongPressTimer(null);
+                  }
+                }}
+                onTouchCancel={() => {
+                  if (longPressTimer) {
+                    window.clearTimeout(longPressTimer);
+                    setLongPressTimer(null);
+                  }
+                }}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   onContextMenu(

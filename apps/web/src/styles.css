@@ -683,16 +683,14 @@ button:disabled:hover {
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--text-dim);
+  background: var(--surface);
+  min-height: 1.35rem;
+  cursor: pointer;
 }
 
-.snapshot-led-picker select {
-  min-height: 1.35rem;
-  padding: 0 0.15rem;
-  border: none;
-  background: transparent;
-  color: var(--text-soft);
-  font-family: inherit;
-  font-size: 0.7rem;
+.snapshot-led-picker:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
 }
 
 .snapshot-number {

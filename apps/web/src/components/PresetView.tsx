@@ -100,6 +100,7 @@ export default function PresetView({
     y: number;
     index: number;
   } | null>(null);
+  const [longPressTimer, setLongPressTimer] = useState<number | null>(null);
 
   // Reset on a new preset, not on an edit: a parameter write replaces the
   // structure object, and resetting there would jump back to the first slot.
@@ -165,6 +166,23 @@ export default function PresetView({
     snapshotMenu && structure.snapshots[snapshotMenu.index]
       ? structure.snapshots[snapshotMenu.index]
       : null;
+
+  // Mobile long-press helpers
+  const startLongPress = (index: number, event: React.TouchEvent) => {
+    if (!snapshotEditable) return;
+    const timer = window.setTimeout(() => {
+      const touch = event.touches[0];
+      setSnapshotMenu({ x: touch.clientX, y: touch.clientY, index });
+    }, 500);
+    setLongPressTimer(timer as unknown as number);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimer) {
+      window.clearTimeout(longPressTimer);
+      setLongPressTimer(null);
+    }
+  };
 
   // Base controller assignments and the values the active snapshot recalls for
   // the selected block. The inspector uses both to draw the camera toggle and
@@ -293,11 +311,14 @@ export default function PresetView({
                 disabled={!editableSnapshot}
                 title={
                   editableSnapshot
-                    ? `${label} — click to select, double-click to rename, right-click for actions`
+                    ? `${label} — tap to select, double-tap to rename, long-press for actions`
                     : label
                 }
                 onClick={() => onSelectSnapshot?.(index)}
                 onDoubleClick={() => startSnapshotRename(index)}
+                onTouchStart={(e) => startLongPress(index, e)}
+                onTouchEnd={cancelLongPress}
+                onTouchCancel={cancelLongPress}
                 onContextMenu={(event) => {
                   if (!snapshotEditable) {
                     return;
@@ -328,9 +349,24 @@ export default function PresetView({
             );
           })}
           {onSetSnapshotLedColor && (
-            <label
+            <button
+              type="button"
               className="snapshot-led-picker"
               title={`Footswitch LED colour of snapshot ${snapshotIndex + 1}`}
+              onClick={() => {
+                const color = prompt(
+                  `LED colour for snapshot ${snapshotIndex + 1}`,
+                  activeSnapshot?.ledColor !== undefined
+                    ? String(activeSnapshot.ledColor)
+                    : '0',
+                );
+                if (color !== null) {
+                  const num = Number(color);
+                  if (!Number.isNaN(num) && num >= 0 && num < SNAPSHOT_LED_COLORS.length) {
+                    onSetSnapshotLedColor(snapshotIndex, num);
+                  }
+                }
+              }}
             >
               <span
                 className={`snapshot-led${activeLed.color ? '' : ' is-off'}`}
@@ -339,20 +375,8 @@ export default function PresetView({
                 }
                 aria-hidden="true"
               />
-              <select
-                aria-label="Snapshot LED colour"
-                value={activeSnapshot?.ledColor ?? 0}
-                onChange={(event) =>
-                  onSetSnapshotLedColor(snapshotIndex, Number(event.target.value))
-                }
-              >
-                {SNAPSHOT_LED_COLORS.map((entry) => (
-                  <option key={entry.index} value={entry.index}>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <span>LED colour</span>
+            </button>
           )}
         </div>
 
