@@ -32,6 +32,7 @@ import {
   modelById,
   modelDefaultParams,
   paramAt,
+  parseSlotLabel,
   slotLabel,
   wireIdOf,
 } from './catalog';
@@ -2438,15 +2439,24 @@ export default function App() {
         disabled: kind === 0,
         onSelect: () => {
           const dest = prompt(
-            `Move preset to slot (1-128):`,
-            String(slot + 1)
+            `Move preset to slot (e.g. ${slotLabel(slot)}, 01A…32D):`,
+            slotLabel(slot),
           );
-          if (dest) {
-            const d = Number(dest);
-            if (d >= 1 && d <= 128) {
-              moveSlot(slot, d - 1);
-            }
+          if (dest === null) {
+            return;
           }
+          const target = parseSlotLabel(dest);
+          if (target === null) {
+            setSaveNotice({
+              kind: 'error',
+              text: `“${dest.trim()}” is not a slot. Use a label such as 01A, 12C or 32D.`,
+            });
+            return;
+          }
+          if (target === slot) {
+            return;
+          }
+          moveSlot(slot, target);
         },
       },
       'separator',
@@ -3146,9 +3156,12 @@ export default function App() {
     <main className="app">
       <header className="app-bar">
         <div className="brand">
-          <h1>
-            POD Go <span>Editor</span>
-          </h1>
+          <div className="brand-title">
+            <h1>
+              POD Go <span>Editor</span>
+            </h1>
+            <ModuleBadge module={module} />
+          </div>
           <p className="subtitle">
             Unofficial preset editor — Rust core in WebAssembly. Works offline;
             connect a pedal for live reads and writes.
@@ -3245,8 +3258,7 @@ export default function App() {
           >
             Import…
           </button>
-
-          <ModuleBadge module={module} />
+          
           <a
             className="github-link"
             href="https://github.com/Ultchad/open-podgoedit"
