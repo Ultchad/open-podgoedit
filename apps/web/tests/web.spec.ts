@@ -207,6 +207,137 @@ test('copies an effect between presets with Ctrl+C and Ctrl+V', async ({
   expect(doc.data.tone.dsp0.block2['@model']).toBe('HD2_DM4TubeDrive');
 });
 
+test('opens effect actions from right-click, long-press and the inspector', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  const menu = page.locator('.context-menu[aria-label="Effect actions"]');
+  const tiles = page.locator('.block-tile');
+
+  // Right-click the amp: copy is available, moving left is not.
+  await tiles.nth(0).click({ button: 'right' });
+  await expect(menu).toBeVisible();
+  await expect(page.locator('#block-menu-copy')).toBeEnabled();
+  await expect(page.locator('#block-menu-paste')).toBeDisabled();
+  await expect(page.locator('#block-menu-move-left')).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+
+  // A touch long-press opens the same menu.
+  const box = await tiles.nth(0).boundingBox();
+  expect(box).not.toBeNull();
+  await tiles.nth(0).dispatchEvent('pointerdown', {
+    pointerType: 'touch',
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+    clientX: (box?.x ?? 0) + 20,
+    clientY: (box?.y ?? 0) + 20,
+  });
+  await page.waitForTimeout(600);
+  await expect(menu).toBeVisible();
+  await tiles.nth(0).dispatchEvent('pointerup', {
+    pointerType: 'touch',
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+  });
+  await page.keyboard.press('Escape');
+
+  // The inspector ⋯ button opens it too, focuses the first item, and Escape
+  // returns focus to the button.
+  await page.locator('.inspector-more').click();
+  await expect(menu).toBeVisible();
+  await expect(page.locator('#block-menu-copy')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#block-menu-move-right')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator('.inspector-more')).toBeFocused();
+});
+
+test('copies and pastes an effect through the block menu', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // Put a Dist effect in the first preset.
+  await page.locator('.block-tile').nth(2).click();
+  await page.locator('.category-row button', { hasText: 'Dist' }).click();
+  await page.locator('.model-search').fill('tube drive');
+  await page
+    .locator('button.model-tile', { hasText: 'Tube Drive' })
+    .first()
+    .click();
+  await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
+
+  // Copy it from the effect menu.
+  await page.locator('.block-tile').nth(2).click({ button: 'right' });
+  await expect(page.locator('#block-menu-copy')).toBeEnabled();
+  await page.locator('#block-menu-copy').click();
+  await expect(page.locator('#save-notice')).toContainText('Copied Tube Drive');
+
+  // Paste it into an empty slot of another preset from the same menu.
+  await page.locator('.preset-item').nth(1).click();
+  await expect(page.locator('.preset-title .preset-slot')).toHaveText('01B');
+  await page.locator('.block-tile').nth(2).click({ button: 'right' });
+  await expect(page.locator('#block-menu-paste')).toBeEnabled();
+  await page.locator('#block-menu-paste').click();
+  await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
+  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+});
+
+test.describe('phone layout', () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+
+  test('opens the preset drawer, closes it on pick, and uses finger targets', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+    await expect(page.locator('#toggle-presets')).toBeVisible();
+    await page.locator('#toggle-presets').click();
+    await expect(page.locator('#preset-librarian')).toHaveClass(/is-open/);
+
+    const presetBox = await page.locator('.preset-item').first().boundingBox();
+    expect(presetBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+
+    await page.locator('.preset-item').nth(1).click();
+    await expect(page.locator('.preset-title .preset-slot')).toHaveText('01B');
+    await expect(page.locator('#preset-librarian')).not.toHaveClass(/is-open/);
+
+    for (const selector of ['#toggle-presets', '#connect', '#new-preset']) {
+      const target = await page.locator(selector).boundingBox();
+      expect(target?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
+
+    const tileBox = await page.locator('.block-tile').first().boundingBox();
+    expect(tileBox?.height ?? 0).toBeGreaterThanOrEqual(44);
+    expect(tileBox?.width ?? 0).toBeGreaterThanOrEqual(44);
+  });
+
+  test('closes a dialog with Escape and the backdrop', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+    await page.locator('#import-edit-file').click();
+    await expect(page.locator('.import-dialog')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.import-dialog')).toHaveCount(0);
+
+    await page.locator('#import-edit-file').click();
+    await expect(page.locator('.import-dialog')).toBeVisible();
+    await page.locator('.modal-backdrop').click({ position: { x: 5, y: 5 } });
+    await expect(page.locator('.import-dialog')).toHaveCount(0);
+  });
+});
+
 test('keeps an offline draft when switching to another preset', async ({
   page,
 }) => {

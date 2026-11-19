@@ -300,6 +300,8 @@ export default function App() {
     Record<SetlistKind, SetlistEntry[] | null>
   >({ 0: null, 1: null });
   const [activeSetlist, setActiveSetlist] = useState<SetlistKind>(1);
+  /** On a phone the librarian becomes an off-canvas drawer. */
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [loaded, setLoaded] = useState<{
     setlist: SetlistKind;
     slot: number;
@@ -389,6 +391,33 @@ export default function App() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const connectionRef = useRef<PodgoUsbConnection | null>(null);
+
+  // Warn before leaving with edits that only exist in this tab.
+  useEffect(() => {
+    if (!dirty) {
+      return;
+    }
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
+  // Escape closes the phone preset drawer.
+  useEffect(() => {
+    if (!libraryOpen) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setLibraryOpen(false);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [libraryOpen]);
 
   const run = useCallback(
     (kind: Kind, bytes: Uint8Array, source: string, setlist: SetlistKind = 1) => {
@@ -2011,21 +2040,12 @@ export default function App() {
     );
   }
 
-  /** Copy the selected amp/effect block for pasting into another preset. */
-  function copySelectedBlock(): void {
+  /** Copy one amp/effect block for pasting into another preset. */
+  function copyBlockAt(index: number): void {
     if (!structure) {
       return;
     }
-    if (selectedBlock === null) {
-      setSaveNotice({
-        kind: 'info',
-        text: 'Select an amp or effect block to copy, then press Ctrl+C (Cmd+C on a Mac).',
-      });
-      return;
-    }
-    const entry = structure.chain.find(
-      (item) => item.slot === selectedBlock + 1,
-    );
+    const entry = structure.chain.find((item) => item.slot === index + 1);
     if (!entry || (entry.kind !== 'block' && entry.kind !== 'looper')) {
       setSaveNotice({
         kind: 'error',
@@ -2047,16 +2067,28 @@ export default function App() {
     setSaveNotice({
       kind: 'info',
       text:
-        `Copied ${model.display}. Open another preset, select a block, ` +
-        'then press Ctrl+V (Cmd+V on a Mac).',
+        `Copied ${model.display}. Select a block and use Paste effect, or ` +
+        'press Ctrl+V (Cmd+V on a Mac).',
     });
     appendLog(
-      `Copied ${model.display} from block ${selectedBlock + 1} to the effect clipboard.`,
+      `Copied ${model.display} from block ${index + 1} to the effect clipboard.`,
     );
   }
 
+  /** Ctrl/Cmd+C entry point; the effect menu passes an explicit index. */
+  function copySelectedBlock(): void {
+    if (selectedBlock === null) {
+      setSaveNotice({
+        kind: 'info',
+        text: 'Select an amp or effect block to copy, then press Ctrl+C (Cmd+C on a Mac).',
+      });
+      return;
+    }
+    copyBlockAt(selectedBlock);
+  }
+
   /**
-   * Paste the effect clipboard into the selected slot.
+   * Paste the effect clipboard into one processing slot.
    *
    * The model and its parameter values are copied; bypass state and snapshot
    * assignments stay with the destination block, because they belong to the
@@ -2064,26 +2096,18 @@ export default function App() {
    * document; on the active pedal preset it queues operation 40 plus the
    * parameter drafts (op 30), which Save applies before storing the preset.
    */
-  function pasteSelectedBlock(): void {
+  function pasteBlockAt(block: number): void {
     const clip = blockClipboard;
     if (!clip) {
       setSaveNotice({
         kind: 'info',
-        text: 'The effect clipboard is empty. Select an effect and press Ctrl+C (Cmd+C on a Mac) first.',
+        text: 'The effect clipboard is empty. Select an effect and copy it first.',
       });
       return;
     }
     if (!structure) {
       return;
     }
-    if (selectedBlock === null) {
-      setSaveNotice({
-        kind: 'info',
-        text: 'Select an amp or effect slot, then press Ctrl+V to paste.',
-      });
-      return;
-    }
-    const block = selectedBlock;
     const entry = structure.chain.find((item) => item.slot === block + 1);
     if (
       !entry ||
@@ -2234,6 +2258,25 @@ export default function App() {
       `Draft: pasted ${clip.model.display} into block ${rawBlock} ` +
         '(offline JSON, not written to the pedal).',
     );
+  }
+
+  /** Ctrl/Cmd+V entry point; the effect menu passes an explicit index. */
+  function pasteSelectedBlock(): void {
+    if (!blockClipboard) {
+      setSaveNotice({
+        kind: 'info',
+        text: 'The effect clipboard is empty. Select an effect and press Ctrl+C (Cmd+C on a Mac) first.',
+      });
+      return;
+    }
+    if (selectedBlock === null) {
+      setSaveNotice({
+        kind: 'info',
+        text: 'Select an amp or effect slot, then press Ctrl+V to paste.',
+      });
+      return;
+    }
+    pasteBlockAt(selectedBlock);
   }
 
   /**
@@ -3668,6 +3711,17 @@ export default function App() {
 
         <div className="header-actions">
           <button
+            id="toggle-presets"
+            type="button"
+            className="toolbar-button presets-toggle"
+            aria-expanded={libraryOpen}
+            aria-controls="preset-librarian"
+            title="Show or hide the preset list"
+            onClick={() => setLibraryOpen((open) => !open)}
+          >
+            Presets
+          </button>
+          <button
             id="connect"
             type="button"
             className="toolbar-button"
@@ -3682,6 +3736,7 @@ export default function App() {
             }
             onClick={() => void (connected ? disconnect() : connect())}
           >
+            <span className="connect-dot" aria-hidden="true" />
             {connected ? 'Disconnect' : 'Connect'}
           </button>
 
@@ -3800,6 +3855,14 @@ export default function App() {
       )}
 
       <div className="workspace">
+        {libraryOpen && (
+          <button
+            type="button"
+            className="librarian-scrim"
+            aria-label="Close preset list"
+            onClick={() => setLibraryOpen(false)}
+          />
+        )}
         <PresetList
           setlists={setlists}
           activeSetlist={activeSetlist}
@@ -3807,10 +3870,15 @@ export default function App() {
           loadedSlot={loaded?.slot ?? null}
           canRead={connected && !busy}
           onSetlist={setActiveSetlist}
-          onOpenSlot={(setlist, entry) => openSlot(setlist, entry)}
+          onOpenSlot={(setlist, entry) => {
+            setLibraryOpen(false);
+            openSlot(setlist, entry);
+          }}
           onContextMenu={openPresetMenu}
           onMoveSlot={moveSlot}
           browserSlots={browserSlots}
+          open={libraryOpen}
+          onClose={() => setLibraryOpen(false)}
         />
 
         <section className="editor-pane">
@@ -3849,6 +3917,9 @@ export default function App() {
                 workingDoc ? toggleSnapshotParam : undefined
               }
               onSetBlockEnabled={workingDoc ? setBlockEnabled : undefined}
+              onCopyBlock={copyBlockAt}
+              onPasteBlock={pasteBlockAt}
+              canPasteBlock={blockClipboard !== null}
               canExport={canExport}
               onExport={exportWorkingPreset}
               canExportBackup={canExportBackup}

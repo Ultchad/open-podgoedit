@@ -6,6 +6,7 @@
 // list of twelve rows.
 
 import { useEffect, useRef } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { SNAPSHOT_LED_COLORS, snapshotLedColor } from '../snapshot';
 import type { SnapshotState } from '../types';
 
@@ -36,16 +37,31 @@ export default function SnapshotMenu({
   onClose,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
+    const previous =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const buttons = () =>
+      Array.from(
+        ref.current?.querySelectorAll<HTMLButtonElement>(
+          'button:not(:disabled)',
+        ) ?? [],
+      );
+    (buttons()[0] ?? ref.current)?.focus({ preventScroll: true });
+
     function onPointerDown(event: MouseEvent) {
       if (!ref.current?.contains(event.target as Node)) {
-        onClose();
+        closeRef.current();
       }
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
-        onClose();
+        event.preventDefault();
+        closeRef.current();
       }
     }
     window.addEventListener('mousedown', onPointerDown);
@@ -53,8 +69,40 @@ export default function SnapshotMenu({
     return () => {
       window.removeEventListener('mousedown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
+      previous?.focus({ preventScroll: true });
     };
-  }, [onClose]);
+  }, []);
+
+  function onMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    const buttons = Array.from(
+      ref.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ??
+        [],
+    );
+    if (buttons.length === 0) {
+      return;
+    }
+    const current = buttons.indexOf(
+      document.activeElement as HTMLButtonElement,
+    );
+    let next = current;
+    if (event.key === 'Home') {
+      next = 0;
+    } else if (event.key === 'End') {
+      next = buttons.length - 1;
+    } else if (event.key === 'ArrowDown') {
+      next = current < 0 ? 0 : (current + 1) % buttons.length;
+    } else if (event.key === 'ArrowUp') {
+      next =
+        current < 0
+          ? buttons.length - 1
+          : (current - 1 + buttons.length) % buttons.length;
+    }
+    buttons[next]?.focus();
+  }
 
   const left = Math.min(x, window.innerWidth - 250);
   const top = Math.min(y, Math.max(8, window.innerHeight - 250));
@@ -72,8 +120,10 @@ export default function SnapshotMenu({
       className="context-menu snapshot-menu"
       role="menu"
       aria-label={`Snapshot ${index + 1} actions`}
+      tabIndex={-1}
       style={{ left, top }}
       onContextMenu={(event) => event.preventDefault()}
+      onKeyDown={onMenuKeyDown}
     >
       <p className="snapshot-menu-title">{label}</p>
       <button

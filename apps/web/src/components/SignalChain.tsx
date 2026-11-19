@@ -1,17 +1,20 @@
 // Signal chain strip: ⊙ → 10 processing slots → →, modelled on the POD Go
 // Edit / openpodgo panel. Clicking selects a slot for the inspector. On an
 // offline preset, dragging a block onto another position reorders the chain
-// (a draft; nothing is written to the pedal).
+// (a draft; nothing is written to the pedal). Right-click or long-press opens
+// the same effect menu as the inspector's ⋯ button.
 //
 // Blocks are flat category-coloured tiles (the vendor icons are proprietary
 // artwork and are not shipped). Bypassed blocks are dimmed, the switch that
 // toggles them is written above the tile, and the selected slot gets the
 // caret that points at the inspector.
 
+import { useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 
 import { categoryColor, modelById, processingChain } from '../catalog';
 import type { ChainEntry, Selection } from '../types';
+import { useLongPress } from '../useLongPress';
 
 interface Props {
   chain: ChainEntry[];
@@ -21,6 +24,8 @@ interface Props {
   onSelect: (selection: Selection) => void;
   /** Reorder handler; absent when the preset cannot be edited here. */
   onMoveBlock?: (from: number, to: number) => void;
+  /** Open the effect actions menu for one processing slot. */
+  onBlockMenu?: (index: number, x: number, y: number) => void;
 }
 
 export default function SignalChain({
@@ -29,11 +34,41 @@ export default function SignalChain({
   selected,
   onSelect,
   onMoveBlock,
+  onBlockMenu,
 }: Props) {
   const processing = processingChain(chain);
+  const flowRef = useRef<HTMLDivElement>(null);
+
+  // Keep the selected tile visible when a selection comes from elsewhere
+  // (lifting a stored draft, keyboard move, …) without scrolling the page.
+  useEffect(() => {
+    if (typeof selected !== 'number') {
+      return;
+    }
+    const panel = flowRef.current?.closest('.chain-panel');
+    const tile = flowRef.current?.querySelector<HTMLElement>(
+      `[data-block-index="${selected}"]`,
+    );
+    if (!(panel instanceof HTMLElement) || !tile) {
+      return;
+    }
+    const panelRect = panel.getBoundingClientRect();
+    const tileRect = tile.getBoundingClientRect();
+    if (tileRect.left < panelRect.left || tileRect.right > panelRect.right) {
+      panel.scrollTo({
+        left: panel.scrollLeft + tileRect.left - panelRect.left - 12,
+        behavior: 'smooth',
+      });
+    }
+  }, [selected]);
 
   return (
-    <div className="signal-flow" role="toolbar" aria-label="Signal chain">
+    <div
+      ref={flowRef}
+      className="signal-flow"
+      role="toolbar"
+      aria-label="Signal chain"
+    >
       <div className="signal-line" aria-hidden="true" />
       <ChainEnd
         kind="input"
@@ -49,6 +84,7 @@ export default function SignalChain({
           selected={selected === index}
           onSelect={onSelect}
           onMoveBlock={onMoveBlock}
+          onBlockMenu={onBlockMenu}
           count={processing.length}
         />
       ))}
@@ -97,6 +133,7 @@ function BlockTile({
   selected,
   onSelect,
   onMoveBlock,
+  onBlockMenu,
   count,
 }: {
   entry: ChainEntry;
@@ -105,6 +142,7 @@ function BlockTile({
   selected: boolean;
   onSelect: (selection: Selection) => void;
   onMoveBlock?: (from: number, to: number) => void;
+  onBlockMenu?: (index: number, x: number, y: number) => void;
   count: number;
 }) {
   const model =
@@ -137,6 +175,10 @@ function BlockTile({
     ? { '--block-color': categoryColor(category) }
     : undefined;
   const movable = Boolean(onMoveBlock) && !empty;
+  const { longPressHandlers, consumeClick } = useLongPress(
+    (x, y) => onBlockMenu?.(index, x, y),
+    { enabled: Boolean(onBlockMenu) },
+  );
 
   return (
     <button
@@ -150,16 +192,18 @@ function BlockTile({
         .filter(Boolean)
         .join(' ')}
       style={style as CSSProperties | undefined}
+      data-block-index={index}
+      aria-haspopup={onBlockMenu ? 'menu' : undefined}
       title={
         empty
           ? entry.kind === 'empty'
-            ? 'Empty slot'
+            ? 'Empty slot — right-click or long-press for effect actions'
             : 'Unknown block class'
           : `${model?.name ?? label} — ${subtitle}${
               enabled ? '' : ' (bypassed)'
             }${assignment ? ` · ${assignment}` : ''}${
               movable ? ' · drag to reorder' : ''
-            }`
+            } · right-click or long-press for actions`
       }
       draggable={movable}
       onDragStart={(event) => {
@@ -188,7 +232,13 @@ function BlockTile({
           onMoveBlock(from, index);
         }
       }}
-      onClick={() => onSelect(index)}
+      {...longPressHandlers}
+      onClick={() => {
+        if (consumeClick()) {
+          return;
+        }
+        onSelect(index);
+      }}
     >
       <span className="block-assign">{assignment ?? ''}</span>
       <span className="block-face">

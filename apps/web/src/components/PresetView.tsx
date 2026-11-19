@@ -18,6 +18,7 @@ import {
 } from '../snapshot';
 import type { CatalogModel, PresetStructure, Selection } from '../types';
 import BlockInspector from './BlockInspector';
+import PresetMenu, { type PresetMenuEntry } from './PresetMenu';
 import SignalChain from './SignalChain';
 import SnapshotMenu from './SnapshotMenu';
 
@@ -61,6 +62,12 @@ interface Props {
   ) => void;
   /** Bypass or enable a block in the active snapshot. */
   onSetBlockEnabled?: (block: number, enabled: boolean) => void;
+  /** Copy one processing slot to the in-tab effect clipboard. */
+  onCopyBlock?: (index: number) => void;
+  /** Paste the effect clipboard into one processing slot. */
+  onPasteBlock?: (index: number) => void;
+  /** True when the effect clipboard holds something. */
+  canPasteBlock?: boolean;
   canExport: boolean;
   onExport: () => void;
   /** The working copy came from a `.pgb` backup that can be rebuilt. */
@@ -94,6 +101,9 @@ export default function PresetView({
   onSetSnapshotLedColor,
   onToggleSnapshotParam,
   onSetBlockEnabled,
+  onCopyBlock,
+  onPasteBlock,
+  canPasteBlock = false,
   canExport,
   onExport,
   canExportBackup,
@@ -112,6 +122,11 @@ export default function PresetView({
     y: number;
     index: number;
   } | null>(null);
+  const [blockMenu, setBlockMenu] = useState<{
+    x: number;
+    y: number;
+    index: number;
+  } | null>(null);
   const [longPressTimer, setLongPressTimer] = useState<number | null>(null);
 
   // Reset on a new preset, not on an edit: a parameter write replaces the
@@ -121,6 +136,7 @@ export default function PresetView({
     setSelected(firstSelection(processingChain(structure.chain)));
     setEditingSnapshot(null);
     setSnapshotMenu(null);
+    setBlockMenu(null);
   }, [presetKey]);
 
   // The page owns copy/paste shortcuts, so it needs the current selection.
@@ -189,6 +205,7 @@ export default function PresetView({
     if (!snapshotEditable) return;
     const timer = window.setTimeout(() => {
       const touch = event.touches[0];
+      setBlockMenu(null);
       setSnapshotMenu({ x: touch.clientX, y: touch.clientY, index });
     }, 500);
     setLongPressTimer(timer as unknown as number);
@@ -238,6 +255,74 @@ export default function PresetView({
     setEditingSnapshot(null);
     onRenameSnapshot?.(index, snapshotDraft.trim());
   }
+
+  /** Right-click, long-press or the inspector ⋯ button all land here. */
+  function openBlockMenu(index: number, x: number, y: number): void {
+    setSelected(index);
+    setSnapshotMenu(null);
+    setBlockMenu({ x, y, index });
+  }
+
+  const menuEntry = blockMenu ? (processing[blockMenu.index] ?? null) : null;
+  const menuEmpty =
+    !menuEntry || menuEntry.kind === 'empty' || menuEntry.kind === 'unknown';
+  const menuModel =
+    menuEntry && (menuEntry.kind === 'block' || menuEntry.kind === 'looper')
+      ? modelById(menuEntry.modelId)
+      : null;
+  const menuCopyable =
+    menuEntry?.kind === 'block' || menuEntry?.kind === 'looper';
+  const menuPasteable =
+    menuEntry?.kind === 'block' ||
+    menuEntry?.kind === 'looper' ||
+    menuEntry?.kind === 'empty';
+  const menuItems: PresetMenuEntry[] = blockMenu
+    ? [
+        {
+          id: 'block-menu-copy',
+          label: menuModel ? `Copy ${menuModel.display}` : 'Copy effect',
+          hint: 'Ctrl+C',
+          disabled: !onCopyBlock || !menuCopyable,
+          onSelect: () => onCopyBlock?.(blockMenu.index),
+        },
+        {
+          id: 'block-menu-paste',
+          label: 'Paste effect',
+          hint: 'Ctrl+V',
+          disabled: !onPasteBlock || !canPasteBlock || !menuPasteable,
+          onSelect: () => onPasteBlock?.(blockMenu.index),
+        },
+        'separator',
+        {
+          id: 'block-menu-move-left',
+          label: 'Move left',
+          disabled: !onMoveBlock || menuEmpty || blockMenu.index <= 0,
+          onSelect: () => onMoveBlock?.(blockMenu.index, blockMenu.index - 1),
+        },
+        {
+          id: 'block-menu-move-right',
+          label: 'Move right',
+          disabled:
+            !onMoveBlock ||
+            menuEmpty ||
+            blockMenu.index >= processing.length - 1,
+          onSelect: () => onMoveBlock?.(blockMenu.index, blockMenu.index + 1),
+        },
+        ...(onSetBlockEnabled && menuEntry?.kind === 'block'
+          ? ([
+              'separator',
+              {
+                id: 'block-menu-bypass',
+                label: menuEntry.enabled
+                  ? `Bypass in snapshot ${snapshotIndex + 1}`
+                  : `Enable in snapshot ${snapshotIndex + 1}`,
+                onSelect: () =>
+                  onSetBlockEnabled(blockMenu.index, !menuEntry.enabled),
+              },
+            ] as PresetMenuEntry[])
+          : []),
+      ]
+    : [];
 
   return (
     <div className="preset-view">
@@ -342,6 +427,7 @@ export default function PresetView({
                   }
                   event.preventDefault();
                   event.stopPropagation();
+                  setBlockMenu(null);
                   setSnapshotMenu({
                     x: event.clientX,
                     y: event.clientY,
@@ -487,6 +573,11 @@ export default function PresetView({
           selected={selected}
           onSelect={setSelected}
           onMoveBlock={onMoveBlock}
+          onBlockMenu={
+            onCopyBlock || onPasteBlock || onMoveBlock || onSetBlockEnabled
+              ? openBlockMenu
+              : undefined
+          }
         />
       </div>
 
@@ -514,6 +605,15 @@ export default function PresetView({
         onSetBlockEnabled={
           onSetBlockEnabled && blockIndex !== null
             ? (enabled) => onSetBlockEnabled(blockIndex, enabled)
+            : undefined
+        }
+        onOpenBlockMenu={
+          onCopyBlock || onPasteBlock || onMoveBlock || onSetBlockEnabled
+            ? (x, y) => {
+                if (blockIndex !== null) {
+                  openBlockMenu(blockIndex, x, y);
+                }
+              }
             : undefined
         }
       />
@@ -552,6 +652,16 @@ export default function PresetView({
           })}
         </span>
       </div>
+
+      {blockMenu && (
+        <PresetMenu
+          x={blockMenu.x}
+          y={blockMenu.y}
+          items={menuItems}
+          label="Effect actions"
+          onClose={() => setBlockMenu(null)}
+        />
+      )}
 
       {snapshotMenu && menuSnapshot && (
         <SnapshotMenu

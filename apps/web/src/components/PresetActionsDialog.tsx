@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { slotLabel } from '../catalog';
 import { MAX_PRESET_NAME_BYTES, validatePresetName } from '../presetName';
 import type { PresetStructure, SetlistEntry } from '../types';
+import { useDialog } from '../useDialog';
 
 const SETLIST_NAMES: Record<number, string> = { 0: 'Factory', 1: 'User' };
 const SLOT_COUNT = 128;
@@ -101,6 +102,7 @@ export default function PresetActionsDialog({
   const [destName, setDestName] = useState('');
   const [rename, setRename] = useState('');
   const [renameTouched, setRenameTouched] = useState(false);
+  const { dialogRef, onBackdropClick } = useDialog(open, onClose);
 
   const sourceSetlist =
     structure && (structure.preset.setlist === 0 || structure.preset.setlist === 1)
@@ -186,8 +188,10 @@ export default function PresetActionsDialog({
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={onBackdropClick}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal preset-actions"
         role="dialog"
         aria-modal="true"

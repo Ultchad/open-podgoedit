@@ -23,16 +23,26 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   background: #18191b;
+  padding-bottom: env(safe-area-inset-bottom);
+  overscroll-behavior-y: contain;
 }
 
 main.app {
   max-width: 1440px;
   margin: 0 auto;
-  padding: 1.1rem 1.25rem 2rem;
+  padding: max(1.1rem, env(safe-area-inset-top))
+    max(1.25rem, env(safe-area-inset-right))
+    calc(2rem + env(safe-area-inset-bottom))
+    max(1.25rem, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
@@ -252,6 +262,19 @@ button,
   font: inherit;
   font-size: 0.8rem;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* A single visible focus ring for keyboard users; mouse/touch clicks stay
+   clean because :focus-visible only matches keyboard focus. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
 }
 
 button:hover,
@@ -1344,6 +1367,19 @@ button.model-tile.is-blocked {
   cursor: not-allowed;
 }
 
+.connect-dot {
+  width: 8px;
+  height: 8px;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  flex: none;
+  background: #d9534f;
+}
+
+#connect[data-connected='true'] .connect-dot {
+  background: #3fb950;
+}
+
 .model-dot {
   width: 8px;
   height: 8px;
@@ -2156,5 +2192,404 @@ dl.save-backup-info dd {
   .header-actions > .edit-arm {
     grid-column: 1 / -1;
     justify-content: center;
+  }
+}
+
+/* --- touch, drawer and responsive polish --------------------------------- */
+
+.presets-toggle,
+.librarian-close,
+.librarian-scrim {
+  display: none;
+}
+
+.inspector-more {
+  min-width: 1.9rem;
+  min-height: 1.9rem;
+  margin-left: auto;
+  padding: 0.05rem 0.45rem;
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.18);
+  color: #fff;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.inspector-more + .inspector-slot {
+  margin-left: 0;
+}
+
+.inspector-more:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.chain-panel {
+  scroll-behavior: smooth;
+}
+
+.context-menu {
+  max-height: calc(100dvh - 1rem);
+  overflow-y: auto;
+}
+
+/* Blocks and rows are long-press targets: no text selection or callout. */
+.block-tile,
+.preset-item,
+.chain-end,
+.snapshot {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+@media (hover: none) {
+  /* Touch screens keep hover styling from sticking after a tap. */
+  button:hover:not(:disabled),
+  .file span:hover {
+    border-color: var(--line-strong);
+    background: var(--surface-3);
+  }
+
+  .preset-item:not(:disabled):hover {
+    background: transparent;
+  }
+
+  .preset-item.is-loaded:hover {
+    background: #2b2412;
+  }
+
+  .snapshot:hover:not(:disabled) {
+    border-color: transparent;
+    color: var(--text-dim);
+  }
+
+  .snapshot.is-active:hover {
+    border-color: var(--line-strong);
+    color: #fff;
+  }
+
+  .context-menu button:hover:not(:disabled),
+  .context-menu .snapshot-swatch:hover:not(:disabled) {
+    background: transparent;
+    color: var(--text-soft);
+  }
+
+  .context-menu .snapshot-swatch.is-active {
+    background: #2b2412;
+  }
+
+  .block-tile:hover,
+  .chain-end:hover {
+    background: transparent;
+  }
+
+  .inspector-tabs button:hover:not(:disabled),
+  .setlist-tabs button:hover:not(:disabled) {
+    background: transparent;
+  }
+
+  .inspector-tabs button.is-active:hover,
+  .setlist-tabs button.is-active:hover {
+    background: var(--surface-3);
+  }
+
+  .model-tile:hover:not(:disabled) {
+    border-color: var(--line);
+  }
+}
+
+@media (pointer: coarse) {
+  /* Finger-sized targets. The base controls are still compact on mouse
+     desktops, but every primary target is at least 44 px here. */
+  button,
+  .file span,
+  .toolbar-button,
+  .header-actions .toolbar-button {
+    min-height: 44px;
+  }
+
+  .github-link {
+    width: 44px;
+    height: 44px;
+  }
+
+  .preset-item {
+    min-height: 44px;
+    align-items: center;
+    padding-block: 0.5rem;
+    font-size: 0.88rem;
+  }
+
+  .preset-slot {
+    font-size: 0.8rem;
+  }
+
+  .setlist-tabs button {
+    min-height: 44px;
+  }
+
+  .snapshot {
+    min-height: 44px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.8rem;
+    max-width: 11rem;
+  }
+
+  .snapshot-input {
+    min-height: 40px;
+  }
+
+  .block-tile {
+    width: 78px;
+    min-height: 116px;
+  }
+
+  .block-face {
+    width: 74px;
+    height: 74px;
+  }
+
+  .block-assign {
+    height: 20px;
+    line-height: 20px;
+    font-size: 0.68rem;
+  }
+
+  .block-foot {
+    height: 18px;
+    line-height: 18px;
+    font-size: 0.62rem;
+    max-width: 74px;
+  }
+
+  .chain-end {
+    width: 60px;
+    min-height: 100px;
+  }
+
+  .chain-end-glyph {
+    height: 74px;
+    font-size: 1.7rem;
+  }
+
+  .chain-end-name {
+    height: 18px;
+    font-size: 0.68rem;
+  }
+
+  .signal-line {
+    top: 70px;
+  }
+
+  .inspector-tabs button {
+    min-height: 40px;
+    padding-inline: 0.7rem;
+  }
+
+  .inspector-more {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .modal-close,
+  .librarian-close,
+  .param-set,
+  .import-setlist-tab {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .snapshot-assign {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  button.param-value.is-editable {
+    min-height: 40px;
+    padding-inline: 0.6rem;
+  }
+
+  .param-track {
+    height: 14px;
+  }
+
+  .param-slider {
+    inset: -15px 0;
+    height: calc(100% + 30px);
+  }
+
+  .context-menu button {
+    min-height: 44px;
+    font-size: 0.86rem;
+  }
+
+  .context-menu .snapshot-swatch {
+    min-height: 40px;
+  }
+
+  .import-slot,
+  .backup-pick-list label {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 700px) {
+  main.app {
+    padding: max(0.7rem, env(safe-area-inset-top))
+      max(0.7rem, env(safe-area-inset-right))
+      calc(1.1rem + env(safe-area-inset-bottom))
+      max(0.7rem, env(safe-area-inset-left));
+    gap: 0.65rem;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  /* The librarian leaves the flow and becomes an off-canvas drawer; the
+     editor is the first thing on screen. */
+  .librarian {
+    position: fixed;
+    z-index: 30;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(88vw, 20rem);
+    max-height: none;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 0 12px 12px 0;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.55);
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+  }
+
+  .librarian.is-open {
+    transform: translateX(0);
+  }
+
+  .librarian-head {
+    gap: 0.5rem;
+  }
+
+  .librarian-close {
+    display: inline-flex;
+    margin-left: 0.25rem;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0.1rem 0.45rem;
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  .librarian-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    width: 100%;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: rgba(0, 0, 0, 0.58);
+  }
+
+  .presets-toggle {
+    display: inline-flex;
+  }
+
+  .preset-view {
+    padding: 0.4rem;
+  }
+
+  .editor-toolbar {
+    gap: 0.4rem;
+  }
+
+  .preset-title {
+    flex: 1 1 100%;
+  }
+
+  .editor-toolbar .snapshot-row {
+    order: 2;
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .snapshot {
+    flex: 0 0 auto;
+  }
+
+  .toolbar-right {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .toolbar-right .toolbar-button {
+    flex: 1 1 auto;
+  }
+
+  .toolbar-right .tempo {
+    margin-right: auto;
+  }
+
+  .editor-foot {
+    font-size: 0.62rem;
+  }
+
+  .inspector {
+    min-height: 320px;
+  }
+
+  .param-list {
+    max-height: none;
+  }
+
+  .modal {
+    max-height: calc(
+      100dvh - 1.5rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+    );
+  }
+
+  .modal-backdrop {
+    padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem
+      max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .save-fields {
+    grid-template-columns: 1fr;
+  }
+
+  /* 16 px inputs avoid the automatic zoom on iOS/Android. */
+  input:not([type='range']),
+  select,
+  textarea,
+  .snapshot-input,
+  .param-value-input,
+  .model-search {
+    font-size: 16px;
+  }
+}
+
+@media (display-mode: standalone) {
+  main.app {
+    padding-top: max(0.8rem, env(safe-area-inset-top));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .librarian {
+    transition: none;
+  }
+
+  .chain-panel {
+    scroll-behavior: auto;
   }
 }

@@ -10,6 +10,10 @@
 - A slot is the position in the setlist (program change number).
 - An index is the stable preset id; the two differ after reordering.
 - The browser shows slot and name; dirty state is planned.
+- On a phone the librarian is an off-canvas drawer: **Presets** in the header
+  opens it, and picking a slot closes it.
+- Right-click a block or a preset row for its actions menu. On touch, use a
+  long-press; the inspector's **⋯** button opens the same effect menu.
 
 ## 2. Reading from the device
 
