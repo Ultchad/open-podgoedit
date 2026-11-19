@@ -4046,8 +4046,9 @@ export default function App() {
 
           {!usbSupported && (
             <p className="inline-error">
-              USB access is not available on this platform. File reports remain
-              usable offline; Firefox and Safari cannot open the device.
+              WebUSB is not available, and this page runs outside the Android
+              app. File reports remain usable offline; Firefox and Safari
+              cannot open the device.
             </p>
           )}
 

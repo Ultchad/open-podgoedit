@@ -27,14 +27,14 @@ const source = join(repoRoot, 'apps', 'web', 'dist');
 const target = join(repoRoot, 'apps', 'android', 'app', 'src', 'main', 'assets', 'www');
 const checkOnly = process.argv.includes('--check');
 
-/** Every file below `dir`, as repo-relative-forward paths. */
-function listFiles(dir) {
+/** Every file below `dir`, as paths relative to `dir`. */
+function listFiles(dir, prefix = '') {
   if (!existsSync(dir)) {
     return [];
   }
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const full = join(dir, entry.name);
-    return entry.isDirectory() ? listFiles(full) : [relative(dir, full)];
+    const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? listFiles(join(dir, entry.name), name) : [name];
   });
 }
 

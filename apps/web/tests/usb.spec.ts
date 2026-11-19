@@ -887,6 +887,26 @@ function fakeWebUsb({
     value: fakeUsb,
     configurable: true,
   });
+
+  // Let another test drive the same pedal state through a different
+  // transport (the Android USB bridge): one request in, the reply or `null`
+  // out, both base64.
+  (window as unknown as {
+    __podgoFakeBridgeReply?: (requestBase64: string) => string | null;
+  }).__podgoFakeBridgeReply = (requestBase64: string) => {
+    const request = Uint8Array.from(atob(requestBase64), (char) =>
+      char.charCodeAt(0),
+    );
+    const response = responseFor(request);
+    if (!response) {
+      return null;
+    }
+    let binary = '';
+    for (const byte of response) {
+      binary += String.fromCharCode(byte);
+    }
+    return btoa(binary);
+  };
 }
 
 /**
@@ -1843,6 +1863,74 @@ test('keeps the write arm when switching presets', async ({ page }) => {
   // Re-reading the active preset keeps it too.
   await page.locator('#read-preset').click();
   await expect(page.locator('#arm-writes')).toBeChecked();
+});
+
+/**
+ * The Android shell exposes `window.podgoAndroidUsb` instead of WebUSB. The
+ * bridge methods are synchronous on purpose: they are served from a queue the
+ * fake pedal fills, like the native reader thread does.
+ */
+function fakeAndroidBridge(): void {
+  type Reply = (request: string) => string | null;
+  const reply = () =>
+    (window as unknown as { __podgoFakeBridgeReply?: Reply })
+      .__podgoFakeBridgeReply;
+  const inbox: string[] = [];
+  (window as unknown as { podgoAndroidUsb?: unknown }).podgoAndroidUsb = {
+    present: true,
+    open: () => 'POD Go (fake) (0x4247)',
+    close: () => undefined,
+    discard: () => {
+      inbox.length = 0;
+    },
+    write: (data: string) => {
+      const answer = reply()?.(data);
+      if (answer) {
+        // The pedal also pushes an event frame ahead of the reply; the
+        // bridge must skip it without losing the reply.
+        inbox.push(
+          btoa(String.fromCharCode(0x19, 0x0c, 0x00, 0x18, 0xf0, 0x03, 0x02, 0x10)),
+        );
+        inbox.push(answer);
+      }
+    },
+    read: () => (inbox.length > 0 ? inbox.shift()! : null),
+  };
+}
+
+test('reads a pedal through the Android USB bridge', async ({ page }) => {
+  const fixture = readFileSync(
+    new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'usb', { value: undefined, configurable: true });
+  });
+  await page.addInitScript(fakeAndroidBridge);
+  await page.addInitScript(fakeWebUsb, { fixture });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // No picker, and no WebUSB warning: the shell owns the USB permission.
+  await openDevTools(page);
+  await expect(page.locator('.device-card .inline-error')).toHaveCount(0);
+  await expect(page.locator('.device-card h2')).toContainText('Android USB host');
+
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  // The connection reads the setlists by itself, like a WebUSB connection.
+  const report = page.locator('.device-report .report');
+  await expect(report).toContainText('setlist:   128 entries');
+  await expect(report).toContainText('slot 127');
+
+  // A second read proves the transport keeps working request after request.
+  await page.locator('#read-user').click();
+  await expect(report).toContainText('slot 127');
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
 });
 
 test('copies a pedal slot from the right-click menu without opening it', async ({

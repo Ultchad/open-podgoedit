@@ -7,6 +7,15 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Android app with a USB host transport.** The Android build wraps the same
+  editor in a WebView that serves the bundle from the APK, so it works with no
+  network, and connects the pedal through Android's USB host instead of WebUSB.
+  Exports are written into the app's Downloads folder. The transport is covered
+  by browser tests against a fake bridge but is **not validated on Android
+  hardware**; reads and writes keep the same gates as the web build.
+- **Automated releases.** Pushing a `v*` tag builds the signed APK and the
+  static web bundle and publishes both on a GitHub Release, with the changelog
+  as release notes. See `docs/development/android.md`.
 - **Touch, keyboard and responsive editor shell.** Amp/effect blocks and
   preset rows open their actions menu with a right-click or a long-press; the
   inspector adds a ⋯ button with the same copy, paste, move and bypass

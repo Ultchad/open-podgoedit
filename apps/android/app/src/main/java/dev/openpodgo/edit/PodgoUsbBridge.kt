@@ -50,6 +50,9 @@ class PodgoUsbBridge(private val activity: MainActivity) {
     @Volatile private var reader: Thread? = null
     @Volatile private var running = AtomicBoolean(false)
 
+    /** Registered while a permission dialog is up; cleared on close. */
+    @Volatile private var permissionReceiver: BroadcastReceiver? = null
+
     /** Opens the first POD Go on the bus; returns `name (0xPID)`. */
     @JavascriptInterface
     @Synchronized
@@ -98,6 +101,8 @@ class PodgoUsbBridge(private val activity: MainActivity) {
         running.set(false)
         reader?.join(500)
         reader = null
+        permissionReceiver?.let { runCatching { activity.unregisterReceiver(it) } }
+        permissionReceiver = null
         interfaceClaimed?.let { usbInterface ->
             runCatching { connection?.releaseInterface(usbInterface) }
         }
@@ -246,17 +251,17 @@ class PodgoUsbBridge(private val activity: MainActivity) {
             Intent(ACTION_USB_PERMISSION).setPackage(activity.packageName),
             flags,
         )
+        require(permissionReceiver == null) { "a USB permission request is already pending" }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, received: Intent) {
-                if (received.action != ACTION_USB_PERMISSION) {
-                    return
+                if (received.action == ACTION_USB_PERMISSION) {
+                    permissionResult.complete(
+                        received.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false),
+                    )
                 }
-                context.unregisterReceiver(this)
-                permissionResult.complete(
-                    received.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false),
-                )
             }
         }
+        permissionReceiver = receiver
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             activity.registerReceiver(receiver, IntentFilter(ACTION_USB_PERMISSION), Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -268,6 +273,8 @@ class PodgoUsbBridge(private val activity: MainActivity) {
         val granted = runBlocking {
             withTimeoutOrNull(PERMISSION_WAIT_MS) { permissionResult.await() }
         }
+        permissionReceiver?.let { runCatching { activity.unregisterReceiver(it) } }
+        permissionReceiver = null
         if (granted != true && !usbManager.hasPermission(device)) {
             throw IllegalStateException("USB access was not granted.")
         }

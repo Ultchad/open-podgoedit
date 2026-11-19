@@ -29,6 +29,7 @@ import androidx.webkit.WebViewAssetLoader
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var usbBridge: PodgoUsbBridge
+    private lateinit var fileBridge: PodgoFileBridge
     private lateinit var assetLoader: WebViewAssetLoader
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -61,6 +62,8 @@ class MainActivity : ComponentActivity() {
 
         usbBridge = PodgoUsbBridge(this)
         webView.addJavascriptInterface(usbBridge, PodgoUsbBridge.JS_NAME)
+        fileBridge = PodgoFileBridge(this)
+        webView.addJavascriptInterface(fileBridge, PodgoFileBridge.JS_NAME)
         onUsbIntent(intent)
 
         // The page dismisses its own UI (the preset drawer) first; the app
@@ -94,8 +97,20 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         usbBridge.close()
         webView.removeJavascriptInterface(PodgoUsbBridge.JS_NAME)
+        webView.removeJavascriptInterface(PodgoFileBridge.JS_NAME)
         webView.destroy()
         super.onDestroy()
+    }
+
+    /** Shown after an export lands in the app's Downloads folder. */
+    fun notifySaved(path: String) {
+        runOnUiThread {
+            Toast.makeText(
+                this,
+                getString(R.string.saved_to, path),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     /** A POD Go plugged in while the app runs re-uses the granted permission. */

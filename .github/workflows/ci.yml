@@ -103,3 +103,57 @@ jobs:
           path: apps/web/test-results
           if-no-files-found: ignore
           retention-days: 7
+
+  android:
+    name: Android shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/web/wasm
+
+      # Must match the `wasm-bindgen` crate version in apps/web/wasm/Cargo.toml.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.130
+
+      - name: Install npm dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      # `npm run build` runs prebuild → wasm + fixtures → tsc + vite.
+      - name: Build web bundle
+        working-directory: apps/web
+        env:
+          VITE_BASE: ./
+        run: npm run build
+
+      - name: Copy bundle into the Android app
+        run: node apps/android/tools/sync-web-assets.mjs
+
+      - name: Verify the copied bundle is current
+        run: node apps/android/tools/sync-web-assets.mjs --check
+
+      # Unsigned on purpose: CI only proves the shell compiles and links.
+      - name: Assemble release APK
+        working-directory: apps/android
+        run: ./gradlew assembleRelease --no-daemon
