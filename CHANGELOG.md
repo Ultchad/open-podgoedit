@@ -7,6 +7,16 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Touch, keyboard and responsive editor shell.** Amp/effect blocks and
+  preset rows open their actions menu with a right-click or a long-press; the
+  inspector adds a ⋯ button with the same copy, paste, move and bypass
+  actions. On phones the librarian becomes an off-canvas drawer opened from
+  the header, the editor stays first, the toolbar wraps, and controls grow to
+  44 px with 16 px inputs to avoid mobile zoom. Dialogs now close on Escape or
+  a backdrop click and trap focus; menus support Arrow/Home/End keys. The
+  production build ships a web manifest, icons, an offline service worker,
+  safe-area theming and a warning before leaving with unsaved edits. Model
+  and preset writes are unchanged and remain unvalidated on hardware.
 - **Undo/redo and effect copy/paste shortcuts.** `Ctrl/Cmd+Z` undoes and
   `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` redoes edits to the loaded preset; the
   history is capped at 50 steps, lives only in the tab, and is cleared when

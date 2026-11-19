@@ -30,6 +30,17 @@ setlist depuis un POD Go branché en **WebUSB**.
   destination. Sur le preset actif du pédalier, **Save** envoie l'opération 40
   puis les paramètres copiés (op 30) ; hors ligne, seul le JSON est modifié.
   Les champs texte gardent leurs raccourcis natifs.
+- **Tactile et responsive** : un clic droit ou un appui long sur un bloc de la
+  chaîne (ou sur une ligne de preset) ouvre son menu d'actions ; l'inspecteur
+  ajoute un bouton ⋯ pour copier, coller, déplacer ou bypasser l'effet. Sur
+  téléphone, la bibliothèque devient un tiroir ouvert depuis l'en-tête,
+  l'éditeur passe en premier, la barre d'outils se replie et les cibles
+  tactiles font au moins 44 px (champs à 16 px pour éviter le zoom). Les
+  boîtes de dialogue se ferment avec Échap ou par le fond et piègent le focus ;
+  les menus se parcourent aux flèches. Le build de production fournit un
+  manifeste, des icônes et un service worker hors ligne, et prévient avant de
+  quitter avec des modifications non enregistrées. Les écritures vers le
+  pédalier sont inchangées et restent non validées sur matériel.
 - **Changement de modèle et ordre de la chaîne** : sur un preset hors ligne,
   l'onglet **Models** charge le modèle cliqué dans le bloc sélectionné (ou dans
   un emplacement vide) avec les valeurs par défaut du catalogue, puis exporte

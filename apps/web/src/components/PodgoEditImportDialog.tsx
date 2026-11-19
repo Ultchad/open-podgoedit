@@ -22,6 +22,7 @@ import {
   type EditSetlist,
 } from '../podgoEdit';
 import type { PresetStructure } from '../types';
+import { useDialog } from '../useDialog';
 
 interface Props {
   open: boolean;
@@ -86,6 +87,7 @@ export default function PodgoEditImportDialog({
   const [setlistIndex, setSetlistIndex] = useState(0);
   const [slot, setSlot] = useState<number | null>(null);
   const token = useRef(0);
+  const { dialogRef, onBackdropClick } = useDialog(open, onClose);
 
   useEffect(() => {
     if (!open) {
@@ -168,8 +170,10 @@ export default function PodgoEditImportDialog({
       : 0;
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={onBackdropClick}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal import-dialog"
         role="dialog"
         aria-modal="true"

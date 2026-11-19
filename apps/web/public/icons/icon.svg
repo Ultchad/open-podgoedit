@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="POD Go Editor">
+  <rect width="512" height="512" rx="96" fill="#18191b"/>
+  <path d="M96 256h320" stroke="#3a3f47" stroke-width="16" stroke-linecap="round"/>
+  <rect x="80" y="164" width="104" height="184" rx="28" fill="#f5a623"/>
+  <rect x="204" y="164" width="104" height="184" rx="28" fill="#7fc7e8"/>
+  <rect x="328" y="164" width="104" height="184" rx="28" fill="#56d364"/>
+  <g fill="#18191b" opacity="0.72">
+    <rect x="102" y="292" width="60" height="12" rx="6"/>
+    <rect x="226" y="292" width="60" height="12" rx="6"/>
+    <rect x="350" y="292" width="60" height="12" rx="6"/>
+  </g>
+</svg>
