@@ -8,7 +8,7 @@ LOG="$(mktemp -t podgo-tests.XXXXXX.log)"
 trap 'rm -f "$LOG"' EXIT
 
 cd "$ROOT/apps/web" || exit 2
-echo "Running Playwright tests from apps/web/tests (about 30 minutes)..."
+echo "Running Playwright tests from apps/web/tests (about 30 minutes)... (logfile: $LOG)"
 npx playwright test --reporter=line >"$LOG" 2>&1
 status=$?
 
