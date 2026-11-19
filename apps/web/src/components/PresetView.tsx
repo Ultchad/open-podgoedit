@@ -36,6 +36,13 @@ interface Props {
   onEditParam: (block: number, paramIndex: number, value: number) => void;
   /** Load a model into the selected block (may build an editable copy). */
   onSelectModel?: (index: number | null, model: CatalogModel) => void;
+  /** Report the selected chain position so page-level shortcuts know the target. */
+  onSelectionChange?: (selection: Selection) => void;
+  /** Bounded undo/redo for edits to this preset. */
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
   /** Create an editable offline copy of a pedal-read preset. */
   onEditCopy?: () => void;
   /** Reorder blocks by drag and drop; absent for read-only presets. */
@@ -75,6 +82,11 @@ export default function PresetView({
   editHint,
   onEditParam,
   onSelectModel,
+  onSelectionChange,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   onEditCopy,
   onMoveBlock,
   onSelectSnapshot,
@@ -110,6 +122,11 @@ export default function PresetView({
     setEditingSnapshot(null);
     setSnapshotMenu(null);
   }, [presetKey]);
+
+  // The page owns copy/paste shortcuts, so it needs the current selection.
+  useEffect(() => {
+    onSelectionChange?.(selected);
+  }, [selected, onSelectionChange]);
 
   const selectedEntry =
     selected === 'input'
@@ -384,6 +401,30 @@ export default function PresetView({
           <span className="tempo" title="Preset tempo">
             ♩ {structure.tempo !== null ? formatTempo(structure.tempo) : '—'}
           </span>
+          <div className="history-actions" role="group" aria-label="Edit history">
+            <button
+              id="undo-edit"
+              type="button"
+              className="toolbar-button"
+              disabled={!canUndo || busy}
+              title="Undo the last edit (Ctrl/Cmd+Z)"
+              aria-label="Undo"
+              onClick={onUndo}
+            >
+              ↶
+            </button>
+            <button
+              id="redo-edit"
+              type="button"
+              className="toolbar-button"
+              disabled={!canRedo || busy}
+              title="Redo the last undone edit (Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y)"
+              aria-label="Redo"
+              onClick={onRedo}
+            >
+              ↷
+            </button>
+          </div>
           {onEditCopy && (
             <button
               id="edit-copy"

@@ -1,8 +1,8 @@
 # Preset management
 
-> **Implementation status:** browsing and read-only preset loading are
-> available in the web app. Editing, dirty state, copy/paste and
-> synchronization are planned; writing is disabled in this milestone.
+> **Implementation status:** browsing, editing, bounded undo/redo, effect
+> copy/paste and offline export are implemented. Pedal writes are opt-in and
+> some paths remain unvalidated on hardware; see `docs/protocol/writes.md`.
 
 ## 1. Browsing
 
@@ -29,7 +29,11 @@
   `.pgp`; this build cannot write a preset body back to the pedal.
 - The chain view lets you enable/disable and reorder blocks where supported.
 - Parameter edits validate against the model definition's min/max.
-- Undo/redo is local and unlimited within the session (bounded by memory).
+- Undo/redo is local to the tab and keeps the **last 50 edits** for the loaded
+  preset. `Ctrl/Cmd+Z` undoes, `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` redoes; the
+  two arrows next to the tempo do the same. The history is cleared when another
+  preset is opened, after a successful **Save** or **Export**, and when
+  **Edit copy** creates a new document. It is not persisted across reloads.
 
 ## 4. Dirty state
 
@@ -39,9 +43,20 @@ explicit discard.
 
 ## 5. Copy, paste, duplicate, move, delete
 
+- **Copy an effect between presets:** select an amp or effect block, press
+  `Ctrl/Cmd+C`, open another preset, select the destination slot and press
+  `Ctrl/Cmd+V`. The in-tab effect clipboard carries the model and its parameter
+  values; bypass and snapshot assignments stay with the destination block. On
+  the active pedal preset, **Save** sends operation 40 and the copied parameter
+  drafts (op 30); on an offline copy it edits the JSON document. Input, Output
+  and empty slots cannot be the source, and the usual single-role rules
+  (one Amp, Cab, Wah, … per preset) still apply.
+- The **preset** clipboard (right-click **Copy** / **Paste**) is separate: it
+  moves whole slots in the librarian, not blocks inside a preset.
 - Duplicate creates a new local preset with a new id.
 - Move changes slot order locally; synchronization is a separate, explicit step.
-- Delete requires confirmation and is undoable until the app closes.
+- Delete is not implemented: there is no evidenced delete-slot operation in
+  this build.
 
 ## 6. Comparing presets
 
@@ -66,12 +81,16 @@ listed as opaque differences, not hidden.
 
 ## 9. Keyboard
 
-| Action | Shortcut (planned) |
+Implemented in the web app:
+
+| Action | Shortcut |
 |---|---|
-| Undo | Ctrl/Cmd+Z |
-| Redo | Ctrl/Cmd+Shift+Z |
-| Save | Ctrl/Cmd+S |
-| Duplicate | Ctrl/Cmd+D |
-| Delete | Delete |
-| Next preset | ↓ |
-| Previous preset | ↑ |
+| Undo | `Ctrl/Cmd+Z` |
+| Redo | `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` |
+| Save | `Ctrl/Cmd+S` |
+| Copy the selected effect | `Ctrl/Cmd+C` |
+| Paste the copied effect | `Ctrl/Cmd+V` |
+
+These shortcuts are ignored while a text field has focus, so typing and native
+text editing keep working. Planned but not implemented: duplicate (`Ctrl/Cmd+D`),
+delete (`Delete`), next/previous preset (`↓` / `↑`).
