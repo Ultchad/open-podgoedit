@@ -3736,8 +3736,8 @@ export default function App() {
             }
             onClick={() => void (connected ? disconnect() : connect())}
           >
-            <span className="connect-dot" aria-hidden="true" />
             {connected ? 'Disconnect' : 'Connect'}
+            <span className="connect-dot" aria-hidden="true" />            
           </button>
 
           {connected && (
@@ -3837,10 +3837,13 @@ export default function App() {
       </header>
 
       {!connected && (
+        // <p id="offline-notice" className="notice is-offline" role="status">
+        //   <strong>No POD Go connected.</strong> Factory names and one default
+        //   User preset are loaded so you can edit and export offline. Saving
+        //   needs the pedal; <strong>Export .pgp</strong> always works.
+        // </p>
         <p id="offline-notice" className="notice is-offline" role="status">
-          <strong>No POD Go connected.</strong> Factory names and one default
-          User preset are loaded so you can edit and export offline. Saving
-          needs the pedal; <strong>Export .pgp</strong> always works.
+          <strong>No POD Go connected.</strong> Export always works.
         </p>
       )}
 
