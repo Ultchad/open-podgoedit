@@ -121,7 +121,11 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # Install the platforms explicitly: the action's default package
+      # list includes `tools`, which newer SDK repositories no longer ship.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
 
       - uses: dtolnay/rust-toolchain@stable
         with:
