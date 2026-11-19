@@ -7,6 +7,17 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Undo/redo and effect copy/paste shortcuts.** `Ctrl/Cmd+Z` undoes and
+  `Ctrl/Cmd+Shift+Z` or `Ctrl/Cmd+Y` redoes edits to the loaded preset; the
+  history is capped at 50 steps, lives only in the tab, and is cleared when
+  another preset opens or after a successful Save/Export. Two arrow buttons
+  next to the tempo expose the same actions. `Ctrl/Cmd+C` copies the selected
+  amp/effect block and `Ctrl/Cmd+V` pastes it into the selected slot of another
+  preset: the model and its parameter values follow, while bypass state and
+  snapshot assignments stay with the destination block. On the active pedal
+  preset, Save sends operation 40 and the copied parameter drafts (op 30); on
+  an offline copy only the JSON document changes. Text fields keep their native
+  shortcuts.
 - **Model changes on a connected pedal (operation 40, unvalidated).** On the
   active preset read from the pedal, tapping a model now drafts the change on
   the pedal instead of building an offline copy: the block shows the new model

@@ -732,6 +732,18 @@ button:disabled:hover {
   gap: 0.45rem;
 }
 
+.history-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.history-actions .toolbar-button {
+  min-width: 1.9rem;
+  padding-inline: 0.35rem;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
 .tempo {
   color: var(--text-soft);
   font-size: 0.8rem;

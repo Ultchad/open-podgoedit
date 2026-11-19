@@ -19,6 +19,17 @@ setlist depuis un POD Go branché en **WebUSB**.
   RAM du pédalier demandent confirmation avant d'être abandonnés. Les valeurs
   ne partent vers le pédalier qu'avec **Save** ou **Ctrl+S**, après une seule
   confirmation (op 30, RAM seulement).
+- **Raccourcis d'édition et copie d'effet** : `Ctrl/Cmd+Z` annule et
+  `Ctrl/Cmd+Shift+Z` (ou `Ctrl/Cmd+Y`) rétablit, dans un historique borné à
+  **50 modifications** pour le preset chargé. Tout reste dans l'onglet :
+  l'historique n'est pas persisté et il est effacé au changement de preset,
+  après **Save**/**Export** ou à la création d'une copie éditable. `Ctrl/Cmd+C`
+  copie l'ampli ou l'effet sélectionné ; ouvrez un autre preset, choisissez un
+  emplacement puis `Ctrl/Cmd+V`. Le modèle et ses valeurs suivent, tandis que
+  l'état bypass et les affectations de snapshot restent sur le bloc de
+  destination. Sur le preset actif du pédalier, **Save** envoie l'opération 40
+  puis les paramètres copiés (op 30) ; hors ligne, seul le JSON est modifié.
+  Les champs texte gardent leurs raccourcis natifs.
 - **Changement de modèle et ordre de la chaîne** : sur un preset hors ligne,
   l'onglet **Models** charge le modèle cliqué dans le bloc sélectionné (ou dans
   un emplacement vide) avec les valeurs par défaut du catalogue, puis exporte
