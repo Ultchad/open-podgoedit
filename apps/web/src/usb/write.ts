@@ -10,7 +10,7 @@
 // (setlist, slot and name) to the pedal's User list.
 
 import { ModelWriteFlow, ParamWriteFlow, SavePresetFlow } from '../wasmClient';
-import { PodgoUsbError, type PodgoUsbConnection } from './podgoUsb';
+import { PodgoUsbError, type PodgoConnection } from './podgoUsb';
 
 /** The pedal often ignores the first write handshake after a read. */
 const MAX_WRITE_ATTEMPTS = 5;
@@ -94,7 +94,7 @@ function messageOf(error: unknown): string {
  * status, or no status frame arrives.
  */
 async function driveWriteFlow(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   makeFlow: () => WriteFlow,
   label: string,
   onProgress?: (message: string) => void,
@@ -210,7 +210,7 @@ async function driveWriteFlow(
  * Send one `set_param` command over the write channel.
  */
 export async function writeParam(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   request: ParamWriteRequest,
   onProgress?: (message: string) => void,
 ): Promise<WriteResult> {
@@ -244,7 +244,7 @@ export async function writeParam(
  * hardware in this repository.
  */
 export async function writeModel(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   request: ModelWriteRequest,
   onProgress?: (message: string) => void,
 ): Promise<WriteResult> {
@@ -270,7 +270,7 @@ export async function writeModel(
  * backup of the destination slot first.
  */
 export async function savePreset(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   request: SavePresetRequest,
   onProgress?: (message: string) => void,
 ): Promise<WriteResult> {

@@ -7,7 +7,7 @@
 
 import { ReadFlow } from '../wasmClient';
 import type { SetlistEntry } from '../types';
-import { PodgoUsbError, type PodgoUsbConnection } from './podgoUsb';
+import { PodgoUsbError, type PodgoConnection } from './podgoUsb';
 
 const MAX_HANDSHAKE_ATTEMPTS = 5;
 const BACKOFF_BASE_MS = 300;
@@ -53,7 +53,7 @@ function delay(ms: number): Promise<void> {
  * @param onProgress Optional status callback for the UI.
  */
 export async function readSetlist(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   setlist: SetlistKind,
   onProgress?: (message: string) => void,
 ): Promise<SetlistReadResult> {

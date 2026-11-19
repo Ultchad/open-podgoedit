@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the web manifest theme colour so there is no flash on start. -->
+    <color name="podgo_background">#18191b</color>
+</resources>

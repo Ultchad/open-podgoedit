@@ -7,7 +7,7 @@
 
 import { PresetFlow } from '../wasmClient';
 import type { PresetStructure } from '../types';
-import { PodgoUsbError, type PodgoUsbConnection } from './podgoUsb';
+import { PodgoUsbError, type PodgoConnection } from './podgoUsb';
 
 const MAX_HANDSHAKE_ATTEMPTS = 5;
 const BACKOFF_BASE_MS = 300;
@@ -50,7 +50,7 @@ function delay(ms: number): Promise<void> {
  * @param name Preset name for a slot read; empty to use object 23.
  */
 async function readPresetWith(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   makeFlow: () => PresetFlow,
   name: string,
   onProgress?: (message: string) => void,
@@ -171,7 +171,7 @@ async function readPresetWith(
  * @param fallbackName Name to show when object 23 could not be read.
  */
 export async function readActivePreset(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   onProgress?: (message: string) => void,
   fallbackName = '',
 ): Promise<PresetReadResult> {
@@ -207,7 +207,7 @@ export async function readActivePreset(
  * @param onProgress Optional status callback for the UI.
  */
 export function readPresetSlot(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   setlist: 0 | 1,
   slot: number,
   name: string,

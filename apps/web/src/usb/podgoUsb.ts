@@ -17,9 +17,9 @@ const MAX_QUEUED_PACKETS = 64;
 const EVENT_SRC = [0xf0, 0x03] as const;
 const EVENT_DST = [0x02, 0x10] as const;
 /** Response pair of the write channel: `0x03ED → 0x1080`. */
-const WRITE_RESPONSE = [0xed, 0x03, 0x80, 0x10] as const;
+export const WRITE_RESPONSE = [0xed, 0x03, 0x80, 0x10] as const;
 /** Response pair of the read channel: `0x03EF → 0x1001`. */
-const READ_RESPONSE = [0xef, 0x03, 0x01, 0x10] as const;
+export const READ_RESPONSE = [0xef, 0x03, 0x01, 0x10] as const;
 
 export class WebUsbUnavailableError extends Error {
   constructor() {
@@ -45,6 +45,23 @@ export class UsbTimeoutError extends PodgoUsbError {
   }
 }
 
+/**
+ * The transport surface WASM flows need, independent of the platform.
+ *
+ * `PodgoUsbConnection` (WebUSB) and `PodgoAndroidUsbConnection` (native USB
+ * host bridge) both implement it.
+ */
+export interface PodgoConnection {
+  /** The pedal this link is open to, for diagnostics. */
+  readonly info: PodgoDeviceInfo;
+  discard(): void | Promise<void>;
+  request(packet: Uint8Array, timeoutMs: number): Promise<Uint8Array>;
+  send(packet: Uint8Array): Promise<void>;
+  readWrite(timeoutMs: number): Promise<Uint8Array | null>;
+  readRead(timeoutMs: number): Promise<Uint8Array | null>;
+  close(): Promise<void>;
+}
+
 export interface PodgoDeviceInfo {
   productId: number;
   productName: string;
@@ -68,26 +85,31 @@ interface PendingRead {
   timer: ReturnType<typeof setTimeout>;
 }
 
-function toError(error: unknown): Error {
+export function toError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }
   return new Error(String(error));
 }
 
-function hex(value: number, width = 4): string {
+/** Lower-case hex with a `0x` prefix, padded to `width` digits. */
+export function hex(value: number, width = 4): string {
   return `0x${value.toString(16).padStart(width, '0')}`;
 }
 
 /** Expected response source/destination for one request. */
-function expectedChannel(packet: Uint8Array): number[] | null {
+export function expectedChannel(packet: Uint8Array): number[] | null {
   if (packet.length < 8) {
     return null;
   }
   return [packet[6], packet[7], packet[4], packet[5]];
 }
 
-function channelMatches(packet: Uint8Array, expected: number[] | null): boolean {
+/** True when `packet` carries the mirrored pair in `expected`. */
+export function channelMatches(
+  packet: Uint8Array,
+  expected: number[] | null,
+): boolean {
   if (!expected || packet.length < 8) {
     return true;
   }
@@ -100,7 +122,7 @@ function channelMatches(packet: Uint8Array, expected: number[] | null): boolean 
 }
 
 /** True for the event-channel frames the pedal pushes asynchronously. */
-function isEventChannel(packet: Uint8Array): boolean {
+export function isEventChannel(packet: Uint8Array): boolean {
   return (
     packet.length >= 8 &&
     packet[4] === EVENT_SRC[0] &&
@@ -147,7 +169,7 @@ function findBulkPair(configuration: USBConfiguration): BulkPair | null {
  * matched against the mirrored source/destination pair, so keepalives and
  * other channels are ignored instead of being mistaken for the response.
  */
-export class PodgoUsbConnection {
+export class PodgoUsbConnection implements PodgoConnection {
   private readonly queue: Uint8Array[] = [];
   private pending: PendingRead | null = null;
   private reading = true;

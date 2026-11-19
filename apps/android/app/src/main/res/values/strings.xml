@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">POD Go Editor</string>
+    <string name="usb_permission_rationale">Allow this app to talk to the connected POD Go? Reads are always available and every pedal write asks for confirmation.</string>
+    <string name="usb_permission_denied">USB access was not granted. The editor still works offline.</string>
+    <string name="link_unavailable">No app can open this link.</string>
+    <string name="save_failed">Could not save the file.</string>
+</resources>

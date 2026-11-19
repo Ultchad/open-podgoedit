@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
+import { readInputFile } from './androidFiles';
 import {
   BackupBuilder,
   coreVersion,
@@ -10,11 +11,17 @@ import {
   setlistEntries,
 } from './wasmClient';
 import {
-  PodgoUsbConnection,
   describeDevice,
   isUserCancellation,
   type PodgoDeviceInfo,
 } from './usb/podgoUsb';
+import {
+  connectToPickerResult,
+  requestPedal,
+  runningOnAndroidShell,
+  usbLinkSupported,
+  type PodgoConnection,
+} from './usb';
 import { readActivePreset, readPresetSlot } from './usb/preset';
 import { readSetlist, type SetlistKind } from './usb/setlist';
 import { createFullBackup, createSelectedBackup } from './usb/backup';
@@ -222,11 +229,33 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+/**
+ * Back-button hook the Android shell calls before leaving the page.
+ *
+ * Returns `true` when the page handled the press (e.g. it closed the preset
+ * drawer); `false` lets the shell close the app. Absent outside the shell.
+ */
+declare global {
+  interface Window {
+    __podgoBack?: () => boolean;
+  }
+}
+
 /** Lowercase space-separated hex, for the diagnostics log. */
 function frameHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
     ' ',
   );
+}
+
+/** Base64 encodes bytes for the Android save bridge. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+  }
+  return btoa(binary);
 }
 
 /** Trigger a browser download for a byte buffer. */
@@ -235,6 +264,14 @@ function downloadBytes(
   filename: string,
   type = 'application/octet-stream',
 ): void {
+  // A WebView cannot save a `blob:` link, so the Android shell writes the file
+  // into the app's Downloads folder instead. The native side reports success
+  // and failures itself, which is why nothing is returned here.
+  const androidSave = window.podgoAndroidFiles?.save;
+  if (androidSave) {
+    androidSave(filename, bytesToBase64(bytes)).catch(() => undefined);
+    return;
+  }
   const blob = new Blob([new Uint8Array(bytes)], { type });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -244,6 +281,18 @@ function downloadBytes(
   setTimeout(() => {
     URL.revokeObjectURL(url);
   }, 0);
+}
+
+declare global {
+  interface Window {
+    /** Native file save injected by the Android shell. */
+    podgoAndroidFiles?: {
+      /** Write `base64` as `name`; resolves to the stored path. */
+      save(name: string, base64: string): Promise<string>;
+      /** Read back a picked file; see `src/androidFiles.ts`. */
+      read(name: string): Promise<string>;
+    };
+  }
 }
 
 /** Lower-case SHA-256 hex digest of a buffer. */
@@ -263,7 +312,8 @@ export default function App() {
     setlist: EMPTY_PANEL,
   });
 
-  const [usbSupported] = useState(() => PodgoUsbConnection.isSupported());
+  const [usbSupported] = useState(() => usbLinkSupported());
+  const [androidShell] = useState(() => runningOnAndroidShell());
   const [deviceInfo, setDeviceInfo] = useState<PodgoDeviceInfo | null>(null);
   const [usbBusy, setUsbBusy] = useState<string | null>(null);
   const [usbError, setUsbError] = useState<string | null>(null);
@@ -390,7 +440,7 @@ export default function App() {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const connectionRef = useRef<PodgoUsbConnection | null>(null);
+  const connectionRef = useRef<PodgoConnection | null>(null);
 
   // Warn before leaving with edits that only exist in this tab.
   useEffect(() => {
@@ -418,6 +468,26 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [libraryOpen]);
+
+  // Bring the Android back button to the page so it closes whatever is open
+  // (the phone preset drawer here) instead of leaving the app mid-edit. The
+  // native side asks the page first and only navigates back when the page has
+  // nothing to dismiss.
+  useEffect(() => {
+    if (!androidShell) {
+      return;
+    }
+    window.__podgoBack = () => {
+      if (libraryOpen) {
+        setLibraryOpen(false);
+        return true;
+      }
+      return false;
+    };
+    return () => {
+      delete window.__podgoBack;
+    };
+  }, [androidShell, libraryOpen]);
 
   const run = useCallback(
     (kind: Kind, bytes: Uint8Array, source: string, setlist: SetlistKind = 1) => {
@@ -572,25 +642,27 @@ export default function App() {
   );
 
   async function onFile(kind: Kind, event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) {
+    const chosen = await readInputFile(event);
+    if (!chosen) {
       return;
     }
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    run(kind, bytes, file.name);
+    run(kind, chosen.bytes, chosen.name);
   }
 
   async function connect() {
     setUsbError(null);
     setDeviceReport(null);
-    setUsbBusy('Selecting the device…');
-    appendLog('Opening the WebUSB device picker…');
+    setUsbBusy(androidShell ? 'Opening the USB device…' : 'Selecting the device…');
+    appendLog(
+      androidShell
+        ? 'Opening the POD Go over Android USB host…'
+        : 'Opening the WebUSB device picker…',
+    );
     try {
-      const device = await PodgoUsbConnection.requestDevice();
+      const device = await requestPedal();
       setUsbBusy('Opening the vendor interface…');
       appendLog('Device selected; claiming the vendor interface…');
-      const connection = await PodgoUsbConnection.open(device);
+      const connection = await connectToPickerResult(device);
       connectionRef.current = connection;
       setDeviceInfo(connection.info);
       setSaveNotice(null);
@@ -621,7 +693,7 @@ export default function App() {
    * fails to read leaves the offline seed in place, and an active-preset read
    * that fails only logs. Unsaved pedal drafts are never discarded.
    */
-  async function loadFromPedalOnConnect(connection: PodgoUsbConnection) {
+  async function loadFromPedalOnConnect(connection: PodgoConnection) {
     for (const setlist of [0, 1] as const) {
       const label = SETLIST_LABELS[setlist];
       try {
@@ -1142,7 +1214,7 @@ export default function App() {
    * pedal's active preset. Drafts stay queued until operation 71 succeeds.
    */
   async function applyPendingDrafts(
-    connection: PodgoUsbConnection,
+    connection: PodgoConnection,
   ): Promise<{ models: number; params: number }> {
     const models = Object.values(pendingModels);
     const params = Object.values(pendingParams);
@@ -3732,7 +3804,9 @@ export default function App() {
             title={
               connected
                 ? 'Disconnect from this POD Go'
-                : 'Connect a POD Go over WebUSB'
+                : androidShell
+                  ? 'Connect a POD Go over Android USB host'
+                  : 'Connect a POD Go over WebUSB'
             }
             onClick={() => void (connected ? disconnect() : connect())}
           >
@@ -3952,10 +4026,14 @@ export default function App() {
         <section className="device-card">
           <div className="device-head">
             <div>
-              <h2>POD Go connection (WebUSB)</h2>
+              <h2>
+                POD Go connection (
+                {androidShell ? 'Android USB host' : 'WebUSB'})
+              </h2>
               <p className="hint">
-                Chrome or Edge, page served on <code>127.0.0.1</code>. Reads are
-                always available; each pedal write is confirmed.
+                {androidShell
+                  ? 'USB host within the Android app. Reads are always available; each pedal write is confirmed.'
+                  : 'Chrome or Edge, page served on 127.0.0.1. Reads are always available; each pedal write is confirmed.'}
               </p>
             </div>
             <DeviceBadge
@@ -3968,7 +4046,7 @@ export default function App() {
 
           {!usbSupported && (
             <p className="inline-error">
-              WebUSB is not available in this browser. File reports remain
+              USB access is not available on this platform. File reports remain
               usable offline; Firefox and Safari cannot open the device.
             </p>
           )}
