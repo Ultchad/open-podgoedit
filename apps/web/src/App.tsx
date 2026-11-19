@@ -32,6 +32,7 @@ import {
   modelById,
   modelDefaultParams,
   paramAt,
+  parseSlotLabel,
   slotLabel,
   wireIdOf,
 } from './catalog';
@@ -308,8 +309,8 @@ export default function App() {
   /** Sticky message under the header (no pedal, save unavailable, …). */
   const [saveNotice, setSaveNotice] = useState<Notice | null>(null);
   const [contextMenu, setContextMenu] = useState<{
-    kind: SetlistKind;
-    slot: number;
+    kind?: number;
+    slot?: number;
     x: number;
     y: number;
   } | null>(null);
@@ -2378,6 +2379,7 @@ export default function App() {
     setContextMenu({ kind, slot: entry.slot, x, y });
   }
 
+
   function menuItems(kind: SetlistKind, slot: number): PresetMenuEntry[] {
     const name = slotName(kind, slot);
     const isWorking =
@@ -2433,13 +2435,29 @@ export default function App() {
       },
       {
         id: 'menu-move',
-        label: 'Move here',
-        disabled:
-          kind === 0 ||
-          !clipboard ||
-          !clipboardDoc ||
-          (clipboard.setlist === 1 && clipboard.slot === slot),
-        onSelect: () => pasteSlot(1, slot, 'move'),
+        label: 'Move preset…',
+        disabled: kind === 0,
+        onSelect: () => {
+          const dest = prompt(
+            `Move preset to slot (e.g. ${slotLabel(slot)}, 01A…32D):`,
+            slotLabel(slot),
+          );
+          if (dest === null) {
+            return;
+          }
+          const target = parseSlotLabel(dest);
+          if (target === null) {
+            setSaveNotice({
+              kind: 'error',
+              text: `“${dest.trim()}” is not a slot. Use a label such as 01A, 12C or 32D.`,
+            });
+            return;
+          }
+          if (target === slot) {
+            return;
+          }
+          moveSlot(slot, target);
+        },
       },
       'separator',
       {
@@ -3138,9 +3156,12 @@ export default function App() {
     <main className="app">
       <header className="app-bar">
         <div className="brand">
-          <h1>
-            POD Go <span>Editor</span>
-          </h1>
+          <div className="brand-title">
+            <h1>
+              POD Go <span>Editor</span>
+            </h1>
+            <ModuleBadge module={module} />
+          </div>
           <p className="subtitle">
             Unofficial preset editor — Rust core in WebAssembly. Works offline;
             connect a pedal for live reads and writes.
@@ -3237,8 +3258,7 @@ export default function App() {
           >
             Import…
           </button>
-
-          <ModuleBadge module={module} />
+          
           <a
             className="github-link"
             href="https://github.com/Ultchad/open-podgoedit"
@@ -3516,7 +3536,7 @@ export default function App() {
         <PresetMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          items={menuItems(contextMenu.kind, contextMenu.slot)}
+          items={menuItems((contextMenu.kind ?? 0) as SetlistKind, contextMenu.slot ?? 0)}
           onClose={() => setContextMenu(null)}
         />
       )}
