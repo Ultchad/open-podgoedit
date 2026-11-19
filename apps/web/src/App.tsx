@@ -3736,6 +3736,7 @@ export default function App() {
             }
             onClick={() => void (connected ? disconnect() : connect())}
           >
+            <span className="connect-dot" aria-hidden="true" />
             {connected ? 'Disconnect' : 'Connect'}
           </button>
 

@@ -1367,6 +1367,18 @@ button.model-tile.is-blocked {
   cursor: not-allowed;
 }
 
+.connect-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: #d9534f;
+}
+
+#connect[data-connected='true'] .connect-dot {
+  background: #3fb950;
+}
+
 .model-dot {
   width: 8px;
   height: 8px;
