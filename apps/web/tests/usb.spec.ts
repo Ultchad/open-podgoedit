@@ -2111,4 +2111,103 @@ test.describe('editing a connected preset on a phone viewport', () => {
     expect(inner[98]).toBe(emptyIndex + 1);
     expect(errors).toEqual([]);
   });
+
+  test('pastes a copied effect on the active preset with op 40', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        errors.push(message.text());
+      }
+    });
+    page.on('pageerror', (error) => errors.push(error.message));
+
+    const fixture = readFileSync(
+      new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+    ).toString('base64');
+    const preset = readFileSync(
+      new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+    ).toString('base64');
+    await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+    await page.goto('/');
+    await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+    await openDevTools(page);
+    await page.locator('#connect').click();
+    await expect(page.locator('.device-card .badge')).toHaveText(
+      /POD Go \(fake\)/,
+    );
+    await page.locator('#arm-writes').check();
+
+    // Copy a block from the active preset, then paste it back into the same
+    // slot: the clipboard path is the same as copying between presets.
+    const index = await page.locator('.block-tile').evaluateAll((nodes) =>
+      nodes.findIndex(
+        (node) =>
+          !node.classList.contains('is-empty') &&
+          !node.querySelector('.block-foot')?.textContent?.includes('Input') &&
+          !node.querySelector('.block-foot')?.textContent?.includes('Output'),
+      ),
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    await page.locator('.block-tile').nth(index).tap();
+    await expect(page.locator('.block-tile').nth(index)).toHaveClass(
+      /is-selected/,
+    );
+    const model = await page.locator('.inspector-model').textContent();
+
+    await page.keyboard.press('Control+c');
+    await expect(page.locator('#save-notice')).toContainText(
+      `Copied ${model}`,
+    );
+    await page.keyboard.press('Control+v');
+    await expect(page.locator('#save-notice')).toContainText(
+      'then the copied parameter drafts (op 30)',
+    );
+    await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+
+    // Undo clears the queued op 40/op 30 drafts; redo restores them.
+    await page.keyboard.press('Control+z');
+    await expect(page.locator('#save-notice')).toContainText(
+      'Undid the effect paste',
+    );
+    await expect(page.locator('.readonly-chip')).not.toHaveText(
+      'unsaved changes',
+    );
+    await page.keyboard.press('Control+Shift+z');
+    await expect(page.locator('#save-notice')).toContainText(
+      'Redid the effect paste',
+    );
+    await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+
+    page.once('dialog', (dialog) => void dialog.accept());
+    await page.locator('#save-preset').tap();
+    await expect(page.locator('#save-notice')).toContainText(
+      /1 model\(s\) and \d+ parameter\(s\) saved/,
+    );
+
+    // Operation 40 first, then one op 30 per numeric parameter, then op 71.
+    const writes = await page.evaluate(
+      () =>
+        (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ??
+        [],
+    );
+    expect(writes.length).toBeGreaterThanOrEqual(3);
+    const readOp = (row: number[]) =>
+      (readMsgpack(new Uint8Array(row), 24).value as {
+        [key: number]: MsgValue;
+      })[100];
+    expect(readOp(writes[0])).toBe(40);
+    expect(readOp(writes[writes.length - 1])).toBe(71);
+    for (let row = 1; row < writes.length - 1; row += 1) {
+      expect(readOp(writes[row])).toBe(30);
+    }
+    const modelBody = readMsgpack(new Uint8Array(writes[0]), 24).value as {
+      [key: number]: MsgValue;
+    };
+    const inner = modelBody[101] as { [key: number]: MsgValue };
+    expect(inner[98]).toBe(index + 1);
+    expect(errors).toEqual([]);
+  });
 });

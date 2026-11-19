@@ -112,6 +112,101 @@ test('edits a draft with the slider and value field, then exports', async ({
   await expect(page.locator('.readonly-chip')).toHaveText('offline');
 });
 
+test('undoes and redoes parameter edits with the keyboard', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // One draft edit: Drive 4.0 → 4.1.
+  const slider = page.locator('#param-slider-0');
+  await expect(slider).toHaveValue('4');
+  await slider.focus();
+  await slider.press('ArrowRight');
+  await expect(page.locator('#param-value-0')).toHaveText('4.1');
+  await expect(page.locator('#undo-edit')).toBeEnabled();
+
+  // Ctrl/Cmd+Z restores the previous value; Shift+Z (and Ctrl+Y) redo it.
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('#param-value-0')).toHaveText('4.0');
+  await expect(page.locator('#save-notice')).toContainText('Undid the parameter edit');
+  await expect(page.locator('#redo-edit')).toBeEnabled();
+
+  await page.keyboard.press('Control+Shift+z');
+  await expect(page.locator('#param-value-0')).toHaveText('4.1');
+  await expect(page.locator('#save-notice')).toContainText('Redid the parameter edit');
+
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('#param-value-0')).toHaveText('4.0');
+  await page.keyboard.press('Control+y');
+  await expect(page.locator('#param-value-0')).toHaveText('4.1');
+
+  // The toolbar buttons use the same bounded history.
+  await page.locator('#undo-edit').click();
+  await expect(page.locator('#param-value-0')).toHaveText('4.0');
+  await page.locator('#redo-edit').click();
+  await expect(page.locator('#param-value-0')).toHaveText('4.1');
+
+  // Undo must also restore the offline document, not only the rendered
+  // structure: export after undoing the last edit writes the old value.
+  await page.keyboard.press('Control+z');
+  const download = page.waitForEvent('download');
+  await page.locator('#export-pgp').click();
+  const file = await download;
+  const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
+  expect(doc.data.tone.dsp0.block0.Drive).toBeCloseTo(0.4, 5);
+});
+
+test('copies an effect between presets with Ctrl+C and Ctrl+V', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // Put an effect in the first preset's third slot and tweak one value.
+  await page.locator('.block-tile').nth(2).click();
+  await page.locator('.category-row button', { hasText: 'Dist' }).click();
+  await page.locator('.model-search').fill('tube drive');
+  await page
+    .locator('button.model-tile', { hasText: 'Tube Drive' })
+    .first()
+    .click();
+  await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
+  await page.locator('#param-slider-0').focus();
+  await page.locator('#param-slider-0').press('ArrowRight');
+  const copiedValue = await page.locator('#param-value-0').textContent();
+  expect(copiedValue).not.toBe('0');
+
+  // Copy the effect, leave it in the in-tab clipboard, open another preset.
+  await page.keyboard.press('Control+c');
+  await expect(page.locator('#save-notice')).toContainText('Copied Tube Drive');
+
+  await page.locator('.preset-item').nth(1).click();
+  await expect(page.locator('.preset-title .preset-slot')).toHaveText('01B');
+  await page.locator('.block-tile').nth(2).click();
+  await expect(page.locator('.inspector-model')).toHaveText('Empty slot');
+
+  // Paste into the empty slot of the other preset.
+  await page.keyboard.press('Control+v');
+  await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
+  await expect(page.locator('#param-value-0')).toHaveText(copiedValue!);
+  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+
+  // Undo removes the pasted effect but keeps the offline preset open.
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.inspector-model')).toHaveText('Empty slot');
+  await expect(page.locator('.readonly-chip')).toHaveText('offline');
+  await page.keyboard.press('Control+Shift+z');
+  await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
+
+  // The exported document carries the copied model and value.
+  const download = page.waitForEvent('download');
+  await page.locator('#export-pgp').click();
+  const file = await download;
+  const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
+  expect(doc.data.tone.dsp0.block2['@model']).toBe('HD2_DM4TubeDrive');
+});
+
 test('keeps an offline draft when switching to another preset', async ({
   page,
 }) => {

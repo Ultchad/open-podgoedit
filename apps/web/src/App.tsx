@@ -24,7 +24,9 @@ import { savePreset, writeModel, writeParam } from './usb/write';
 import type {
   BackupVerify,
   CatalogModel,
+  ChainParamValue,
   PresetStructure,
+  Selection,
   SetlistEntry,
 } from './types';
 import {
@@ -151,6 +153,40 @@ interface PendingModel {
   label: string;
 }
 
+/** One effect copied from a preset, kept until it is pasted elsewhere. */
+interface BlockClipboard {
+  model: CatalogModel;
+  /** Parameter values positionally, in `model.params` order. */
+  params: ChainParamValue[];
+}
+
+/**
+ * One bounded undo step for the loaded preset.
+ *
+ * Only the state a user edit can change is kept. The history is cleared when
+ * another preset is opened, after a successful save/export and when an
+ * editable copy is created, so it never mixes documents.
+ */
+interface EditorSnapshot {
+  structure: PresetStructure | null;
+  workingDoc: EditPreset | null;
+  workingSlot: WorkingSlot | null;
+  pendingParams: Record<string, PendingParam>;
+  pendingModels: Record<string, PendingModel>;
+  dirty: boolean;
+  /** Clone of the working slot's offline document, when it had one. */
+  localDoc: EditPreset | null;
+  /** Key the clone belongs to (`setlist:slot`), or null without a slot. */
+  localDocKey: string | null;
+  /** Whether the working slot was flagged as an unsaved draft. */
+  slotDirty: boolean;
+  /** Short description shown by the undo/redo notice. */
+  label: string;
+}
+
+/** Steps kept per preset; older edits are dropped. */
+const HISTORY_LIMIT = 50;
+
 interface Notice {
   kind: 'error' | 'info';
   text: string;
@@ -252,6 +288,11 @@ export default function App() {
     [appendLog],
   );
 
+  /** Keep the shortcut target in step with the slot selected in PresetView. */
+  const handleSelectionChange = useCallback((selection: Selection) => {
+    setSelectedBlock(typeof selection === 'number' ? selection : null);
+  }, []);
+
   const [structure, setStructure] = useState<PresetStructure | null>(null);
   const [presetBlob, setPresetBlob] = useState<Uint8Array | null>(null);
   const [presetSource, setPresetSource] = useState('—');
@@ -306,6 +347,18 @@ export default function App() {
   const [pendingModels, setPendingModels] = useState<
     Record<string, PendingModel>
   >({});
+  /** Bounded undo/redo for edits to the loaded preset, kept in this tab. */
+  const historyRef = useRef<{
+    past: EditorSnapshot[];
+    future: EditorSnapshot[];
+  }>({ past: [], future: [] });
+  const [historyDepth, setHistoryDepth] = useState({ past: 0, future: 0 });
+  /** Effect copied with Ctrl/Cmd+C, ready to paste into another preset. */
+  const [blockClipboard, setBlockClipboard] = useState<BlockClipboard | null>(
+    null,
+  );
+  /** 0-based processing slot selected in the editor, reported by PresetView. */
+  const [selectedBlock, setSelectedBlock] = useState<number | null>(null);
   /** Sticky message under the header (no pedal, save unavailable, …). */
   const [saveNotice, setSaveNotice] = useState<Notice | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -369,6 +422,7 @@ export default function App() {
           setPendingParams({});
           setPendingModels({});
           setLoaded(null);
+          resetHistory();
           // A file or fixture is not the pedal's active preset: writes would
           // target a different sound, so disarm until the device is re-read.
           setActivePresetLoaded(false);
@@ -701,6 +755,7 @@ export default function App() {
     setPendingParams({});
     setPendingModels({});
     setSaveNotice(null);
+    resetHistory();
     setPanels((current) => ({
       ...current,
       preset: { source, text: result.report, error: null },
@@ -932,6 +987,7 @@ export default function App() {
       setPendingParams({});
       setPendingModels({});
       setDirty(false);
+      resetHistory();
       setFreshBackup(null);
       setSaveNotice({
         kind: 'info',
@@ -1283,6 +1339,149 @@ export default function App() {
     return setlists[setlist]?.[slot]?.name ?? '';
   }
 
+  // --- bounded undo/redo ---------------------------------------------------
+  // The stack lives in a ref so a key press never acts on stale state, while
+  // the depth state re-renders the toolbar buttons. Everything stays in this
+  // tab: no history is persisted and nothing is sent to the pedal by undo.
+
+  function syncHistoryDepth(): void {
+    setHistoryDepth({
+      past: historyRef.current.past.length,
+      future: historyRef.current.future.length,
+    });
+  }
+
+  function resetHistory(): void {
+    historyRef.current = { past: [], future: [] };
+    syncHistoryDepth();
+  }
+
+  /** Snapshot the current editor state, ready to be restored by Undo. */
+  function captureHistory(label: string): EditorSnapshot {
+    const key = workingSlot
+      ? localKey(workingSlot.setlist, workingSlot.slot)
+      : null;
+    return {
+      structure,
+      workingDoc: workingDoc ? clonePreset(workingDoc) : null,
+      workingSlot,
+      pendingParams: { ...pendingParams },
+      pendingModels: { ...pendingModels },
+      dirty,
+      localDoc: key && localDocs[key] ? clonePreset(localDocs[key]) : null,
+      localDocKey: key,
+      slotDirty: key ? Boolean(dirtySlots[key]) : false,
+      label,
+    };
+  }
+
+  function pushSnapshot(snapshot: EditorSnapshot): void {
+    const past = [...historyRef.current.past, snapshot];
+    if (past.length > HISTORY_LIMIT) {
+      past.splice(0, past.length - HISTORY_LIMIT);
+    }
+    historyRef.current = { past, future: [] };
+    syncHistoryDepth();
+  }
+
+  /** Record the state before an edit; call once, before mutating. */
+  function pushHistory(label: string): void {
+    pushSnapshot(captureHistory(label));
+  }
+
+  /**
+   * Apply one snapshot. `discardKey` removes the local document an undone
+   * action created (the snapshot itself had no working slot).
+   */
+  function restoreSnapshot(
+    snapshot: EditorSnapshot,
+    discardKey: string | null,
+  ): void {
+    setStructure(snapshot.structure);
+    setWorkingDoc(
+      snapshot.workingDoc ? clonePreset(snapshot.workingDoc) : null,
+    );
+    setWorkingSlot(snapshot.workingSlot);
+    setPendingParams(snapshot.pendingParams);
+    setPendingModels(snapshot.pendingModels);
+    setDirty(snapshot.dirty);
+
+    const key = snapshot.localDocKey;
+    if (key) {
+      setLocalDocs((current) => {
+        const next = { ...current };
+        if (snapshot.localDoc) {
+          next[key] = clonePreset(snapshot.localDoc);
+        } else {
+          delete next[key];
+        }
+        return next;
+      });
+      setDirtySlots((current) => {
+        const next = { ...current };
+        if (snapshot.slotDirty) {
+          next[key] = true;
+        } else {
+          delete next[key];
+        }
+        return next;
+      });
+    } else if (discardKey) {
+      setLocalDocs((current) => {
+        const next = { ...current };
+        delete next[discardKey];
+        return next;
+      });
+      setDirtySlots((current) => {
+        const next = { ...current };
+        delete next[discardKey];
+        return next;
+      });
+    }
+  }
+
+  function undoEdit(): void {
+    const { past, future } = historyRef.current;
+    if (past.length === 0) {
+      setSaveNotice({ kind: 'info', text: 'Nothing to undo.' });
+      return;
+    }
+    const snapshot = past[past.length - 1];
+    const currentKey = workingSlot
+      ? localKey(workingSlot.setlist, workingSlot.slot)
+      : null;
+    const current = captureHistory(snapshot.label);
+    historyRef.current = {
+      past: past.slice(0, -1),
+      future: [...future, current],
+    };
+    syncHistoryDepth();
+    restoreSnapshot(snapshot, currentKey);
+    setSaveNotice({ kind: 'info', text: `Undid ${snapshot.label}.` });
+    appendLog(`Undo: ${snapshot.label}.`);
+  }
+
+  function redoEdit(): void {
+    const { past, future } = historyRef.current;
+    if (future.length === 0) {
+      setSaveNotice({ kind: 'info', text: 'Nothing to redo.' });
+      return;
+    }
+    const snapshot = future[future.length - 1];
+    const currentKey = workingSlot
+      ? localKey(workingSlot.setlist, workingSlot.slot)
+      : null;
+    const current = captureHistory(snapshot.label);
+    historyRef.current = {
+      past: [...past, current],
+      future: future.slice(0, -1),
+    };
+    syncHistoryDepth();
+    restoreSnapshot(snapshot, currentKey);
+    setSaveNotice({ kind: 'info', text: `Redid ${snapshot.label}.` });
+    appendLog(`Redo: ${snapshot.label}.`);
+  }
+
   function updateSetlistName(
     setlist: SetlistKind,
     slot: number,
@@ -1362,6 +1561,7 @@ export default function App() {
     setActionsOpen(false);
     setImportOpen(false);
     setActionError(null);
+    resetHistory();
     appendLog(
       `Opened offline preset "${working.name || 'unnamed'}" at ${
         SETLIST_LABELS[setlist]
@@ -1504,6 +1704,16 @@ export default function App() {
     if (!param) {
       return;
     }
+    if (!workingDoc && !(activePresetLoaded && connected)) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'This preset is read-only. Open a User preset from the pedal, or ' +
+          'import/create an offline preset, then enable editing.',
+      });
+      return;
+    }
+    pushHistory('the parameter edit');
     if (workingDoc) {
       const snapshotIndex = structure?.currentSnapshot ?? 0;
       if (
@@ -1701,6 +1911,7 @@ export default function App() {
       const rawBlock = block + 1;
       const noSnapshotBypass =
         entry && entry.kind === 'block' ? entry.noSnapshotBypass : false;
+      pushHistory('the model change');
       setPendingModels((queued) => ({
         ...queued,
         [String(rawBlock)]: {
@@ -1738,6 +1949,7 @@ export default function App() {
     if (!doc) {
       return;
     }
+    pushHistory('the model change');
     setImportedModel(doc, block, model);
     const next = { ...doc };
     setWorkingDoc(next);
@@ -1778,6 +1990,7 @@ export default function App() {
     if (!workingDoc) {
       return;
     }
+    pushHistory('the block move');
     moveImportedBlock(workingDoc, from, to);
     const next = { ...workingDoc };
     setWorkingDoc(next);
@@ -1798,6 +2011,231 @@ export default function App() {
     );
   }
 
+  /** Copy the selected amp/effect block for pasting into another preset. */
+  function copySelectedBlock(): void {
+    if (!structure) {
+      return;
+    }
+    if (selectedBlock === null) {
+      setSaveNotice({
+        kind: 'info',
+        text: 'Select an amp or effect block to copy, then press Ctrl+C (Cmd+C on a Mac).',
+      });
+      return;
+    }
+    const entry = structure.chain.find(
+      (item) => item.slot === selectedBlock + 1,
+    );
+    if (!entry || (entry.kind !== 'block' && entry.kind !== 'looper')) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'Copy works on an amp, effect or looper block. Input and Output ' +
+          'are fixed stages.',
+      });
+      return;
+    }
+    const model = modelById(entry.modelId);
+    if (!model) {
+      setSaveNotice({
+        kind: 'error',
+        text: 'This block has no catalog model, so its effect cannot be copied.',
+      });
+      return;
+    }
+    setBlockClipboard({ model, params: [...entry.params] });
+    setSaveNotice({
+      kind: 'info',
+      text:
+        `Copied ${model.display}. Open another preset, select a block, ` +
+        'then press Ctrl+V (Cmd+V on a Mac).',
+    });
+    appendLog(
+      `Copied ${model.display} from block ${selectedBlock + 1} to the effect clipboard.`,
+    );
+  }
+
+  /**
+   * Paste the effect clipboard into the selected slot.
+   *
+   * The model and its parameter values are copied; bypass state and snapshot
+   * assignments stay with the destination block, because they belong to the
+   * preset rather than to the effect. Offline the change edits the JSON
+   * document; on the active pedal preset it queues operation 40 plus the
+   * parameter drafts (op 30), which Save applies before storing the preset.
+   */
+  function pasteSelectedBlock(): void {
+    const clip = blockClipboard;
+    if (!clip) {
+      setSaveNotice({
+        kind: 'info',
+        text: 'The effect clipboard is empty. Select an effect and press Ctrl+C (Cmd+C on a Mac) first.',
+      });
+      return;
+    }
+    if (!structure) {
+      return;
+    }
+    if (selectedBlock === null) {
+      setSaveNotice({
+        kind: 'info',
+        text: 'Select an amp or effect slot, then press Ctrl+V to paste.',
+      });
+      return;
+    }
+    const block = selectedBlock;
+    const entry = structure.chain.find((item) => item.slot === block + 1);
+    if (
+      !entry ||
+      (entry.kind !== 'block' &&
+        entry.kind !== 'looper' &&
+        entry.kind !== 'empty')
+    ) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'Paste needs an amp or effect slot. Input and Output are fixed ' +
+          'stages.',
+      });
+      return;
+    }
+    const current =
+      entry.kind === 'block' || entry.kind === 'looper'
+        ? modelById(entry.modelId)
+        : null;
+    if (!canSwapModel(current, clip.model, usedModelCategories(block + 1))) {
+      setSaveNotice({
+        kind: 'error',
+        text: `${clip.model.display} (${clip.model.category ?? 'model'}) cannot go in this slot.`,
+      });
+      return;
+    }
+    const rawBlock = block + 1;
+
+    // Pedal draft: op 40 loads the model, then op 30 applies each value.
+    if (!workingDoc && connected && activePresetLoaded) {
+      const wireId = wireIdOf(clip.model);
+      if (wireId === null) {
+        setSaveNotice({
+          kind: 'error',
+          text: `${clip.model.display} has no on-wire id; it cannot be sent to the pedal.`,
+        });
+        return;
+      }
+      const noSnapshotBypass =
+        entry.kind === 'block' ? entry.noSnapshotBypass : false;
+      pushHistory('the effect paste');
+      setPendingModels((queued) => ({
+        ...queued,
+        [String(rawBlock)]: {
+          block: rawBlock,
+          modelId: wireId,
+          noSnapshotBypass,
+          label: `block ${rawBlock} → ${clip.model.display}`,
+        },
+      }));
+      setPendingParams((queued) => {
+        const next = { ...queued };
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(`${rawBlock}:`)) {
+            delete next[key];
+          }
+        }
+        clip.model.params.forEach((param, index) => {
+          const value = clip.params[index];
+          if (typeof value !== 'number') {
+            return;
+          }
+          next[`${rawBlock}:${index}`] = {
+            block: rawBlock,
+            param: index,
+            value,
+            label: `${clip.model.display} · ${param.n} = ${value}`,
+          };
+        });
+        return next;
+      });
+      applyLocalModel(block, clip.model);
+      clip.model.params.forEach((_param, index) => {
+        const value = clip.params[index];
+        if (typeof value === 'number') {
+          applyLocalParam(rawBlock, index, value);
+        }
+      });
+      setDirty(true);
+      setSaveNotice({
+        kind: 'info',
+        text:
+          `Pasted ${clip.model.display} into block ${rawBlock}. Save sends ` +
+          'operation 40, then the copied parameter drafts (op 30), then stores the preset.',
+      });
+      appendLog(
+        `Draft: pasted ${clip.model.display} into block ${rawBlock} ` +
+          '(op 40 + copied parameters, not written yet).',
+      );
+      return;
+    }
+
+    // Offline document (or a pedal read-only preset converted on request).
+    const created = workingDoc ? null : createEditableCopy({ confirm: true });
+    if (!workingDoc && !created) {
+      return;
+    }
+    const doc = created?.doc ?? workingDoc;
+    if (!doc) {
+      return;
+    }
+    if (created) {
+      // Undo should keep the new editable copy and only revert the paste.
+      historyRef.current = { past: [], future: [] };
+      pushSnapshot({
+        structure: toneToStructure(created.doc),
+        workingDoc: clonePreset(created.doc),
+        workingSlot: { setlist: 1, slot: created.slot },
+        pendingParams: {},
+        pendingModels: {},
+        dirty: true,
+        localDoc: clonePreset(created.doc),
+        localDocKey: localKey(1, created.slot),
+        slotDirty: true,
+        label: 'the effect paste',
+      });
+    } else {
+      pushHistory('the effect paste');
+    }
+    setImportedModel(doc, block, clip.model);
+    clip.model.params.forEach((param, index) => {
+      const value = clip.params[index];
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        setImportedParam(doc, block, param.n, value);
+      }
+    });
+    const next = { ...doc };
+    setWorkingDoc(next);
+    setStructure(toneToStructure(next));
+    const slot = created?.slot ?? workingSlot?.slot ?? null;
+    if (slot !== null) {
+      const key = localKey(1, slot);
+      setLocalDocs((currentDocs) => ({
+        ...currentDocs,
+        [key]: clonePreset(next),
+      }));
+      markSlotDirty(key);
+    } else {
+      setDirty(true);
+    }
+    setSaveNotice({
+      kind: 'info',
+      text:
+        `Pasted ${clip.model.display} into block ${rawBlock} (draft, not ` +
+        'written to the pedal). Ctrl+Z undoes it.',
+    });
+    appendLog(
+      `Draft: pasted ${clip.model.display} into block ${rawBlock} ` +
+        '(offline JSON, not written to the pedal).',
+    );
+  }
+
   /**
    * Commit a snapshot-only change to the working copy.
    *
@@ -1806,10 +2244,15 @@ export default function App() {
    * and the local library are updated, Save writes them to the pedal and
    * Export writes them to a `.pgp`.
    */
-  function commitSnapshotDraft(changed: () => void, message: string): void {
+  function commitSnapshotDraft(
+    changed: () => void,
+    message: string,
+    historyLabel = 'the snapshot edit',
+  ): void {
     if (!workingDoc) {
       return;
     }
+    pushHistory(historyLabel);
     changed();
     const next = { ...workingDoc };
     setWorkingDoc(next);
@@ -1836,6 +2279,7 @@ export default function App() {
     commitSnapshotDraft(
       () => setImportedSnapshot(workingDoc, index),
       `Draft: active snapshot set to ${index + 1} (not written to the pedal).`,
+      'the snapshot change',
     );
   }
 
@@ -1854,6 +2298,7 @@ export default function App() {
       name
         ? `Draft: snapshot ${index + 1} renamed to "${name}" (not written).`
         : `Draft: snapshot ${index + 1} name cleared (not written).`,
+      'the snapshot rename',
     );
   }
 
@@ -1912,6 +2357,7 @@ export default function App() {
       assigned
         ? `Draft: ${param.n} now stores a value per snapshot (starting at ${String(value)}).`
         : `Draft: ${param.n} no longer changes with snapshots.`,
+      'the snapshot assignment',
     );
   }
 
@@ -1926,6 +2372,7 @@ export default function App() {
       `Draft: block ${block + 1} ${
         enabled ? 'enabled' : 'bypassed'
       } in snapshot ${index + 1} (not written).`,
+      'the bypass change',
     );
   }
 
@@ -1937,6 +2384,7 @@ export default function App() {
     commitSnapshotDraft(
       () => setImportedSnapshotLedColor(workingDoc, index, color),
       `Draft: snapshot ${index + 1} LED colour set to palette ${color} (not written).`,
+      'the LED colour change',
     );
   }
 
@@ -1964,6 +2412,7 @@ export default function App() {
       window.alert(error);
       return;
     }
+    pushHistory('the preset rename');
     setImportedName(preset, next);
     setWorkingDoc({ ...preset });
     setStructure((current) =>
@@ -2020,6 +2469,7 @@ export default function App() {
       clearSlotDirty(key);
     }
     setDirty(false);
+    resetHistory();
     setSaveNotice({ kind: 'info', text: 'Exported. The offline copy is up to date.' });
   }
 
@@ -2665,6 +3115,7 @@ export default function App() {
       setPendingParams({});
       setPendingModels({});
       setDirty(false);
+      resetHistory();
       applyLocalSave(slot, name);
       setFreshBackup(null);
       setSaveOpen(false);
@@ -3121,14 +3572,25 @@ export default function App() {
         : null;
   const saveBlockRef = useRef<string | null>(saveBlockReason);
   saveBlockRef.current = saveBlockReason;
+  const undoRef = useRef(undoEdit);
+  undoRef.current = undoEdit;
+  const redoRef = useRef(redoEdit);
+  redoRef.current = redoEdit;
+  const copyBlockRef = useRef(copySelectedBlock);
+  copyBlockRef.current = copySelectedBlock;
+  const pasteBlockRef = useRef(pasteSelectedBlock);
+  pasteBlockRef.current = pasteSelectedBlock;
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
         return;
       }
-      // Do not hijack Ctrl+S inside a text field; a focused slider or the
-      // Enable writing checkbox is not text entry, so Save still works.
+      const key = event.key.toLowerCase();
+
+      // Text fields keep their native shortcuts (undo the typed text, paste
+      // text, save the page). A focused slider or checkbox is not text entry,
+      // so the editor shortcuts still work there.
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
       const type = (target as HTMLInputElement | null)?.type;
@@ -3140,13 +3602,49 @@ export default function App() {
       if (typing) {
         return;
       }
-      event.preventDefault();
-      const reason = saveBlockRef.current;
-      if (reason) {
-        setSaveNotice({ kind: 'info', text: reason });
+
+      if (key === 's') {
+        event.preventDefault();
+        const reason = saveBlockRef.current;
+        if (reason) {
+          setSaveNotice({ kind: 'info', text: reason });
+          return;
+        }
+        void saveRef.current();
         return;
       }
-      void saveRef.current();
+
+      if (key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redoRef.current();
+        } else {
+          undoRef.current();
+        }
+        return;
+      }
+
+      if (key === 'y') {
+        event.preventDefault();
+        redoRef.current();
+        return;
+      }
+
+      if (key === 'c') {
+        // Leave a real text selection to the browser.
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && selection.toString()) {
+          return;
+        }
+        event.preventDefault();
+        copyBlockRef.current();
+        return;
+      }
+
+      if (key === 'v') {
+        event.preventDefault();
+        pasteBlockRef.current();
+      }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -3327,8 +3825,19 @@ export default function App() {
               editHint={editHint}
               onEditParam={editWorkingParam}
               onSelectModel={changeModel}
+              onSelectionChange={handleSelectionChange}
+              canUndo={historyDepth.past > 0}
+              canRedo={historyDepth.future > 0}
+              onUndo={undoEdit}
+              onRedo={redoEdit}
               onEditCopy={
-                workingDoc ? undefined : () => createEditableCopy()
+                workingDoc
+                  ? undefined
+                  : () => {
+                      if (createEditableCopy()) {
+                        resetHistory();
+                      }
+                    }
               }
               onMoveBlock={workingDoc ? moveBlock : undefined}
               onSelectSnapshot={workingDoc ? selectSnapshot : undefined}
