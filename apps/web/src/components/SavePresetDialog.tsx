@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { slotLabel } from '../catalog';
+import { useDialog } from '../useDialog';
 
 const MAX_NAME_BYTES = 16;
 const MAX_SLOTS = 128;
@@ -76,6 +77,7 @@ export default function SavePresetDialog({
   const [slotText, setSlotText] = useState('0');
   const [name, setName] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
+  const { dialogRef, onBackdropClick } = useDialog(open, onClose);
 
   // A new opening starts from the current preset's slot and name.
   useEffect(() => {
@@ -110,8 +112,10 @@ export default function SavePresetDialog({
     !backupBusy;
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={onBackdropClick}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal save-dialog"
         role="dialog"
         aria-modal="true"

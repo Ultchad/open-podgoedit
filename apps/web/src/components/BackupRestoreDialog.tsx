@@ -17,6 +17,7 @@ import { subsetBackup, verifyBackup } from '../wasmClient';
 import type { BackupVerify, SetlistEntry } from '../types';
 import type { BackupTarget } from '../usb/backup';
 import type { SetlistKind } from '../usb/setlist';
+import { useDialog } from '../useDialog';
 
 const SETLIST_NAMES: Record<number, string> = { 0: 'Factory', 1: 'User' };
 const MAX_DIFF_SLOTS = 6;
@@ -144,6 +145,7 @@ export default function BackupRestoreDialog({
   const [pickSetlist, setPickSetlist] = useState<SetlistKind>(1);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [restorePicked, setRestorePicked] = useState<Set<string>>(new Set());
+  const { dialogRef, onBackdropClick } = useDialog(open, onClose);
 
   // A new opening starts from a clean slate; the last backup lives in App.
   useEffect(() => {
@@ -257,8 +259,10 @@ export default function BackupRestoreDialog({
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={onBackdropClick}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="modal backup-dialog"
         role="dialog"
         aria-modal="true"

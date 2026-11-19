@@ -68,6 +68,8 @@ interface Props {
   onToggleSnapshotParam?: (paramIndex: number, assigned: boolean) => void;
   /** Bypass or enable this block in the active snapshot. */
   onSetBlockEnabled?: (enabled: boolean) => void;
+  /** Open the effect actions menu at a viewport position. */
+  onOpenBlockMenu?: (x: number, y: number) => void;
 }
 
 export default function BlockInspector({
@@ -83,6 +85,7 @@ export default function BlockInspector({
   snapshotValues,
   onToggleSnapshotParam,
   onSetBlockEnabled,
+  onOpenBlockMenu,
 }: Props) {
   const [mode, setMode] = useState<Mode>('params');
 
@@ -182,6 +185,21 @@ export default function BlockInspector({
               {enabled ? 'active' : 'bypassed'}
             </span>
           ))}
+        {onOpenBlockMenu && index !== null && (
+          <button
+            type="button"
+            className="inspector-more"
+            aria-haspopup="menu"
+            aria-label="Effect actions"
+            title="Effect actions — copy, paste, move, bypass"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              onOpenBlockMenu(rect.right - 8, rect.bottom + 6);
+            }}
+          >
+            ⋯
+          </button>
+        )}
         {index !== null && entry?.kind === 'block' && (
           <span className="inspector-slot">slot {index + 1}</span>
         )}
