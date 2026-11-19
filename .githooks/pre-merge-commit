@@ -1,0 +1,29 @@
+#!/bin/sh
+# Block merges into dev (or any branch) when the web build fails.
+#
+# A black screen once shipped because App.tsx had TypeScript/syntax errors
+# that only surfaced at `npm run build`. This hook runs the same production
+# build (tsc + vite) before the merge commit is created and aborts on failure.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+
+set -e
+
+# Only the web app lives under apps/web; skip if it is absent.
+if [ ! -d apps/web ]; then
+    exit 0
+fi
+
+echo "pre-merge-commit: building the web app (npm run build)…"
+if ! ( cd apps/web && npm run build >/tmp/podgo-web-build.log 2>&1 ); then
+    echo ""
+    echo "pre-merge-commit: BUILD FAILED — merge aborted." >&2
+    echo "Last lines of npm run build:" >&2
+    tail -n 40 /tmp/podgo-web-build.log >&2
+    echo "" >&2
+    echo "Fix the errors and retry the merge." >&2
+    exit 1
+fi
+
+echo "pre-merge-commit: web build OK."
+exit 0

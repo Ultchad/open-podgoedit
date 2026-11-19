@@ -5,8 +5,10 @@
 // - offline, User slots open the in-page copy (or create a new preset);
 // - connected, slots read their body over WebUSB without recalling it.
 //
-// Every slot has a right-click menu, and User presets can be dragged onto
-// another slot to move them in the local setlist.
+// Every slot has a right-click menu (or long-press on touch); "Move preset…"
+// in that menu swaps with another slot, so no drag gesture is needed.
+
+import { Fragment } from 'react';
 
 import { slotLabel } from '../catalog';
 import type { SetlistEntry } from '../types';
@@ -29,7 +31,7 @@ export interface PresetListProps {
   onSetlist: (kind: 0 | 1) => void;
   /** Open one slot (read from the pedal or open the local copy). */
   onOpenSlot: (kind: 0 | 1, entry: SetlistEntry) => void;
-  /** Right-click or long-press on a slot. */
+  /** Right-click on a slot. */
   onContextMenu: (
     kind: 0 | 1,
     entry: SetlistEntry,
@@ -98,21 +100,28 @@ export default function PresetList({
           role="listbox"
           aria-label={`${NAMES[activeSetlist]} presets`}
         >
-          {entries.map((entry) => {
+          {entries.map((entry, position) => {
             const loaded =
               loadedSetlist === activeSetlist && entry.slot === loadedSlot;
             const empty = !entry.name;
             const browser = browserSlots.has(
               `${activeSetlist}:${entry.slot}`,
             );
+            // A subtle rule between banks (01A…01D | 02A…): the pedal groups
+            // four slots per bank, so the list mirrors that rhythm.
+            const newBank = position > 0 && entry.slot % 4 === 0;
             return (
+              <Fragment key={entry.slot}>
+              {newBank && (
+                <div className="preset-bank-divider" aria-hidden="true" />
+              )}
               <button
                 type="button"
                 key={entry.slot}
                 role="option"
                 data-slot={entry.slot}
                 aria-selected={loaded}
-                draggable={user && !empty}
+
                 className={[
                   'preset-item',
                   loaded ? 'is-loaded' : '',
@@ -181,6 +190,7 @@ export default function PresetList({
                   {entry.name || (user ? 'Empty' : '—')}
                 </span>
               </button>
+              </Fragment>
             );
           })}
         </div>
