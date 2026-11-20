@@ -116,6 +116,16 @@ semantic versioning once it reaches 1.0.
 - **Connecting loads the pedal.** Both setlists and the active preset are read
   automatically, so the editor is usable without pressing Read first.
 
+### Security
+- **Release signing secrets no longer leak into public workflow logs.** The
+  v0.2.0 and v0.3.0 release runs exported `PODGO_SIGNING_STORE_PASSWORD` and
+  `PODGO_SIGNING_KEY_PASSWORD` through `GITHUB_ENV`, so GitHub printed them in
+  each later step's environment. The keystore password is now masked and passed
+  to Gradle through a properties file read via `PODGO_SIGNING_PROPERTIES`.
+  Rotate the keystore password (and update the repository secret) because the
+  old value is public. The key itself was never exposed: the keystore file only
+  exists inside the runner.
+
 ### Changed
 - **Android application ID now matches GitHub.** The installed package is
   `io.github.ultchad.openpodgoedit` (hyphens are not valid in an Android
