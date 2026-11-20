@@ -103,26 +103,67 @@ jobs:
       - name: Copy bundle into the Android app
         run: node apps/android/tools/sync-web-assets.mjs
 
-      - name: Signing keystore
+      # Two accepted shapes:
+      #   1. one secret, ANDROID_KEYSTORE, holding the whole key=value file
+      #      (PODGO_KEYSTORE_BASE64=…, PODGO_KEYSTORE_PASSWORD=…, …);
+      #   2. the four PODGO_* secrets set individually.
+      # A keystore that does not open with the given password fails here, so a
+      # broken secret can never produce a silent unsigned release by accident.
+      - name: Prepare signing
         id: keystore
         env:
+          BUNDLE: ${{ secrets.ANDROID_KEYSTORE }}
           KEYSTORE_BASE64: ${{ secrets.PODGO_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.PODGO_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PODGO_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PODGO_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/podgo-release.jks"
-            echo "file=$RUNNER_TEMP/podgo-release.jks" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::PODGO_KEYSTORE_BASE64 is not set; the APK will be unsigned."
+          set -euo pipefail
+          if [ -n "${BUNDLE:-}" ]; then
+            printf '%s\n' "$BUNDLE" > "$RUNNER_TEMP/keystore.env"
+            set -a
+            # shellcheck disable=SC1090
+            . "$RUNNER_TEMP/keystore.env"
+            set +a
+            KEYSTORE_BASE64="${PODGO_KEYSTORE_BASE64:-}"
+            KEYSTORE_PASSWORD="${PODGO_KEYSTORE_PASSWORD:-}"
+            KEY_ALIAS="${PODGO_KEY_ALIAS:-}"
+            KEY_PASSWORD="${PODGO_KEY_PASSWORD:-}"
           fi
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::warning::No signing secrets found; the APK will be unsigned."
+            exit 0
+          fi
+          missing=""
+          [ -n "${KEYSTORE_PASSWORD:-}" ] || missing="PODGO_KEYSTORE_PASSWORD"
+          [ -n "${KEY_ALIAS:-}" ] || missing="${missing:+$missing, }PODGO_KEY_ALIAS"
+          [ -n "${KEY_PASSWORD:-}" ] || missing="${missing:+$missing, }PODGO_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::ANDROID_KEYSTORE is incomplete; missing: $missing"
+            exit 1
+          fi
+
+          keystore="$RUNNER_TEMP/podgo-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          if ! keytool -list -keystore "$keystore" \
+              -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::The keystore does not open with these credentials (wrong password, alias or base64)."
+            exit 1
+          fi
+          {
+            echo "file=$keystore"
+            echo "PODGO_SIGNING_STORE_FILE=$keystore"
+            echo "PODGO_SIGNING_STORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "PODGO_SIGNING_KEY_ALIAS=$KEY_ALIAS"
+            echo "PODGO_SIGNING_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "file=$keystore" >> "$GITHUB_OUTPUT"
+          echo "Signing with alias '$KEY_ALIAS'."
 
       - name: Build release APK
         working-directory: apps/android
         env:
           PODGO_VERSION_NAME: ${{ steps.version.outputs.version }}
-          PODGO_SIGNING_STORE_FILE: ${{ steps.keystore.outputs.file }}
-          PODGO_SIGNING_STORE_PASSWORD: ${{ secrets.PODGO_KEYSTORE_PASSWORD }}
-          PODGO_SIGNING_KEY_ALIAS: ${{ secrets.PODGO_KEY_ALIAS }}
-          PODGO_SIGNING_KEY_PASSWORD: ${{ secrets.PODGO_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon

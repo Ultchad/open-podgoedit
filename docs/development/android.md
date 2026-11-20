@@ -62,7 +62,19 @@ Without the signing variables the APK is unsigned but installable with
 
 ## Signing
 
-The release workflow signs the APK when these repository secrets exist:
+The release workflow accepts either shape of repository secret:
+
+**One secret** — simplest. Name it `ANDROID_KEYSTORE` and paste the contents of
+a `key=value` file:
+
+```
+PODGO_KEYSTORE_BASE64=<base64 -w0 podgo-release.jks>
+PODGO_KEYSTORE_PASSWORD=<keystore password>
+PODGO_KEY_ALIAS=podgo
+PODGO_KEY_PASSWORD=<key password>
+```
+
+**Four secrets** — the same values set individually:
 
 | Secret | Value |
 |---|---|
@@ -71,8 +83,18 @@ The release workflow signs the APK when these repository secrets exist:
 | `PODGO_KEY_ALIAS` | key alias |
 | `PODGO_KEY_PASSWORD` | key password |
 
-Create the keystore once and keep it out of the repository
-(`apps/android/.gitignore` already excludes `*.jks` and `*.keystore`):
+The `Prepare signing` step decodes the keystore, opens it with `keytool` using
+those credentials, and exports `PODGO_SIGNING_*` for Gradle. A wrong password,
+alias or truncated base64 fails the run with `::error::`, so a broken secret
+cannot silently produce an unsigned release; only the complete absence of
+signing secrets falls back to an unsigned APK, with a warning.
+
+The base64 value must stay on one line. If you build the `key=value` file by
+hand, no quoting is needed — values must not contain spaces or quotes.
+
+Create the keystore once and keep it out of the repository (the root
+`.gitignore` and `apps/android/.gitignore` both exclude `*.jks`, `*.keystore`
+and `podgo-secrets.env`):
 
 ```sh
 keytool -genkeypair -v -keystore podgo-release.jks -alias podgo \
