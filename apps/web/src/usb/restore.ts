@@ -12,7 +12,7 @@
 // yet; see `docs/protocol/writes.md`.
 
 import { RestoreFlow } from '../wasmClient';
-import { PodgoUsbError, type PodgoUsbConnection } from './podgoUsb';
+import { PodgoUsbError, type PodgoConnection } from './podgoUsb';
 
 /** The pedal may ignore the first preamble after a read session. */
 const MAX_PREAMBLE_ATTEMPTS = 5;
@@ -78,7 +78,7 @@ function labelOf(json: string): {
  * @param onProgress Optional status callback for the UI and the log.
  */
 export async function restoreFullBackup(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   bytes: Uint8Array,
   onProgress?: (progress: RestoreProgress) => void,
 ): Promise<RestoreResult> {

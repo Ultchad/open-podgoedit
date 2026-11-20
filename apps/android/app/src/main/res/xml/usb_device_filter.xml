@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Line 6 POD Go and POD Go Wireless (vendor 0x0e41). -->
+<resources>
+    <usb-device vendor-id="3649" product-id="16967" />
+    <usb-device vendor-id="3649" product-id="16971" />
+</resources>

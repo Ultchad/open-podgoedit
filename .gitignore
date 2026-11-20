@@ -381,3 +381,9 @@ reverse/
 Thumbs.db
 *.swp
 
+# Release signing material: never commit a keystore or its passwords.
+*.jks
+*.keystore
+keystore.properties
+podgo-secrets.env
+

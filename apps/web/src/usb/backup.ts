@@ -16,7 +16,7 @@ import type {
   BackupVerify,
   SetlistEntry,
 } from '../types';
-import type { PodgoUsbConnection } from './podgoUsb';
+import type { PodgoConnection } from './podgoUsb';
 import { readPresetSlot } from './preset';
 import { readSetlist, type SetlistKind } from './setlist';
 
@@ -68,7 +68,7 @@ function emptyEntry(
  * backup rather than produce a partial file.
  */
 async function collectSlots(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   setlist: SetlistKind,
   slots: ReadonlySet<number> | null,
   builder: BackupBuilder,
@@ -134,7 +134,7 @@ async function collectSlots(
 }
 
 async function buildBackup(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   targets: BackupTarget[] | null,
   onProgress?: (message: string) => void,
 ): Promise<FullBackupResult> {
@@ -207,7 +207,7 @@ async function buildBackup(
  * @param onProgress Optional status callback for the UI and the log.
  */
 export async function createFullBackup(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   onProgress?: (message: string) => void,
 ): Promise<FullBackupResult> {
   return buildBackup(device, null, onProgress);
@@ -225,7 +225,7 @@ export async function createFullBackup(
  * @param onProgress Optional status callback for the UI and the log.
  */
 export async function createSelectedBackup(
-  device: PodgoUsbConnection,
+  device: PodgoConnection,
   targets: BackupTarget[],
   onProgress?: (message: string) => void,
 ): Promise<FullBackupResult> {

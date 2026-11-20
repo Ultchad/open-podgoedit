@@ -67,7 +67,7 @@ arms writes. `set_param` is hardware-validated; save and restore are not. See
 | Windows | libusb / WinUSB via Tauri | Planned |
 | macOS | libusb via Tauri | Planned |
 | Linux | libusb + udev rule via Tauri | Planned |
-| Android | USB Host via UniFFI | Planned |
+| Android | USB Host (native bridge) via WebView | Beta, unvalidated on hardware |
 | iOS/iPadOS | offline first; direct vendor USB unverified | Planned |
 
 See [docs/architecture/platform-support-matrix.md](docs/architecture/platform-support-matrix.md)
@@ -83,6 +83,7 @@ for the honest, evidence-backed matrix.
 | Architecture | [requirements](docs/architecture/requirements.md) |
 | Decisions | [ADRs](docs/architecture/decision-records/) |
 | Development | [setup](docs/development/setup.md) |
+| Android | [build, USB bridge and releases](docs/development/android.md) |
 | Users | [device connection](docs/user/device-connection.md) |
 
 ## Building

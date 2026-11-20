@@ -8,6 +8,7 @@
 // and closing the dialog drops the parsed copy.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { readChosenFile } from '../androidFiles';
 import { slotLabel } from '../catalog';
 import {
   decodeFirmware,
@@ -134,7 +135,7 @@ export default function PodgoEditImportDialog({
     setFile(null);
     setFileName(chosen.name);
     try {
-      const bytes = new Uint8Array(await chosen.arrayBuffer());
+      const bytes = await readChosenFile(chosen);
       const parsed = await parsePodgoEditFile(bytes);
       if (token.current !== current) {
         return;
