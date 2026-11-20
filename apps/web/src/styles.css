@@ -2411,6 +2411,16 @@ dl.save-backup-info dd {
     min-height: 44px;
   }
 
+  .edit-arm {
+    min-height: 44px;
+    padding-inline: 0.9rem;
+  }
+
+  .edit-arm input {
+    width: 20px;
+    height: 20px;
+  }
+
   .modal-close,
   .librarian-close,
   .param-set,

@@ -4252,7 +4252,9 @@ export default function App() {
                 workingDoc ? toggleSnapshotParam : undefined
               }
               onSetBlockEnabled={setBlockEnabled}
-              onPresetMenu={openCurrentPresetMenu}
+              onPresetMenu={
+                currentPresetTarget() ? openCurrentPresetMenu : undefined
+              }
               onCopyBlock={copyBlockAt}
               onPasteBlock={pasteBlockAt}
               canPasteBlock={blockClipboard !== null}
