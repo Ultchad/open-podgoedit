@@ -71,8 +71,33 @@ semantic versioning once it reaches 1.0.
   offer disappears when another preset becomes the working copy, so the wrong
   slot is never written. The writer layout is `ITM` until POD Go Edit opens an
   exported backup.
+- **Preset ⋯ menu and “Copy to…”.** A ⋯ button next to the preset name opens the
+  same actions menu as a librarian right-click, so a phone no longer needs a
+  long-press. The menu adds **Copy to…**, which prompts for a POD Go slot label
+  (`13A`, `01A`…`32D`): an offline document is cloned locally, while a pedal
+  body is read and written with operation 5 after the usual write-arm and
+  confirmation.
 
 ### Fixed
+- **Android Save, paste and rename no longer look like no-ops.** The Android
+  shell now installs a `WebChromeClient` that turns `window.alert`,
+  `window.confirm` and `window.prompt` into native dialogs, and implements the
+  file chooser used by **Import…**. Before this the WebView silently dropped
+  every confirmation, so a confirmed write never ran. Save is also clickable
+  when it cannot write and explains why (no pedal, writing not enabled, or no
+  active preset) instead of being an inert, tooltip-only button on touch
+  screens.
+- **Pasting a copied pedal preset works while connected.** A slot copied from
+  the librarian holds the pedal's raw body, not an offline document; Paste now
+  writes it with operation 5 instead of refusing and pointing at Developer
+  tools. The write keeps the usual arm and one confirmation.
+- **Bypassing an effect on a connected preset works.** The inspector toggle was
+  hidden unless an offline copy was open. The first bypass change now creates
+  an editable offline copy (with a clear confirmation) and applies the bypass
+  there; it never invents an unvalidated pedal bypass write.
+- **Mobile header rearranges cleanly when a pedal is connected.** Save occupies
+  the third header cell, and the full-width **Enable writing** row follows it
+  instead of pushing Save onto an unexpected row.
 - **Save now stores the preset on the pedal.** The Save button (and Ctrl+S)
   applies the draft parameters with op 30 and then sends op 71 for the active
   preset's own User slot, so a change survives a preset switch or a reboot
@@ -92,6 +117,12 @@ semantic versioning once it reaches 1.0.
   automatically, so the editor is usable without pressing Read first.
 
 ### Changed
+- **Android application ID now matches GitHub.** The installed package is
+  `io.github.ultchad.openpodgoedit` (hyphens are not valid in an Android
+  application ID; the Kotlin namespace stays `dev.openpodgo.edit`). The
+  signing keystore is unchanged, but Android treats this as a new app: uninstall
+  the old `dev.openpodgo.edit` build once before installing. See
+  `docs/development/android.md`.
 - **One connection button.** The header now shows a single **Connect** button
   that becomes **Disconnect** while a pedal is open, instead of two buttons
   that were alternately disabled.

@@ -5,12 +5,43 @@ core still runs as WASM; the shell adds three native pieces:
 
 | Piece | JS name | Purpose |
 |---|---|---|
-| `MainActivity` | — | Serves the bundle from `assets/` under a virtual HTTPS origin and handles the system back button. |
+| `MainActivity` | — | Serves the bundle from `assets/` under a virtual HTTPS origin, handles the system back button, maps JS dialogs to native dialogs and opens the file picker. |
 | `PodgoUsbBridge` | `window.podgoAndroidUsb` | USB host transport for the POD Go. |
 | `PodgoFileBridge` | `window.podgoAndroidFiles` | Saves exports into the app's Downloads folder. |
 
 Nothing is downloaded at runtime: the APK contains the whole app, and the
 service worker opts out on the shell origin.
+
+## Package name and existing installs
+
+The installed application ID is `io.github.ultchad.openpodgoedit`, matching the
+GitHub repository `Ultchad/open-podgoedit` (hyphens are not allowed in an
+Android package name). The Kotlin namespace stays `dev.openpodgo.edit`, so the
+source tree and imports are unchanged. Changing the application ID does **not**
+require a new keystore or signing key; the same certificate signs the new
+package.
+
+Android treats the new ID as a different app. An existing install of
+`dev.openpodgo.edit` is not upgraded in place: uninstall the old app once before
+installing a build with the new ID. This also avoids the package installer
+stalling on a package/signature mismatch when an earlier debug or
+differently-signed build is still present.
+
+If a sideloaded build still spins in the package installer, check the file first
+(`unzip -t podgo-editor-<version>.apk`), confirm "install unknown apps" is
+allowed for the file manager, and then try `adb install -r <file>.apk`. `adb`
+reports the real error (for example `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, which
+means an old build with a different signing key is still installed).
+
+## WebView dialogs and file imports
+
+`MainActivity` installs a `WebChromeClient` that maps `window.alert`,
+`window.confirm` and `window.prompt` to native `AlertDialog`s and implements
+`onShowFileChooser` with the Activity Result API. Without it the page's write
+confirmations were silently dropped — Save, paste, rename and restore looked
+like no-ops in the Android shell — and `Import…` could not open the system file
+picker. Both behaviours are covered by the browser suite using a fake Android
+bridge where possible; a real-device check is still pending.
 
 > **Hardware status.** The Android USB transport is exercised in the browser
 > test suite through a fake bridge (`tests/usb.spec.ts`). It has **not** been

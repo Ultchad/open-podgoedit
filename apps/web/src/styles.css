@@ -595,9 +595,29 @@ button:disabled:hover {
   color: #fff;
   font-size: 0.98rem;
   font-weight: 600;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ⋯ next to the preset name: the same actions as the librarian right-click. */
+.preset-more {
+  flex: 0 0 auto;
+  align-self: center;
+  min-width: 1.9rem;
+  min-height: 1.9rem;
+  margin-left: auto;
+  padding: 0.05rem 0.45rem;
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.18);
+  color: #fff;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.preset-more:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.38);
 }
 
 /* Browser-only preset or unsaved draft: italic, like an unsaved document. */

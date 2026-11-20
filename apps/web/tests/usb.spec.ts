@@ -1265,10 +1265,18 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
   await expect(page.locator('.readonly-chip')).toHaveText('draft');
 
-  // Writing is the only gate: Save stays disabled until it is enabled.
-  await expect(page.locator('#save-preset')).toBeDisabled();
-  await page.locator('#arm-writes').check();
+  // Writing is the only gate. Save is still clickable so a phone gets a
+  // visible explanation; before arming it refuses and sends nothing.
   await expect(page.locator('#save-preset')).toBeEnabled();
+  await page.locator('#save-preset').click();
+  await expect(page.locator('#save-notice')).toContainText('Enable writing');
+  const writesBeforeArm = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writesBeforeArm).toHaveLength(0);
+  await page.locator('#arm-writes').check();
+  await expect(page.locator('#save-notice')).toHaveCount(0);
 
   // Processing tile 2 is Tube Drive, stored in raw chain slot 3 (input = 0).
   await page.locator('.block-tile').nth(2).click();
@@ -1964,11 +1972,214 @@ test('copies a pedal slot from the right-click menu without opening it', async (
   await expect(page.locator('.report.error')).toHaveCount(0);
 });
 
+test('copies a pedal slot to another slot from the right-click menu', async ({
+  page,
+}) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await page.locator('#arm-writes').check();
+
+  await page.getByRole('tab', { name: /User/ }).click();
+  await page.locator('.preset-item').nth(1).click({ button: 'right' });
+  await expect(page.locator('#menu-copy-to')).toBeEnabled();
+
+  const dialogs: string[] = [];
+  page.on('dialog', (dialog) => {
+    dialogs.push(dialog.type());
+    // The destination prompt takes a POD Go slot label; slot 7 is 02D.
+    void dialog.accept(dialog.type() === 'prompt' ? '02D' : undefined);
+  });
+  await page.locator('#menu-copy-to').click();
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Copy to: reading User',
+  );
+  await expect(page.locator('.report.log')).toContainText('Preset write:');
+  expect(dialogs).toContain('prompt');
+  expect(dialogs).toContain('confirm');
+
+  const writes = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __podgoRestore?: Array<{ setlist: number; slot: number }>;
+        }
+      ).__podgoRestore ?? [],
+  );
+  expect(writes).toHaveLength(1);
+  expect(`${writes[0].setlist}:${writes[0].slot}`).toBe('1:7');
+  await expect(page.locator('.report.error')).toHaveCount(0);
+});
+
+test('pastes a copied pedal body into another slot from the menu', async ({
+  page,
+}) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await page.locator('#arm-writes').check();
+  await page.getByRole('tab', { name: /User/ }).click();
+
+  // Copy reads the body; it does not open the slot or make a local document.
+  await page.locator('.preset-item').nth(0).click({ button: 'right' });
+  await page.locator('#menu-copy').click();
+  await expect(page.locator('.report.log')).toContainText('Clipboard:');
+
+  // Paste used to refuse a pedal body. It now writes it with operation 5.
+  await page.locator('.preset-item').nth(1).click({ button: 'right' });
+  await expect(page.locator('#menu-paste')).toBeEnabled();
+  let pasteMessage = '';
+  page.once('dialog', (dialog) => {
+    pasteMessage = dialog.message();
+    void dialog.accept();
+  });
+  await page.locator('#menu-paste').click();
+
+  expect(pasteMessage).toContain('User 01B');
+  await expect(page.locator('.report.log')).toContainText('Preset write:');
+
+  const writes = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __podgoRestore?: Array<{ setlist: number; slot: number }>;
+        }
+      ).__podgoRestore ?? [],
+  );
+  expect(writes).toHaveLength(1);
+  expect(`${writes[0].setlist}:${writes[0].slot}`).toBe('1:1');
+  await expect(page.locator('.report.error')).toHaveCount(0);
+});
+
+test('opens the preset menu from the ⋯ next to the name', async ({ page }) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  await expect(page.locator('#preset-more')).toBeVisible();
+  await page.locator('#preset-more').click();
+  await expect(page.locator('#menu-rename')).toBeVisible();
+  await expect(page.locator('#menu-copy-to')).toBeVisible();
+  await expect(page.locator('#menu-save')).toBeVisible();
+});
+
+test('bypasses a block on a connected preset by creating an offline copy', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      errors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await expect(page.locator('.readonly-chip')).toHaveText('draft');
+
+  // The connected preset is read-only, so the first bypass change asks for an
+  // editable offline copy instead of inventing an unvalidated pedal write.
+  let copyMessage = '';
+  page.once('dialog', (dialog) => {
+    copyMessage = dialog.message();
+    void dialog.accept();
+  });
+  const toggle = page.locator('.inspector-state.is-toggle').first();
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+
+  expect(copyMessage).toContain('editable copy');
+  await expect(page.locator('.report.log')).toContainText(
+    'Created an editable copy',
+  );
+  await expect(page.locator('.report.log')).toContainText('bypassed');
+  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+  await expect(page.locator('.inspector-state.is-toggle').first()).toHaveText(
+    'bypassed',
+  );
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writes).toHaveLength(0);
+  expect(errors).toEqual([]);
+});
+
 test.describe('editing a connected preset on a phone viewport', () => {
   test.use({
     viewport: { width: 412, height: 915 },
     hasTouch: true,
     isMobile: true,
+  });
+
+  test('shows the preset ⋯ and the write arm without hiding Save', async ({
+    page,
+  }) => {
+    const fixture = smallSetlist(['Lead A', 'Lead B']);
+    const preset = readFileSync(
+      new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+    ).toString('base64');
+    await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+    await page.goto('/');
+    await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+    await openDevTools(page);
+    await page.locator('#connect').click();
+    await expect(page.locator('.device-card .badge')).toHaveText(
+      /POD Go \(fake\)/,
+    );
+
+    await expect(page.locator('#preset-more')).toBeVisible();
+    await expect(page.locator('#save-preset')).toBeVisible();
+    await expect(page.locator('#arm-writes')).toBeVisible();
+
+    const box = await page.locator('#preset-more').boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x + box!.width).toBeLessThanOrEqual(412);
   });
 
   test('drafts a model change and saves it with op 40', async ({ page }) => {
