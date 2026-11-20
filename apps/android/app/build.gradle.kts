@@ -16,21 +16,20 @@ data class SigningMaterial(
 )
 
 fun signingFromProperties(path: String): SigningMaterial? = try {
-    java.util.Properties().apply { file(path).inputStream().use(::load) }
-        .let { properties ->
-            val store = properties.getProperty("storeFile")
-            val alias = properties.getProperty("keyAlias")
-            if (store.isNullOrBlank() || alias.isNullOrBlank()) {
-                null
-            } else {
-                SigningMaterial(
-                    storeFile = store,
-                    storePassword = properties.getProperty("storePassword"),
-                    keyAlias = alias,
-                    keyPassword = properties.getProperty("keyPassword"),
-                )
-            }
-        }
+    val properties = java.util.Properties()
+    File(path).inputStream().use(properties::load)
+    val store = properties.getProperty("storeFile")
+    val alias = properties.getProperty("keyAlias")
+    if (store.isNullOrBlank() || alias.isNullOrBlank()) {
+        null
+    } else {
+        SigningMaterial(
+            storeFile = store,
+            storePassword = properties.getProperty("storePassword"),
+            keyAlias = alias,
+            keyPassword = properties.getProperty("keyPassword"),
+        )
+    }
 } catch (error: java.io.IOException) {
     logger.warn("PODGO_SIGNING_PROPERTIES is not readable (${error.message}); building unsigned.")
     null
