@@ -12,11 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 /// Keep only the last path component, so a suggested name can never redirect
 /// the destination on its own.
 fn suggested_name(name: &str) -> String {
-    let trimmed = name
-        .rsplit(|character| character == '/' || character == '\\')
-        .next()
-        .unwrap_or(name)
-        .trim();
+    let trimmed = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
     if trimmed.is_empty() {
         "export.bin".to_string()
     } else {
