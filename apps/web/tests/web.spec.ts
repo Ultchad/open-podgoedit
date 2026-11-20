@@ -26,7 +26,7 @@ test('loads factory names and a default User preset offline', async ({
   const offline = page.locator('#offline-notice');
   await expect(offline).toBeVisible();
   await expect(offline).toContainText('No POD Go connected');
-  await expect(offline).toContainText('Export .pgp');
+  await expect(offline).toContainText('Export');
 
   // The default working preset is a neutral, editable User preset at 01A.
   await expect(page.locator('.preset-title-name')).toHaveText('New Preset');

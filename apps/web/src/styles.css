@@ -908,6 +908,7 @@ button:disabled:hover {
   text-align: center;
   overflow: hidden;
   display: -webkit-box;
+  line-clamp: 3;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
 }
@@ -1370,7 +1371,7 @@ button.model-tile.is-blocked {
 .connect-dot {
   width: 8px;
   height: 8px;
-  margin-right: 0.45rem;
+  margin-left: 0.45rem;
   border-radius: 50%;
   flex: none;
   background: #d9534f;
