@@ -3,9 +3,20 @@
 // Navigations are network-first so a new deploy is picked up immediately while
 // still falling back to the cached page offline. Hashed assets are cache-first
 // and refreshed in the background.
+//
+// The Android shell already serves the bundle from its APK, so it opts out
+// entirely: its assets are immutable and the SW would only add a second copy.
 
 const CACHE = 'podgo-editor-v1';
 const SHELL = ['./'];
+/** Virtual origin of the Android shell's bundled assets. */
+const NATIVE_SHELL_HOST = 'appassets.androidplatform.net';
+
+if (self.location.host !== NATIVE_SHELL_HOST) {
+  registerShell();
+}
+
+function registerShell() {
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -77,3 +88,4 @@ self.addEventListener('fetch', (event) => {
     })(),
   );
 });
+}

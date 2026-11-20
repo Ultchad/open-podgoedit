@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ChangeEvent } from 'react';
+import { readChosenFile } from '../androidFiles';
 import { slotLabel } from '../catalog';
 import { subsetBackup, verifyBackup } from '../wasmClient';
 import type { BackupVerify, SetlistEntry } from '../types';
@@ -171,7 +172,7 @@ export default function BackupRestoreDialog({
       return;
     }
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      const bytes = await readChosenFile(file, window.podgoAndroidFiles?.read);
       const summary = verifyBackup(bytes);
       setSelected({ name: file.name, bytes, summary });
       setRestorePicked(

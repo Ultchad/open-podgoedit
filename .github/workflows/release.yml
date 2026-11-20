@@ -1,0 +1,186 @@
+name: Release
+
+# Builds the signed Android APK and the offline web bundle, then publishes a
+# GitHub Release. Push a tag like `v0.2.0` on `main` to run it.
+#
+# Signing uses four repository secrets (see docs/ANDROID.md):
+#   PODGO_KEYSTORE_BASE64      the .jks file, base64 encoded
+#   PODGO_KEYSTORE_PASSWORD
+#   PODGO_KEY_ALIAS
+#   PODGO_KEY_PASSWORD
+# Without them the workflow still publishes, but the APK is unsigned.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp and publish, e.g. 0.2.0
+        required: true
+        default: 0.2.0
+      prerelease:
+        description: Mark the release as a pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        env:
+          TAG_REF: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            version="${TAG_REF#v}"
+            tag="$TAG_REF"
+          else
+            version="$INPUT_VERSION"
+            tag="v$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Install the platforms explicitly: the action's default package
+      # list includes `tools`, which newer SDK repositories no longer ship.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/web/wasm
+
+      # Must match the `wasm-bindgen` crate version in apps/web/wasm/Cargo.toml.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.130
+
+      - name: Install npm dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Audit runtime dependencies
+        working-directory: apps/web
+        run: npm run audit:runtime
+
+      # `npm run build` runs prebuild → wasm + fixtures → tsc + vite.
+      # A relative base keeps the bundle valid wherever it is unpacked.
+      - name: Build web bundle
+        working-directory: apps/web
+        env:
+          VITE_BASE: ./
+        run: npm run build
+
+      - name: Copy bundle into the Android app
+        run: node apps/android/tools/sync-web-assets.mjs
+
+      - name: Signing keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PODGO_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/podgo-release.jks"
+            echo "file=$RUNNER_TEMP/podgo-release.jks" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::PODGO_KEYSTORE_BASE64 is not set; the APK will be unsigned."
+          fi
+
+      - name: Build release APK
+        working-directory: apps/android
+        env:
+          PODGO_VERSION_NAME: ${{ steps.version.outputs.version }}
+          PODGO_SIGNING_STORE_FILE: ${{ steps.keystore.outputs.file }}
+          PODGO_SIGNING_STORE_PASSWORD: ${{ secrets.PODGO_KEYSTORE_PASSWORD }}
+          PODGO_SIGNING_KEY_ALIAS: ${{ secrets.PODGO_KEY_ALIAS }}
+          PODGO_SIGNING_KEY_PASSWORD: ${{ secrets.PODGO_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Name artifacts
+        id: artifacts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          apk="apps/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          if [ -f "apps/android/app/build/outputs/apk/release/app-release.apk" ]; then
+            apk="apps/android/app/build/outputs/apk/release/app-release.apk"
+          fi
+          cp "$apk" "$RUNNER_TEMP/podgo-editor-$VERSION.apk"
+          echo "apk=$RUNNER_TEMP/podgo-editor-$VERSION.apk" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ steps.keystore.outputs.file }}" ]; then
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs \
+              "$RUNNER_TEMP/podgo-editor-$VERSION.apk" > "$RUNNER_TEMP/signing.txt"
+          else
+            echo "Unsigned build: installable with adb install or an `Unknown sources` toggle." \
+              > "$RUNNER_TEMP/signing.txt"
+          fi
+          (cd apps/web/dist && zip -qry "$RUNNER_TEMP/podgo-editor-$VERSION-web.zip" .)
+
+      # The workspace copy of the release notes is reused when the tag has
+      # nothing specific, so a release always says what changed.
+      - name: Compose release body
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SIGNING: ${{ runner.temp }}/signing.txt
+        run: |
+          {
+            echo "POD Go Editor $VERSION"
+            echo
+            echo "Unofficial POD Go preset editor. Reads are always available; every pedal write"
+            echo "stays opt-in, confirmed and unvalidated on hardware."
+            echo
+            echo "### Downloads"
+            echo "- \`podgo-editor-$VERSION.apk\`: Android 8.0+ (WebView, USB host). Install with"
+            echo "  \`adb install\` or after allowing installs from this source."
+            echo "- \`podgo-editor-$VERSION-web.zip\`: the same app as static files; unzip and serve"
+            echo "  over HTTPS (WebUSB needs a secure context)."
+            echo
+            echo "### Changed"
+            awk '/^## \[Unreleased\]/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md
+            echo
+            echo "### Signing"
+            echo '```'
+            cat "$SIGNING"
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: POD Go Editor ${{ steps.version.outputs.version }}
+          body_path: ${{ runner.temp }}/notes.md
+          prerelease: ${{ inputs.prerelease || false }}
+          files: |
+            ${{ steps.artifacts.outputs.apk }}
+            ${{ runner.temp }}/podgo-editor-${{ steps.version.outputs.version }}-web.zip
