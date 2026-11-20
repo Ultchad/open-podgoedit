@@ -2072,6 +2072,154 @@ test('pastes a copied pedal body into another slot from the menu', async ({
   await expect(page.locator('.report.error')).toHaveCount(0);
 });
 
+/**
+ * The Tauri shell exposes `window.__TAURI__.core.invoke`. Commands resolve to
+ * promises, and the fake keeps the same one-request-in / one-reply-out queue as
+ * the Android bridge, so the shared reply matching is what gets exercised.
+ */
+function fakeDesktopShell(): void {
+  type Reply = (request: string) => string | null;
+  const state = {
+    inbox: [] as string[],
+    saves: [] as Array<{ name: string; base64: string }>,
+  };
+  (
+    window as unknown as { __podgoDesktopState?: typeof state }
+  ).__podgoDesktopState = state;
+
+  const reply = () =>
+    (window as unknown as { __podgoFakeBridgeReply?: Reply })
+      .__podgoFakeBridgeReply;
+
+  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+    core: {
+      invoke: async (command: string, args?: Record<string, unknown>) => {
+        switch (command) {
+          case 'usb_open':
+            return {
+              productId: 0x4247,
+              productName: 'POD Go (fake)',
+              interfaceNumber: 0,
+              endpointOut: 1,
+              endpointIn: 0x81,
+            };
+          case 'usb_close':
+          case 'usb_discard':
+            state.inbox.length = 0;
+            return null;
+          case 'usb_write': {
+            const answer = reply()?.(String(args?.data ?? ''));
+            if (answer) {
+              // An event frame arrives ahead of every reply; it must be skipped.
+              state.inbox.push(
+                btoa(
+                  String.fromCharCode(
+                    0x19,
+                    0x0c,
+                    0x00,
+                    0x18,
+                    0xf0,
+                    0x03,
+                    0x02,
+                    0x10,
+                  ),
+                ),
+              );
+              state.inbox.push(answer);
+            }
+            return null;
+          }
+          case 'usb_read':
+            return state.inbox.length > 0 ? state.inbox.shift()! : null;
+          case 'save_file':
+            state.saves.push({
+              name: String(args?.name ?? ''),
+              base64: String(args?.base64 ?? ''),
+            });
+            return null;
+          default:
+            throw new Error(`unknown desktop command: ${command}`);
+        }
+      },
+    },
+  };
+}
+
+test('reads a pedal through the desktop USB bridge', async ({ page }) => {
+  const fixture = readFileSync(
+    new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'usb', {
+      value: undefined,
+      configurable: true,
+    });
+  });
+  await page.addInitScript(fakeDesktopShell);
+  await page.addInitScript(fakeWebUsb, { fixture });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  // No picker and no "WebUSB is not available" warning: the shell owns USB.
+  await expect(page.locator('.device-card h2')).toContainText(
+    'Desktop USB (libusb)',
+  );
+  await expect(page.locator('.device-card .inline-error')).toHaveCount(0);
+
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  const report = page.locator('.device-report .report');
+  await expect(report).toContainText('setlist:   128 entries');
+  await expect(report).toContainText('slot 127');
+
+  // A second read proves the transport survives request after request.
+  await page.locator('#read-user').click();
+  await expect(report).toContainText('slot 127');
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+});
+
+test('saves an export through the desktop save dialog', async ({ page }) => {
+  await page.addInitScript(fakeDesktopShell);
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#export-pgp').click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __podgoDesktopState?: { saves: unknown[] };
+            }
+          ).__podgoDesktopState?.saves.length ?? 0,
+      ),
+    )
+    .toBe(1);
+
+  const saved = await page.evaluate(() => {
+    const state = (
+      window as unknown as {
+        __podgoDesktopState?: {
+          saves: Array<{ name: string; base64: string }>;
+        };
+      }
+    ).__podgoDesktopState;
+    return state?.saves[0] ?? null;
+  });
+  expect(saved?.name).toBe('New_Preset.pgp');
+  // `save_file` receives the whole document, not a truncated preview.
+  const text = Buffer.from(saved!.base64, 'base64').toString('utf8');
+  expect(text.length).toBeGreaterThan(100);
+  expect(text).toContain('New Preset');
+});
+
 test('opens the preset menu from the ⋯ next to the name', async ({ page }) => {
   const fixture = smallSetlist(['Lead A', 'Lead B']);
   const preset = readFileSync(

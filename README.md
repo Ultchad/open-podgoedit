@@ -64,9 +64,9 @@ arms writes. `set_param` is hardware-validated; save and restore are not. See
 |---|---|---|
 | Web (Chromium) | WebUSB + WASM | Planned |
 | Web (Safari/Firefox) | offline only | Planned |
-| Windows | libusb / WinUSB via Tauri | Planned |
-| macOS | libusb via Tauri | Planned |
-| Linux | libusb + udev rule via Tauri | Planned |
+| Windows | libusb / WinUSB via Tauri | Preview, unvalidated on hardware |
+| macOS | libusb via Tauri | Preview, unvalidated on hardware |
+| Linux | libusb + udev rule via Tauri | Preview, unvalidated on hardware |
 | Android | USB Host (native bridge) via WebView | Beta, unvalidated on hardware |
 | iOS/iPadOS | offline first; direct vendor USB unverified | Planned |
 

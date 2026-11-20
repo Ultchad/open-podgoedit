@@ -387,3 +387,6 @@ Thumbs.db
 keystore.properties
 podgo-secrets.env
 
+# Tauri generated schema files (the configuration is the source of truth).
+apps/desktop/src-tauri/gen/schemas/
+
