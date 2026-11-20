@@ -62,6 +62,8 @@ interface Props {
   ) => void;
   /** Bypass or enable a block in the active snapshot. */
   onSetBlockEnabled?: (block: number, enabled: boolean) => void;
+  /** Open the page-level preset menu (the ⋯ next to the preset name). */
+  onPresetMenu?: (x: number, y: number) => void;
   /** Copy one processing slot to the in-tab effect clipboard. */
   onCopyBlock?: (index: number) => void;
   /** Paste the effect clipboard into one processing slot. */
@@ -101,6 +103,7 @@ export default function PresetView({
   onSetSnapshotLedColor,
   onToggleSnapshotParam,
   onSetBlockEnabled,
+  onPresetMenu,
   onCopyBlock,
   onPasteBlock,
   canPasteBlock = false,
@@ -361,6 +364,23 @@ export default function PresetView({
                   ? 'draft'
                   : 'read-only'}
           </span>
+          {onPresetMenu && (
+            <button
+              id="preset-more"
+              type="button"
+              className="preset-more"
+              aria-label="Preset actions"
+              aria-haspopup="menu"
+              title="Preset actions: rename, copy, move, export"
+              onClick={(event) => {
+                event.stopPropagation();
+                const rect = event.currentTarget.getBoundingClientRect();
+                onPresetMenu(rect.left, rect.bottom + 4);
+              }}
+            >
+              ⋯
+            </button>
+          )}
         </div>
 
         <div className="snapshot-row" aria-label="Snapshots">
