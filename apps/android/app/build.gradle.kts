@@ -1,24 +1,66 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
-// Signing is opt-in: CI decodes the keystore from repository secrets and
-// passes the four `PODGO_SIGNING_*` values. Without them the release variant
+// Signing is opt-in: CI decodes the keystore from repository secrets into a
+// properties file (see `.github/workflows/release.yml`) and points
+// `PODGO_SIGNING_PROPERTIES` at it. The four `PODGO_SIGNING_*` environment
+// variables still work for local builds. Without either, the release variant
 // still builds, just unsigned.
-val signingStoreFile = providers.environmentVariable("PODGO_SIGNING_STORE_FILE").orNull
-val signingStorePassword = providers.environmentVariable("PODGO_SIGNING_STORE_PASSWORD").orNull
-val signingKeyAlias = providers.environmentVariable("PODGO_SIGNING_KEY_ALIAS").orNull
-val signingKeyPassword = providers.environmentVariable("PODGO_SIGNING_KEY_PASSWORD").orNull
-val canSign = listOf(
-    signingStoreFile,
-    signingStorePassword,
-    signingKeyAlias,
-    signingKeyPassword,
-).all { it != null }
+data class SigningMaterial(
+    val storeFile: String,
+    val storePassword: String?,
+    val keyAlias: String,
+    val keyPassword: String?,
+)
+
+fun signingFromProperties(path: String): SigningMaterial? = try {
+    val properties = Properties()
+    File(path).inputStream().use(properties::load)
+    val store = properties.getProperty("storeFile")
+    val alias = properties.getProperty("keyAlias")
+    if (store.isNullOrBlank() || alias.isNullOrBlank()) {
+        null
+    } else {
+        SigningMaterial(
+            storeFile = store,
+            storePassword = properties.getProperty("storePassword"),
+            keyAlias = alias,
+            keyPassword = properties.getProperty("keyPassword"),
+        )
+    }
+} catch (error: java.io.IOException) {
+    logger.warn("PODGO_SIGNING_PROPERTIES is not readable (${error.message}); building unsigned.")
+    null
+}
+
+fun signingFromEnvironment(): SigningMaterial? {
+    val store = providers.environmentVariable("PODGO_SIGNING_STORE_FILE").orNull
+    val alias = providers.environmentVariable("PODGO_SIGNING_KEY_ALIAS").orNull
+    if (store == null || alias == null) {
+        return null
+    }
+    return SigningMaterial(
+        storeFile = store,
+        storePassword = providers.environmentVariable("PODGO_SIGNING_STORE_PASSWORD").orNull,
+        keyAlias = alias,
+        keyPassword = providers.environmentVariable("PODGO_SIGNING_KEY_PASSWORD").orNull,
+    )
+}
+
+val signing: SigningMaterial? =
+    providers.environmentVariable("PODGO_SIGNING_PROPERTIES").orNull
+        ?.let(::signingFromProperties)
+        ?: signingFromEnvironment()
+val canSign = signing != null
 
 // Version comes from the release tag: `v1.2.3` → name 1.2.3, code 10203.
 val tagName = providers.environmentVariable("PODGO_VERSION_NAME").orNull
+    ?.takeIf { it.isNotBlank() }
     ?: "0.1.0"
 val versionSegments = tagName.trimStart('v').split('.', '-').mapNotNull { it.toIntOrNull() }
 val versionNameValue = tagName.trimStart('v')
@@ -45,10 +87,10 @@ android {
     signingConfigs {
         if (canSign) {
             create("release") {
-                storeFile = file(signingStoreFile!!)
-                storePassword = signingStorePassword
-                keyAlias = signingKeyAlias
-                keyPassword = signingKeyPassword
+                storeFile = file(signing!!.storeFile)
+                storePassword = signing.storePassword
+                keyAlias = signing.keyAlias
+                keyPassword = signing.keyPassword
             }
         }
     }

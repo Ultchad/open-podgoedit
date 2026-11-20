@@ -115,10 +115,21 @@ PODGO_KEY_PASSWORD=<key password>
 | `PODGO_KEY_PASSWORD` | key password |
 
 The `Prepare signing` step decodes the keystore, opens it with `keytool` using
-those credentials, and exports `PODGO_SIGNING_*` for Gradle. A wrong password,
-alias or truncated base64 fails the run with `::error::`, so a broken secret
-cannot silently produce an unsigned release; only the complete absence of
-signing secrets falls back to an unsigned APK, with a warning.
+those credentials, and writes them to a `podgo-keystore.properties` file outside
+the workspace; Gradle reads it through `PODGO_SIGNING_PROPERTIES`. Secrets are
+registered with `::add-mask::` first, so passwords never appear in a step's
+environment dump (v0.2.0 printed them in a public log; rotate that password).
+A wrong password, alias or truncated base64 fails the run with `::error::`, so
+a broken secret cannot silently produce an unsigned release; only the complete
+absence of signing secrets falls back to an unsigned APK, with a warning.
+
+For a local signed build, write the same four values to a properties file and
+point `PODGO_SIGNING_PROPERTIES` at it:
+
+```sh
+PODGO_SIGNING_PROPERTIES=$HOME/.keystore/podgo-keystore.properties \
+  ./gradlew assembleRelease
+```
 
 The base64 value must stay on one line. If you build the `key=value` file by
 hand, no quoting is needed — values must not contain spaces or quotes.
