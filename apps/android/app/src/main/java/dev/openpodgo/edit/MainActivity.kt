@@ -2,17 +2,26 @@ package dev.openpodgo.edit
 
 import android.annotation.SuppressLint
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Color
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.view.ViewGroup
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.Toast
 import dev.openpodgo.edit.R
@@ -31,11 +40,30 @@ class MainActivity : ComponentActivity() {
     private lateinit var usbBridge: PodgoUsbBridge
     private lateinit var fileBridge: PodgoFileBridge
     private lateinit var assetLoader: WebViewAssetLoader
+    private lateinit var fileChooserLauncher: ActivityResultLauncher<Intent>
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val background = Color.parseColor("#18191b")
+
+        // `Import…` opens an `<input type="file">`; WebView cannot show the
+        // system picker without this launcher. The page also uses `alert`,
+        // `confirm` and `prompt` for every write gate, so both live in the
+        // chrome client below.
+        fileChooserLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult(),
+        ) { result ->
+            val callback = fileChooserCallback ?: return@registerForActivityResult
+            fileChooserCallback = null
+            callback.onReceiveValue(
+                WebChromeClient.FileChooserParams.parseResult(
+                    result.resultCode,
+                    result.data,
+                ),
+            )
+        }
 
         val root = FrameLayout(this).apply { setBackgroundColor(background) }
         webView = WebView(this).apply {
@@ -45,6 +73,7 @@ class MainActivity : ComponentActivity() {
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             webViewClient = AssetClient()
+            webChromeClient = PodgoChromeClient()
         }
         root.addView(
             webView,
@@ -95,6 +124,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        fileChooserCallback?.onReceiveValue(null)
+        fileChooserCallback = null
         usbBridge.close()
         webView.removeJavascriptInterface(PodgoUsbBridge.JS_NAME)
         webView.removeJavascriptInterface(PodgoFileBridge.JS_NAME)
@@ -144,6 +175,114 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Intent.ACTION_VIEW, url))
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, R.string.link_unavailable, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Native WebView chrome: JS dialogs and the file picker.
+     *
+     * Without these overrides a WebView silently drops `window.alert`,
+     * `window.confirm` and `window.prompt`; the page uses them to gate every
+     * pedal write, so Save/paste/restore looked like no-ops in the Android
+     * shell even though the same page works in a browser.
+     */
+    private inner class PodgoChromeClient : WebChromeClient() {
+        override fun onJsAlert(
+            view: WebView?,
+            url: String?,
+            message: String?,
+            result: JsResult?,
+        ): Boolean {
+            if (result == null) {
+                return false
+            }
+            AlertDialog.Builder(this@MainActivity)
+                .setMessage(message.orEmpty())
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setOnCancelListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsConfirm(
+            view: WebView?,
+            url: String?,
+            message: String?,
+            result: JsResult?,
+        ): Boolean {
+            if (result == null) {
+                return false
+            }
+            AlertDialog.Builder(this@MainActivity)
+                .setMessage(message.orEmpty())
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
+                .setOnCancelListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsPrompt(
+            view: WebView?,
+            url: String?,
+            message: String?,
+            defaultValue: String?,
+            result: JsPromptResult?,
+        ): Boolean {
+            if (result == null) {
+                return false
+            }
+            val input = EditText(this@MainActivity).apply {
+                inputType = InputType.TYPE_CLASS_TEXT
+                setText(defaultValue.orEmpty())
+                setSelection(text.length)
+                setSingleLine()
+            }
+            val container = FrameLayout(this@MainActivity).apply {
+                val padding = (16 * resources.displayMetrics.density).toInt()
+                setPadding(padding, padding / 2, padding, 0)
+                addView(
+                    input,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+            }
+            val dialog = AlertDialog.Builder(this@MainActivity)
+                .setMessage(message.orEmpty())
+                .setView(container)
+                .setPositiveButton(android.R.string.ok) { _, _ ->
+                    result.confirm(input.text.toString())
+                }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
+                .setOnCancelListener { result.cancel() }
+                .create()
+            dialog.setOnShowListener { input.requestFocus() }
+            dialog.show()
+            return true
+        }
+
+        override fun onShowFileChooser(
+            webView: WebView?,
+            filePathCallback: ValueCallback<Array<Uri>>?,
+            fileChooserParams: FileChooserParams?,
+        ): Boolean {
+            if (filePathCallback == null || fileChooserParams == null) {
+                return false
+            }
+            // A second request replaces the first; leaving the old callback
+            // pending would freeze the page's file input.
+            fileChooserCallback?.onReceiveValue(null)
+            fileChooserCallback = filePathCallback
+            return try {
+                fileChooserLauncher.launch(fileChooserParams.createIntent())
+                true
+            } catch (_: ActivityNotFoundException) {
+                fileChooserCallback = null
+                filePathCallback.onReceiveValue(null)
+                false
+            }
         }
     }
 

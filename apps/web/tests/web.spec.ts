@@ -50,10 +50,13 @@ test('loads factory names and a default User preset offline', async ({
   );
 
   // Developer tools are collapsed by default; the write guard only exists
-  // while a pedal is connected, and Save cannot reach a pedal offline.
+  // while a pedal is connected. Save stays clickable so a touch screen with no
+  // tooltip still gets an explanation instead of an inert button.
   await expect(page.locator('#developer-tools')).not.toHaveAttribute('open', '');
   await expect(page.locator('#arm-writes')).toHaveCount(0);
-  await expect(page.locator('#save-preset')).toBeDisabled();
+  await expect(page.locator('#save-preset')).toBeEnabled();
+  await page.locator('#save-preset').click();
+  await expect(page.locator('#save-notice')).toContainText('No POD Go connected');
 
   const remote = requests.filter(
     (url) => !url.startsWith('http://127.0.0.1:5173/') && !url.startsWith('data:'),
@@ -90,13 +93,16 @@ test('edits a draft with the slider and value field, then exports', async ({
   await expect(page.locator('#param-value-0')).toHaveText('6.5');
   await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
 
-  // Saving needs a connected pedal with writing enabled: the button is inert.
-  await expect(page.locator('#save-preset')).toBeDisabled();
+  // Saving needs a connected pedal with writing enabled. The button stays
+  // clickable on touch screens and explains the missing pedal instead.
+  await page.locator('#save-preset').click();
+  const notice = page.locator('#save-notice');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('No POD Go connected');
+  await expect(notice).toContainText('Export .pgp');
 
   // Ctrl+S explains the same thing instead of writing.
   await page.keyboard.press('Control+s');
-  const notice = page.locator('#save-notice');
-  await expect(notice).toBeVisible();
   await expect(notice).toContainText('No POD Go connected');
   await expect(notice).toContainText('Export .pgp');
 

@@ -31,7 +31,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.openpodgo.edit"
+        // Matches the GitHub repository (Ultchad/open-podgoedit). Hyphens are
+        // not valid in an application ID, so they are dropped here. The
+        // namespace stays `dev.openpodgo.edit`; only the installed package
+        // name changes, which does not affect the signing key.
+        applicationId = "io.github.ultchad.openpodgoedit"
         minSdk = 26
         targetSdk = 35
         versionCode = versionCodeValue.coerceAtLeast(1)

@@ -1903,6 +1903,8 @@ export default function App() {
    */
   function createEditableCopy(options?: {
     confirm?: boolean;
+    /** What the user is about to change, for the confirmation text. */
+    reason?: string;
   }): { doc: EditPreset; slot: number } | null {
     if (!structure) {
       return null;
@@ -1916,7 +1918,8 @@ export default function App() {
     if (
       options?.confirm &&
       !window.confirm(
-        'Change the amp or effect on an editable copy?\n\n' +
+        `${options.reason ?? 'Change the amp or effect'} on an editable ` +
+          'copy?\n\n' +
           'A preset body read from the pedal is read-only in this build. ' +
           'The copy stays in the browser: you can edit it and export a .pgp, ' +
           'but it cannot be written back to the pedal.\n\n' +
@@ -2360,20 +2363,25 @@ export default function App() {
    * Export writes them to a `.pgp`.
    */
   function commitSnapshotDraft(
-    changed: () => void,
+    changed: (doc: EditPreset) => void,
     message: string,
     historyLabel = 'the snapshot edit',
+    draft?: { doc: EditPreset; setlist: SetlistKind; slot: number },
   ): void {
-    if (!workingDoc) {
+    const doc = draft?.doc ?? workingDoc;
+    if (!doc) {
       return;
     }
     pushHistory(historyLabel);
-    changed();
-    const next = { ...workingDoc };
+    changed(doc);
+    const next = { ...doc };
     setWorkingDoc(next);
     setStructure(toneToStructure(next));
-    if (workingSlot) {
-      const key = localKey(workingSlot.setlist, workingSlot.slot);
+    const slot = draft
+      ? { setlist: draft.setlist, slot: draft.slot }
+      : workingSlot;
+    if (slot) {
+      const key = localKey(slot.setlist, slot.slot);
       setLocalDocs((currentDocs) => ({
         ...currentDocs,
         [key]: clonePreset(next),
@@ -2392,7 +2400,7 @@ export default function App() {
       return;
     }
     commitSnapshotDraft(
-      () => setImportedSnapshot(workingDoc, index),
+      (doc) => setImportedSnapshot(doc, index),
       `Draft: active snapshot set to ${index + 1} (not written to the pedal).`,
       'the snapshot change',
     );
@@ -2409,7 +2417,7 @@ export default function App() {
       return;
     }
     commitSnapshotDraft(
-      () => setImportedSnapshotName(workingDoc, index, name),
+      (doc) => setImportedSnapshotName(doc, index, name),
       name
         ? `Draft: snapshot ${index + 1} renamed to "${name}" (not written).`
         : `Draft: snapshot ${index + 1} name cleared (not written).`,
@@ -2461,9 +2469,9 @@ export default function App() {
     const current = entry.params[paramIndex];
     const value = typeof current === 'boolean' ? current : (current ?? 0);
     commitSnapshotDraft(
-      () =>
+      (doc) =>
         setImportedSnapshotAssignment(
-          workingDoc,
+          doc,
           block,
           param.n,
           assigned,
@@ -2476,18 +2484,36 @@ export default function App() {
     );
   }
 
-  /** Bypass or enable one block in the active snapshot. */
+  /**
+   * Bypass or enable one block in the active snapshot.
+   *
+   * A preset read from the pedal is read-only here, so the first bypass
+   * change rebuilds an editable offline copy (and says so). This keeps the
+   * control usable on a connected pedal without inventing an unvalidated
+   * bypass write.
+   */
   function setBlockEnabled(block: number, enabled: boolean): void {
-    if (!workingDoc) {
-      return;
-    }
     const index = structure?.currentSnapshot ?? 0;
+    let draft:
+      | { doc: EditPreset; setlist: SetlistKind; slot: number }
+      | undefined;
+    if (!workingDoc) {
+      const created = createEditableCopy({
+        confirm: true,
+        reason: 'Change the bypass state',
+      });
+      if (!created) {
+        return;
+      }
+      draft = { doc: created.doc, setlist: 1, slot: created.slot };
+    }
     commitSnapshotDraft(
-      () => setImportedBlockEnabled(workingDoc, index, block, enabled),
+      (doc) => setImportedBlockEnabled(doc, index, block, enabled),
       `Draft: block ${block + 1} ${
         enabled ? 'enabled' : 'bypassed'
       } in snapshot ${index + 1} (not written).`,
       'the bypass change',
+      draft,
     );
   }
 
@@ -2497,7 +2523,7 @@ export default function App() {
       return;
     }
     commitSnapshotDraft(
-      () => setImportedSnapshotLedColor(workingDoc, index, color),
+      (doc) => setImportedSnapshotLedColor(doc, index, color),
       `Draft: snapshot ${index + 1} LED colour set to palette ${color} (not written).`,
       'the LED colour change',
     );
@@ -2794,6 +2820,160 @@ export default function App() {
     }
   }
 
+  /**
+   * Copy a preset to another User slot (the librarian's “Copy to…” action).
+   *
+   * An offline document is cloned in the page and stays a draft. A pedal body
+   * is read first and then written with operation 5, so it uses the same
+   * write-armed, confirmed path as Paste.
+   */
+  async function copyToSlot(kind: SetlistKind, slot: number): Promise<void> {
+    const isWorking =
+      workingSlot?.setlist === kind && workingSlot.slot === slot;
+    const preset =
+      (isWorking ? workingDoc : null) ?? localDocs[localKey(kind, slot)];
+    const loadedHere =
+      structure?.preset.setlist === kind && structure.preset.slot === slot;
+    const sourceName =
+      slotName(kind, slot) ||
+      preset?.name ||
+      (loadedHere ? structure?.preset.name ?? '' : '');
+
+    const entered = window.prompt(
+      `Copy "${sourceName || 'preset'}" to which User slot? (e.g. 13A):`,
+      '',
+    );
+    if (entered === null) {
+      return;
+    }
+    const target = parseSlotLabel(entered);
+    if (target === null) {
+      setSaveNotice({
+        kind: 'error',
+        text: `“${entered.trim()}” is not a slot. Use a label such as 13A or 01A…32D.`,
+      });
+      return;
+    }
+    if (kind === 1 && target === slot) {
+      setSaveNotice({ kind: 'info', text: 'Choose a different slot.' });
+      return;
+    }
+
+    const destinationName = slotName(1, target);
+    const destinationDoc = localDocs[localKey(1, target)];
+    if (
+      (destinationName || destinationDoc) &&
+      !window.confirm(
+        `Overwrite User ${slotLabel(target)}` +
+          (destinationName ? ` (“${destinationName}”)` : '') +
+          '?\n\nThe destination preset is replaced.',
+      )
+    ) {
+      return;
+    }
+
+    // Offline document: clone locally, no pedal needed.
+    if (preset) {
+      const copyName = sourceName || preset.name || DEFAULT_PRESET_NAME;
+      const copy = clonePreset(preset);
+      copy.setlist = 1;
+      copy.slot = target;
+      setImportedName(copy, copyName);
+      setLocalDocs((current) => ({
+        ...current,
+        [localKey(1, target)]: copy,
+      }));
+      updateSetlistName(1, target, copyName);
+      setPending((list) => [
+        ...list.filter((item) => item.key !== localKey(1, target)),
+        {
+          key: localKey(1, target),
+          setlist: 1,
+          slot: target,
+          name: copyName,
+          kind: 'paste',
+        },
+      ]);
+      setSaveNotice({
+        kind: 'info',
+        text:
+          `Copied “${copyName}” to User ${slotLabel(target)} as a local ` +
+          'draft (not written to the pedal).',
+      });
+      appendLog(
+        `Local copy: "${copyName}" → User ${slotLabel(target)} (not written to the pedal).`,
+      );
+      return;
+    }
+
+    // Pedal body: read it, then overwrite the destination with operation 5.
+    if (!connected) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'Connect the pedal to read this slot, or open it first to copy it ' +
+          'as an offline document.',
+      });
+      return;
+    }
+    if (!writeEnabled) {
+      setSaveNotice({
+        kind: 'error',
+        text: 'Check “Enable writing” before copying a pedal body to another slot.',
+      });
+      return;
+    }
+    const connection = connectionRef.current;
+    if (!connection || busy) {
+      return;
+    }
+
+    let blob = loadedHere ? presetBlob : null;
+    let copyName = sourceName;
+    if (!blob) {
+      setUsbBusy('Reading source slot…');
+      appendLog(
+        `Copy to: reading ${SETLIST_LABELS[kind]} ${slotLabel(slot)} ` +
+          `(${sourceName || 'unnamed'})…`,
+      );
+      try {
+        const result = await readPresetSlot(
+          connection,
+          kind,
+          slot,
+          sourceName,
+          reportProgress,
+        );
+        blob = result.blob;
+        copyName = copyName || result.structure.preset.name;
+      } catch (error) {
+        const message = errorMessage(error);
+        setSaveNotice({ kind: 'error', text: `Copy failed: ${message}` });
+        appendLog(
+          `ERROR copy (${SETLIST_LABELS[kind]} ${slotLabel(slot)}): ${message}`,
+        );
+        console.error('[POD Go] copy-to read failed', error);
+        return;
+      } finally {
+        setUsbBusy(null);
+      }
+    }
+    if (!blob) {
+      setSaveNotice({
+        kind: 'error',
+        text: 'The pedal returned no preset body for this slot.',
+      });
+      return;
+    }
+    await writeBodyToSlot(
+      target,
+      copyName || DEFAULT_PRESET_NAME,
+      blob,
+      'copy',
+      { setlist: kind, slot, name: copyName },
+    );
+  }
+
   /** Paste or move the clipboard into a User slot, locally. */
   function pasteSlot(
     kind: SetlistKind,
@@ -2813,11 +2993,35 @@ export default function App() {
       return;
     }
     if (!clipboardDoc) {
-      setSaveNotice({
-        kind: 'error',
-        text:
-          'The clipboard holds a pedal body, not an offline document. Use ' +
-          'Developer tools → Advanced preset actions to write it to the pedal.',
+      // A slot copy holds the pedal's raw body. Paste it with operation 5
+      // instead of dropping it: this is the same gated path as the advanced
+      // dialog, and it is the only way a connected paste can work.
+      if (!clipboardBlob) {
+        setSaveNotice({ kind: 'error', text: 'The clipboard is empty.' });
+        return;
+      }
+      if (!connected) {
+        setSaveNotice({
+          kind: 'error',
+          text:
+            'This clipboard holds a pedal body. Connect the pedal and enable ' +
+            'writing to paste it, or open the source preset and copy it as an ' +
+            'offline document.',
+        });
+        return;
+      }
+      if (!writeEnabled) {
+        setSaveNotice({
+          kind: 'error',
+          text: 'Check “Enable writing” before pasting a pedal body.',
+        });
+        return;
+      }
+      const bodyName = clipboard.name || DEFAULT_PRESET_NAME;
+      void writeBodyToSlot(slot, bodyName, clipboardBlob, mode, {
+        setlist: clipboard.setlist,
+        slot: clipboard.slot,
+        name: clipboard.name,
       });
       return;
     }
@@ -2944,13 +3148,41 @@ export default function App() {
     setContextMenu({ kind, slot: entry.slot, x, y });
   }
 
+  /** The preset the editor is showing, for the title's ⋯ menu. */
+  function currentPresetTarget(): { kind: SetlistKind; slot: number } | null {
+    if (workingSlot) {
+      return { kind: workingSlot.setlist, slot: workingSlot.slot };
+    }
+    const kind = structure?.preset.setlist;
+    const slot = structure?.preset.slot;
+    if ((kind === 0 || kind === 1) && slot !== null && slot !== undefined) {
+      return { kind, slot };
+    }
+    return null;
+  }
+
+  /** Open the same preset menu from the ⋯ button next to the name. */
+  function openCurrentPresetMenu(x: number, y: number): void {
+    const target = currentPresetTarget();
+    if (!target) {
+      return;
+    }
+    setContextMenu({ kind: target.kind, slot: target.slot, x, y });
+  }
 
   function menuItems(kind: SetlistKind, slot: number): PresetMenuEntry[] {
-    const name = slotName(kind, slot);
     const isWorking =
       workingSlot?.setlist === kind && workingSlot.slot === slot;
+    const isLoadedPedal =
+      structure?.preset.setlist === kind && structure.preset.slot === slot;
+    const name =
+      slotName(kind, slot) ||
+      (isWorking ? (workingDoc?.name ?? '') : '') ||
+      (isLoadedPedal ? (structure?.preset.name ?? '') : '');
     const hasDoc =
-      Boolean(localDocs[localKey(kind, slot)]) || (isWorking && Boolean(workingDoc));
+      Boolean(localDocs[localKey(kind, slot)]) ||
+      (isWorking && Boolean(workingDoc)) ||
+      (isLoadedPedal && Boolean(presetBlob));
     const empty = !name && !hasDoc;
     const items: PresetMenuEntry[] = [
       {
@@ -2993,9 +3225,17 @@ export default function App() {
         onSelect: () => void copySlot(kind, slot),
       },
       {
+        id: 'menu-copy-to',
+        label: 'Copy to…',
+        hint: connected ? 'Another User slot' : 'Open it first',
+        disabled: empty,
+        onSelect: () => void copyToSlot(kind, slot),
+      },
+      {
         id: 'menu-paste',
         label: 'Paste here',
-        disabled: kind === 0 || !clipboard || !clipboardDoc,
+        disabled:
+          kind === 0 || !clipboard || (!clipboardDoc && !clipboardBlob),
         onSelect: () => pasteSlot(1, slot, 'paste'),
       },
       {
@@ -3355,24 +3595,29 @@ export default function App() {
   }
 
   /**
-   * Write the clipboard body to one User slot with operation 5.
+   * Write a pedal-body blob to one User slot with operation 5.
    *
-   * A one-entry `.pgbak` is built with the Rust core and replayed by
+   * Shared by **Paste**, **Move** and **Copy to…**. The caller already has a
+   * body (the clipboard, a slot read or the active preset); the gates are the
+   * same: writing armed, one confirmation, then a read-back of the User
+   * setlist. A one-entry `.pgbak` is built with the Rust core and replayed by
    * `RestoreFlow`, so the stream framing is exactly the tested restore path.
    * The slot is overwritten; one `window.confirm` is the only gate after the
    * explicit write button.
    */
-  async function writePaste(destSlot: number, name: string, mode: PasteMode) {
+  async function writeBodyToSlot(
+    destSlot: number,
+    name: string,
+    blob: Uint8Array,
+    mode: PasteMode | 'copy',
+    source?: { setlist: SetlistKind; slot: number; name: string },
+  ): Promise<void> {
     const connection = connectionRef.current;
     if (!connection || actionBusy) {
       return;
     }
     if (!writeEnabled) {
       setActionError('Enable writing first.');
-      return;
-    }
-    if (!clipboard || !clipboardBlob) {
-      setActionError('The clipboard is empty.');
       return;
     }
     const error = validatePresetName(name);
@@ -3382,7 +3627,7 @@ export default function App() {
     }
     const existing = setlists[1]?.[destSlot]?.name ?? '';
     const confirmed = window.confirm(
-      `Write the clipboard preset to User ${slotLabel(destSlot)}?\n\n` +
+      `Write the preset to User ${slotLabel(destSlot)}?\n\n` +
         `Current: ${existing || 'empty'}\nNew name: ${name}\n\n` +
         'This overwrites the slot with operation 5 and cannot be undone ' +
         'without a copy of the current contents. Operation 5 has not been ' +
@@ -3400,8 +3645,13 @@ export default function App() {
     setActionBusy(true);
     setUsbBusy('Writing preset…');
     appendLog(
-      `Writing "${name}" to User ${slotLabel(destSlot)} from the clipboard ` +
-        `(operation 5, ${clipboardBlob.length} B)…`,
+      `Writing "${name}" to User ${slotLabel(destSlot)}` +
+        (source
+          ? ` from ${SETLIST_LABELS[source.setlist]} ${slotLabel(
+              source.slot,
+            )} ("${source.name || 'unnamed'}")`
+          : ' from the clipboard') +
+        ` (operation 5, ${blob.length} B)…`,
     );
     try {
       const builder = new BackupBuilder(
@@ -3410,7 +3660,7 @@ export default function App() {
       );
       let bytes: Uint8Array;
       try {
-        builder.add(1, destSlot, name, clipboardBlob);
+        builder.add(1, destSlot, name, blob);
         bytes = builder.finish();
       } finally {
         builder.free();
@@ -3441,10 +3691,10 @@ export default function App() {
             'name (operation 9 is not sent by this build).',
         );
       }
-      if (mode === 'move') {
+      if (mode === 'move' && source) {
         appendLog(
-          `Move: the source ${SETLIST_LABELS[clipboard.setlist]} ` +
-            `${slotLabel(clipboard.slot)} was not cleared on the pedal.`,
+          `Move: the source ${SETLIST_LABELS[source.setlist]} ` +
+            `${slotLabel(source.slot)} was not cleared on the pedal.`,
         );
       }
       setFreshBackup(null);
@@ -3457,6 +3707,19 @@ export default function App() {
       setActionBusy(false);
       setUsbBusy(null);
     }
+  }
+
+  /** Write the clipboard body to a User slot (Paste / Move paths). */
+  async function writePaste(destSlot: number, name: string, mode: PasteMode) {
+    if (!clipboard || !clipboardBlob) {
+      setActionError('The clipboard is empty.');
+      return;
+    }
+    await writeBodyToSlot(destSlot, name, clipboardBlob, mode, {
+      setlist: clipboard.setlist,
+      slot: clipboard.slot,
+      name: clipboard.name,
+    });
   }
 
   /** Open the backup/restore dialog; reads stay available, restore is gated. */
@@ -3814,6 +4077,25 @@ export default function App() {
             <span className="connect-dot" aria-hidden="true" />            
           </button>
 
+          <button
+            id="save-preset"
+            type="button"
+            className="toolbar-button is-primary"
+            disabled={!moduleReady || busy}
+            onClick={() => void saveWorkingPreset()}
+            title={
+              !connected
+                ? 'Connect a POD Go to save. Export .pgp works offline.'
+                : !writeEnabled
+                  ? 'Check “Enable writing” first. Export .pgp needs no pedal.'
+                  : !activePresetLoaded
+                    ? 'Read the active preset from the pedal first.'
+                    : 'Write the drafts to the pedal and store the preset in its slot (Ctrl+S)'
+            }
+          >
+            Save
+          </button>
+
           {connected && (
             <label
               className="edit-arm"
@@ -3838,30 +4120,6 @@ export default function App() {
             </label>
           )}
 
-          <button
-            id="save-preset"
-            type="button"
-            className="toolbar-button is-primary"
-            disabled={
-              !moduleReady ||
-              busy ||
-              !connected ||
-              !writeEnabled ||
-              !activePresetLoaded
-            }
-            onClick={() => void saveWorkingPreset()}
-            title={
-              !connected
-                ? 'Connect a POD Go to save. Export .pgp works offline.'
-                : !writeEnabled
-                  ? 'Check “Enable writing” first. Export .pgp needs no pedal.'
-                  : !activePresetLoaded
-                    ? 'Read the active preset from the pedal first.'
-                    : 'Write the drafts to the pedal and store the preset in its slot (Ctrl+S)'
-            }
-          >
-            Save
-          </button>
           <button
             id="new-preset"
             type="button"
@@ -3993,7 +4251,10 @@ export default function App() {
               onToggleSnapshotParam={
                 workingDoc ? toggleSnapshotParam : undefined
               }
-              onSetBlockEnabled={workingDoc ? setBlockEnabled : undefined}
+              onSetBlockEnabled={setBlockEnabled}
+              onPresetMenu={
+                currentPresetTarget() ? openCurrentPresetMenu : undefined
+              }
               onCopyBlock={copyBlockAt}
               onPasteBlock={pasteBlockAt}
               canPasteBlock={blockClipboard !== null}
