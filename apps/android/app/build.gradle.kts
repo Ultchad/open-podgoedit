@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -16,7 +19,7 @@ data class SigningMaterial(
 )
 
 fun signingFromProperties(path: String): SigningMaterial? = try {
-    val properties = java.util.Properties()
+    val properties = Properties()
     File(path).inputStream().use(properties::load)
     val store = properties.getProperty("storeFile")
     val alias = properties.getProperty("keyAlias")
