@@ -68,6 +68,8 @@ interface Props {
   onToggleSnapshotParam?: (paramIndex: number, assigned: boolean) => void;
   /** Bypass or enable this block in the active snapshot. */
   onSetBlockEnabled?: (enabled: boolean) => void;
+  /** The page can create an editable copy, so the toggle stays visible. */
+  canSetBlockEnabled?: boolean;
   /** Open the effect actions menu at a viewport position. */
   onOpenBlockMenu?: (x: number, y: number) => void;
 }
@@ -85,6 +87,7 @@ export default function BlockInspector({
   snapshotValues,
   onToggleSnapshotParam,
   onSetBlockEnabled,
+  canSetBlockEnabled = false,
   onOpenBlockMenu,
 }: Props) {
   const [mode, setMode] = useState<Mode>('params');
@@ -166,7 +169,7 @@ export default function BlockInspector({
         </span>
         {model?.sub && <span className="inspector-sub">{model.sub}</span>}
         {entry?.kind === 'block' &&
-          (onSetBlockEnabled ? (
+          (onSetBlockEnabled && (editable || canSetBlockEnabled) ? (
             <button
               type="button"
               className={`inspector-state is-toggle${

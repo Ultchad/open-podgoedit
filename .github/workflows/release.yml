@@ -117,14 +117,31 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.PODGO_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.PODGO_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.PODGO_KEY_PASSWORD }}
+          MASK_VALUES: >-
+            ${{ secrets.ANDROID_KEYSTORE }}
+            ${{ secrets.PODGO_KEYSTORE_BASE64 }}
+            ${{ secrets.PODGO_KEYSTORE_PASSWORD }}
+            ${{ secrets.PODGO_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          # Exporting PODGO_SIGNING_* through GITHUB_ENV made GitHub print the
+          # whole step environment, passwords included, into a public log.
+          # Secrets are masked before they reach the environment, the values
+          # are registered with ::add-mask::, and Gradle reads the keystore from
+          # a properties file instead of environment variables.
+          for value in $MASK_VALUES; do
+            echo "::add-mask::$value"
+          done
           if [ -n "${BUNDLE:-}" ]; then
             printf '%s\n' "$BUNDLE" > "$RUNNER_TEMP/keystore.env"
             set -a
             # shellcheck disable=SC1090
             . "$RUNNER_TEMP/keystore.env"
             set +a
+            for value in "${PODGO_KEYSTORE_BASE64:-}" \
+                "${PODGO_KEYSTORE_PASSWORD:-}" "${PODGO_KEY_PASSWORD:-}"; do
+              [ -z "$value" ] || echo "::add-mask::$value"
+            done
             KEYSTORE_BASE64="${PODGO_KEYSTORE_BASE64:-}"
             KEYSTORE_PASSWORD="${PODGO_KEYSTORE_PASSWORD:-}"
             KEY_ALIAS="${PODGO_KEY_ALIAS:-}"
@@ -150,12 +167,18 @@ jobs:
             echo "::error::The keystore does not open with these credentials (wrong password, alias or base64)."
             exit 1
           fi
+          # Gradle reads this file (see apps/android/app/build.gradle.kts); it is
+          # outside the workspace and never printed.
+          properties="$RUNNER_TEMP/podgo-keystore.properties"
+          umask 077
           {
-            echo "file=$keystore"
-            echo "PODGO_SIGNING_STORE_FILE=$keystore"
-            echo "PODGO_SIGNING_STORE_PASSWORD=$KEYSTORE_PASSWORD"
-            echo "PODGO_SIGNING_KEY_ALIAS=$KEY_ALIAS"
-            echo "PODGO_SIGNING_KEY_PASSWORD=$KEY_PASSWORD"
+            echo "storeFile=$keystore"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > "$properties"
+          {
+            echo "PODGO_SIGNING_PROPERTIES=$properties"
           } >> "$GITHUB_ENV"
           echo "file=$keystore" >> "$GITHUB_OUTPUT"
           echo "Signing with alias '$KEY_ALIAS'."
@@ -166,6 +189,7 @@ jobs:
           PODGO_VERSION_NAME: ${{ steps.version.outputs.version }}
         run: |
           chmod +x gradlew
+          # A blank PODGO_VERSION_NAME would fail Gradle's version parsing.
           ./gradlew assembleRelease --no-daemon
 
       - name: Name artifacts

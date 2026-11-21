@@ -62,6 +62,11 @@ interface Props {
   ) => void;
   /** Bypass or enable a block in the active snapshot. */
   onSetBlockEnabled?: (block: number, enabled: boolean) => void;
+  /**
+   * The page turns the first bypass tap on a pedal-read preset into an
+   * editable copy, so the toggle stays visible even without a working copy.
+   */
+  canSetBlockEnabled?: boolean;
   /** Open the page-level preset menu (the ⋯ next to the preset name). */
   onPresetMenu?: (x: number, y: number) => void;
   /** Copy one processing slot to the in-tab effect clipboard. */
@@ -103,6 +108,7 @@ export default function PresetView({
   onSetSnapshotLedColor,
   onToggleSnapshotParam,
   onSetBlockEnabled,
+  canSetBlockEnabled = false,
   onPresetMenu,
   onCopyBlock,
   onPasteBlock,
@@ -627,6 +633,7 @@ export default function PresetView({
             ? (enabled) => onSetBlockEnabled(blockIndex, enabled)
             : undefined
         }
+        canSetBlockEnabled={canSetBlockEnabled}
         onOpenBlockMenu={
           onCopyBlock || onPasteBlock || onMoveBlock || onSetBlockEnabled
             ? (x, y) => {
