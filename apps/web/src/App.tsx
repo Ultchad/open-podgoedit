@@ -2494,10 +2494,10 @@ export default function App() {
    */
   function setBlockEnabled(block: number, enabled: boolean): void {
     const index = structure?.currentSnapshot ?? 0;
-    let draft:
-      | { doc: EditPreset; setlist: SetlistKind; slot: number }
-      | undefined;
     if (!workingDoc) {
+      // The pedal body stays read-only: the first bypass change on a
+      // pedal-read preset asks for an editable offline copy, then applies the
+      // bypass to that copy in the same step.
       const created = createEditableCopy({
         confirm: true,
         reason: 'Change the bypass state',
@@ -2505,7 +2505,15 @@ export default function App() {
       if (!created) {
         return;
       }
-      draft = { doc: created.doc, setlist: 1, slot: created.slot };
+      commitSnapshotDraft(
+        (doc) => setImportedBlockEnabled(doc, index, block, enabled),
+        `Created an editable copy and set block ${block + 1} ` +
+          `${enabled ? 'enabled' : 'bypassed'} in snapshot ${index + 1} ` +
+          '(not written).',
+        'the bypass change',
+        { doc: created.doc, setlist: 1, slot: created.slot },
+      );
+      return;
     }
     commitSnapshotDraft(
       (doc) => setImportedBlockEnabled(doc, index, block, enabled),
@@ -2513,7 +2521,6 @@ export default function App() {
         enabled ? 'enabled' : 'bypassed'
       } in snapshot ${index + 1} (not written).`,
       'the bypass change',
-      draft,
     );
   }
 
@@ -4252,6 +4259,7 @@ export default function App() {
                 workingDoc ? toggleSnapshotParam : undefined
               }
               onSetBlockEnabled={setBlockEnabled}
+              canSetBlockEnabled={connected && activePresetLoaded}
               onPresetMenu={
                 currentPresetTarget() ? openCurrentPresetMenu : undefined
               }
