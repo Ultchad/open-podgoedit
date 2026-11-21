@@ -2072,6 +2072,51 @@ test('pastes a copied pedal body into another slot from the menu', async ({
   await expect(page.locator('.report.error')).toHaveCount(0);
 });
 
+test('creates the editable copy when bypass is tapped on a pedal-read preset', async ({
+  page,
+}) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  // A pedal-read preset still needs the toggle: the first tap asks for an
+  // editable offline copy and applies the bypass there.
+  const before = page.locator('.inspector-state.is-toggle');
+  await expect(before).toHaveCount(1);
+  await expect(before).toHaveText('active');
+
+  let copyMessage = '';
+  page.once('dialog', (dialog) => {
+    copyMessage = dialog.message();
+    void dialog.accept();
+  });
+  await before.click();
+
+  expect(copyMessage).toContain('editable copy');
+  const toggle = page.locator('.inspector-state.is-toggle').first();
+  await expect(toggle).toHaveText('bypassed');
+  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+  await expect(page.locator('.report.log')).toContainText(
+    'Created an editable copy',
+  );
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writes).toHaveLength(0);
+});
+
 test('opens the preset menu from the ⋯ next to the name', async ({ page }) => {
   const fixture = smallSetlist(['Lead A', 'Lead B']);
   const preset = readFileSync(

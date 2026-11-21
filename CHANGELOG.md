@@ -92,9 +92,11 @@ semantic versioning once it reaches 1.0.
   writes it with operation 5 instead of refusing and pointing at Developer
   tools. The write keeps the usual arm and one confirmation.
 - **Bypassing an effect on a connected preset works.** The inspector toggle was
-  hidden unless an offline copy was open. The first bypass change now creates
-  an editable offline copy (with a clear confirmation) and applies the bypass
-  there; it never invents an unvalidated pedal bypass write.
+  hidden unless an offline copy was open, and accepting the editable-copy
+  prompt left the bypass unapplied. The toggle now stays visible on a
+  pedal-read preset, and the first tap creates the editable offline copy (with
+  a clear confirmation) and applies the bypass there in the same step; it
+  never invents an unvalidated pedal bypass write.
 - **Mobile header rearranges cleanly when a pedal is connected.** Save occupies
   the third header cell, and the full-width **Enable writing** row follows it
   instead of pushing Save onto an unexpected row.
