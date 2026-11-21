@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { readInputFile } from './androidFiles';
+import { isDesktopShell } from './desktop';
 import {
   BackupBuilder,
   coreVersion,
@@ -264,9 +265,15 @@ function downloadBytes(
   filename: string,
   type = 'application/octet-stream',
 ): void {
-  // A WebView cannot save a `blob:` link, so the Android shell writes the file
-  // into the app's Downloads folder instead. The native side reports success
-  // and failures itself, which is why nothing is returned here.
+  // A WebView cannot save a `blob:` link, so both native shells write the file
+  // themselves. The Android side goes to the app's Downloads folder; the
+  // desktop side opens a save dialog. The native side reports success and
+  // failures itself, which is why nothing is returned here.
+  const desktopSave = window.podgoDesktopFiles?.save;
+  if (desktopSave) {
+    desktopSave(filename, bytesToBase64(bytes)).catch(() => undefined);
+    return;
+  }
   const androidSave = window.podgoAndroidFiles?.save;
   if (androidSave) {
     androidSave(filename, bytesToBase64(bytes)).catch(() => undefined);
@@ -314,6 +321,7 @@ export default function App() {
 
   const [usbSupported] = useState(() => usbLinkSupported());
   const [androidShell] = useState(() => runningOnAndroidShell());
+  const [desktopShell] = useState(() => isDesktopShell());
   const [deviceInfo, setDeviceInfo] = useState<PodgoDeviceInfo | null>(null);
   const [usbBusy, setUsbBusy] = useState<string | null>(null);
   const [usbError, setUsbError] = useState<string | null>(null);
@@ -652,11 +660,17 @@ export default function App() {
   async function connect() {
     setUsbError(null);
     setDeviceReport(null);
-    setUsbBusy(androidShell ? 'Opening the USB device…' : 'Selecting the device…');
+    setUsbBusy(
+      androidShell || desktopShell
+        ? 'Opening the USB device…'
+        : 'Selecting the device…',
+    );
     appendLog(
       androidShell
         ? 'Opening the POD Go over Android USB host…'
-        : 'Opening the WebUSB device picker…',
+        : desktopShell
+          ? 'Opening the POD Go over desktop USB (libusb)…'
+          : 'Opening the WebUSB device picker…',
     );
     try {
       const device = await requestPedal();
@@ -2494,10 +2508,10 @@ export default function App() {
    */
   function setBlockEnabled(block: number, enabled: boolean): void {
     const index = structure?.currentSnapshot ?? 0;
-    let draft:
-      | { doc: EditPreset; setlist: SetlistKind; slot: number }
-      | undefined;
     if (!workingDoc) {
+      // The pedal body stays read-only: the first bypass change on a
+      // pedal-read preset asks for an editable offline copy, then applies the
+      // bypass to that copy in the same step.
       const created = createEditableCopy({
         confirm: true,
         reason: 'Change the bypass state',
@@ -2505,7 +2519,15 @@ export default function App() {
       if (!created) {
         return;
       }
-      draft = { doc: created.doc, setlist: 1, slot: created.slot };
+      commitSnapshotDraft(
+        (doc) => setImportedBlockEnabled(doc, index, block, enabled),
+        `Created an editable copy and set block ${block + 1} ` +
+          `${enabled ? 'enabled' : 'bypassed'} in snapshot ${index + 1} ` +
+          '(not written).',
+        'the bypass change',
+        { doc: created.doc, setlist: 1, slot: created.slot },
+      );
+      return;
     }
     commitSnapshotDraft(
       (doc) => setImportedBlockEnabled(doc, index, block, enabled),
@@ -2513,7 +2535,6 @@ export default function App() {
         enabled ? 'enabled' : 'bypassed'
       } in snapshot ${index + 1} (not written).`,
       'the bypass change',
-      draft,
     );
   }
 
@@ -4069,7 +4090,9 @@ export default function App() {
                 ? 'Disconnect from this POD Go'
                 : androidShell
                   ? 'Connect a POD Go over Android USB host'
-                  : 'Connect a POD Go over WebUSB'
+                  : desktopShell
+                    ? 'Connect a POD Go over desktop USB (libusb)'
+                    : 'Connect a POD Go over WebUSB'
             }
             onClick={() => void (connected ? disconnect() : connect())}
           >
@@ -4252,6 +4275,7 @@ export default function App() {
                 workingDoc ? toggleSnapshotParam : undefined
               }
               onSetBlockEnabled={setBlockEnabled}
+              canSetBlockEnabled={connected && activePresetLoaded}
               onPresetMenu={
                 currentPresetTarget() ? openCurrentPresetMenu : undefined
               }
@@ -4289,12 +4313,18 @@ export default function App() {
             <div>
               <h2>
                 POD Go connection (
-                {androidShell ? 'Android USB host' : 'WebUSB'})
+                {androidShell
+                  ? 'Android USB host'
+                  : desktopShell
+                    ? 'Desktop USB (libusb)'
+                    : 'WebUSB'})
               </h2>
               <p className="hint">
                 {androidShell
                   ? 'USB host within the Android app. Reads are always available; each pedal write is confirmed.'
-                  : 'Chrome or Edge, page served on 127.0.0.1. Reads are always available; each pedal write is confirmed.'}
+                  : desktopShell
+                    ? 'Native libusb inside the desktop app. Reads are always available; each pedal write is confirmed.'
+                    : 'Chrome or Edge, page served on 127.0.0.1. Reads are always available; each pedal write is confirmed.'}
               </p>
             </div>
             <DeviceBadge
@@ -4308,8 +4338,8 @@ export default function App() {
           {!usbSupported && (
             <p className="inline-error">
               WebUSB is not available, and this page runs outside the Android
-              app. File reports remain usable offline; Firefox and Safari
-              cannot open the device.
+              and desktop apps. File reports remain usable offline; Firefox and
+              Safari cannot open the device.
             </p>
           )}
 

@@ -13,6 +13,12 @@ semantic versioning once it reaches 1.0.
   Exports are written into the app's Downloads folder. The transport is covered
   by browser tests against a fake bridge but is **not validated on Android
   hardware**; reads and writes keep the same gates as the web build.
+- **Tauri 2 desktop shell with a native libusb transport.** `apps/desktop`
+  wraps the same web bundle and adds `usb_open`/`usb_read`/`usb_write` over
+  `rusb`, mirroring the Android reader-thread design, plus a native save dialog
+  for exports. CI compile-checks the shell on Linux; it has **not** been run
+  against a real POD Go yet, so reads and writes are unvalidated on hardware.
+  See `docs/development/desktop.md`.
 - **Automated releases.** Pushing a `v*` tag builds the signed APK and the
   static web bundle and publishes both on a GitHub Release, with the changelog
   as release notes. See `docs/development/android.md`.
@@ -92,9 +98,11 @@ semantic versioning once it reaches 1.0.
   writes it with operation 5 instead of refusing and pointing at Developer
   tools. The write keeps the usual arm and one confirmation.
 - **Bypassing an effect on a connected preset works.** The inspector toggle was
-  hidden unless an offline copy was open. The first bypass change now creates
-  an editable offline copy (with a clear confirmation) and applies the bypass
-  there; it never invents an unvalidated pedal bypass write.
+  hidden unless an offline copy was open, and accepting the editable-copy
+  prompt left the bypass unapplied. The toggle now stays visible on a
+  pedal-read preset, and the first tap creates the editable offline copy (with
+  a clear confirmation) and applies the bypass there in the same step; it
+  never invents an unvalidated pedal bypass write.
 - **Mobile header rearranges cleanly when a pedal is connected.** Save occupies
   the third header cell, and the full-width **Enable writing** row follows it
   instead of pushing Save onto an unexpected row.
