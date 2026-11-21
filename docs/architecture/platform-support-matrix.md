@@ -20,10 +20,10 @@ Status vocabulary (mandatory):
 | Offline preset management | PL | PL | PL | PL | PL | PL | PL |
 | Import/export `.pgp` | PL | PL | PL | PL | PL | PL | PL |
 | Import/export `.pgb` | PL | PL | PL | PL | PL | PL | PL |
-| Device discovery | ITH (WebUSB) | UNS | PL (libusb) | PL (libusb) | PL (libusb) | PL (USB Host) | UNS |
-| Vendor bulk protocol | ITH (WebUSB, read-only) | UNS | PL | PL | PL | PL | UNS |
+| Device discovery | ITH (WebUSB) | UNS | BU (libusb) | BU (libusb) | BU (libusb) | ITM (USB Host) | UNS |
+| Vendor bulk protocol | ITH (WebUSB, read-only) | UNS | BU | BU | BU | ITM | UNS |
 | MIDI control | UNS | UNS | PL (WINMM) | PL (CoreMIDI) | PL (ALSA) | PL | PL (CoreMIDI, unverified) |
-| Read presets | ITH (WebUSB, Factory + User) | UNS | PL | PL | PL | PL | UNS |
+| Read presets | ITH (WebUSB, Factory + User) | UNS | BU | BU | BU | ITM | UNS |
 | Write one effect parameter (`set_param`, gated) | ITH (WebUSB) | UNS | PL (gated) | PL (gated) | PL (gated) | PL (gated) | UNS |
 | Save preset metadata (`save_preset`, gated) | ITM (WebUSB) | UNS | PL (gated) | PL (gated) | PL (gated) | PL (gated) | UNS |
 | Full backup / restore (`.pgbak`, op 5, gated) | ITM (WebUSB) | UNS | PL (gated) | PL (gated) | PL (gated) | PL (gated) | UNS |
@@ -36,10 +36,10 @@ Status vocabulary (mandatory):
 |---|---|---|---|
 | Web Chromium | WebUSB | ITH | Read-only setlist read on a POD Go Wireless (fw 2.50, PID `0x424b`); requires HTTPS/loopback and a user gesture |
 | Web Safari/Firefox | none | UNS | No WebUSB; offline only |
-| Windows | libusb/WinUSB | PL | Official client uses the same path |
-| macOS | libusb | PL | App Sandbox would need USB entitlement |
-| Linux | libusb | PL | udev rule for `0e41:4247` |
-| Android | USB Host | PL | Permission Intent; OTG required |
+| Windows | libusb/WinUSB | BU | Tauri shell compiles; the pedal must be bound to WinUSB. Not run on hardware yet |
+| macOS | libusb | BU | Tauri shell compiles; App Sandbox would need a USB entitlement. Not run on hardware yet |
+| Linux | libusb | BU | Tauri shell compiles; udev rule for `0e41:4247`. Not run on hardware yet |
+| Android | USB Host | ITM | Native bridge covered by browser tests with a fake transport; not run on a phone with a pedal yet |
 | iOS | none verified | UNS | Direct vendor USB unavailable via public libusb-style APIs |
 | iOS MIDI | CoreMIDI | PL | Only if the device exposes class-compliant MIDI |
 

@@ -161,3 +161,60 @@ jobs:
       - name: Assemble release APK
         working-directory: apps/android
         run: ./gradlew assembleRelease --no-daemon
+
+  desktop:
+    name: Desktop shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri links against the system WebView; rusb needs the libusb headers.
+      - name: Install WebView and libusb headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev patchelf pkg-config libusb-1.0-0-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/web/wasm
+            apps/desktop/src-tauri
+
+      # Must match the `wasm-bindgen` crate version in apps/web/wasm/Cargo.toml.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.130
+
+      - name: Install npm dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      # The shell embeds `apps/web/dist` at compile time.
+      - name: Build web bundle
+        working-directory: apps/web
+        env:
+          VITE_BASE: ./
+        run: npm run build
+
+      - name: Check formatting
+        working-directory: apps/desktop/src-tauri
+        run: cargo fmt -- --check
+
+      # `cargo check` alone would not catch lint regressions; this compiles the
+      # shell and its tests without producing a bundle.
+      - name: Clippy
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings

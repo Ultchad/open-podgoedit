@@ -13,6 +13,12 @@ semantic versioning once it reaches 1.0.
   Exports are written into the app's Downloads folder. The transport is covered
   by browser tests against a fake bridge but is **not validated on Android
   hardware**; reads and writes keep the same gates as the web build.
+- **Tauri 2 desktop shell with a native libusb transport.** `apps/desktop`
+  wraps the same web bundle and adds `usb_open`/`usb_read`/`usb_write` over
+  `rusb`, mirroring the Android reader-thread design, plus a native save dialog
+  for exports. CI compile-checks the shell on Linux; it has **not** been run
+  against a real POD Go yet, so reads and writes are unvalidated on hardware.
+  See `docs/development/desktop.md`.
 - **Automated releases.** Pushing a `v*` tag builds the signed APK and the
   static web bundle and publishes both on a GitHub Release, with the changelog
   as release notes. See `docs/development/android.md`.
