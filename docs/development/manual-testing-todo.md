@@ -783,6 +783,20 @@ n'est pas exigée.
 - [ ] **Write rename to pedal** uniquement pour le preset User **actif**, sans
       sauvegarde préalable : une seule confirmation, puis vérifier le nom dans
       la liste et sur le pédalier.
+- [ ] **Copy to…** depuis le preset **actif** (menu ⋯ du titre) : le journal
+      doit afficher `Copy: storing the active preset … (operation 71)` puis
+      `Copy verified: User <slot> reads «<nom>»` ; aucune trame op 5.
+      Rappeler le slot : le son doit être celui du preset actif.
+- [ ] **Copy to…** depuis un slot **non actif** (menu contextuel de la
+      bibliothèque) : le journal doit afficher `Preset write:` puis
+      `Preset write body verified: … matches the source byte for byte`, ou un
+      `WARNING` explicite si le corps relu diffère.
+- [ ] Parcourir un autre slot puis recliquer le slot **actif** : le journal
+      affiche `Re-reading the pedal's active preset …`, et
+      **Save active preset to slot…** reste actif sans relire à la main.
+- [ ] Clic droit sur un effet, **Bypass / Enable in snapshot N** : le bloc
+      bascule sur la copie hors ligne et le bandeau précise que le pédalier
+      n'est pas modifié.
 - [ ] Archiver le journal et, si une sauvegarde a été prise, sa SHA-256.
 
 **Résultat :** à compléter (date, firmware, slots, noms, écarts).

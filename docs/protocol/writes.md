@@ -221,18 +221,27 @@ Golden vector (the captured frame, asserted by
 The UI restricts the destination to the **User** setlist. Before op 71 is
 sent, the page:
 
-1. reads the destination slot over the read channel (operation 4 with
+1. applies the pending model (op 40) and parameter (op 30) drafts to the
+   pedal's edit buffer, exactly like a save, so the copy matches the screen;
+2. reads the destination slot over the read channel (operation 4 with
    `{107: 1, 108: slot, 101: 2}`), keeping the byte-exact body in memory;
-2. computes its SHA-256 digest and downloads it as
+3. computes its SHA-256 digest and downloads it as
    `podgo-user-<slot>-backup.bin`;
-3. displays the digest and requires the user to tick an acknowledgement. A
+4. displays the digest and requires the user to tick an acknowledgement. A
    free slot (read answers `key 104 is not a blob: nil`) is recorded as an
    empty destination: there is no body to preserve, but the acknowledgement
    is still required.
 
+The **Copy to…** action on the preset the editor has active skips the body
+stream and reuses the same op-71 command with the destination slot and the
+source name, after applying drafts. It is the copy path that does not depend
+on operation 5.
+
 After the pedal answers status `0`, the page re-reads the User setlist and
 checks that the destination slot now reads the requested name. A mismatch is
-reported in the diagnostics log without pretending the write failed.
+reported in the diagnostics log without pretending the write failed. Operation
+71 carries no body, so the copy path cannot compare the destination sound; the
+page says so and asks the user to recall the slot.
 
 ### 2.6 Backup (`.pgbak`)
 
@@ -407,6 +416,9 @@ The toolbar's **Actions…** dialog separates the in-page model from the pedal:
   preset's** metadata. It is therefore offered only when the editor shows the
   active preset and the slot is in the User setlist. One `window.confirm` is
   the only gate. Renaming a different slot is local-only.
+- **Copy to…** writes one User slot: the active preset goes through operation
+  71 (after pending drafts), any other slot is streamed with operation 5 and
+  read back for a byte comparison. The source slot is always kept.
 
 Limits, stated in the dialog:
 
@@ -415,9 +427,11 @@ Limits, stated in the dialog:
   clears it.
 - Operation 5 may store the body without updating the setlist name (the name
   appears to travel in operation 9, which this build does not send). After a
-  write the page re-reads the User setlist and logs a warning if the name did
-  not change.
-- Neither write path is hardware-validated; both are `ITM`.
+  write the page re-reads the User setlist, then (for **Copy to…**, **Paste**
+  and **Move**) re-reads the destination body and compares it with the source
+  so the log states whether the copy landed. Name and body mismatches are
+  reported as warnings, never as success.
+- No write path here is hardware-validated in this build; all are `ITM`.
 
 ### 2.9 `set_model` (operation 40)
 
