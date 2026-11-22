@@ -312,6 +312,19 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   ).join('');
 }
 
+/** Byte-for-byte comparison, used to verify an op-5 body read-back. */
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export default function App() {
   const [module, setModule] = useState<ModuleState>({ status: 'loading' });
   const [panels, setPanels] = useState<Record<Kind, PanelState>>({
@@ -372,6 +385,18 @@ export default function App() {
   const [writeEnabled, setWriteEnabled] = useState(false);
   /** True only when the editor shows the preset the pedal has active. */
   const [activePresetLoaded, setActivePresetLoaded] = useState(false);
+  /**
+   * User slot the pedal had active when it was last read.
+   *
+   * Re-opening that slot means "show the active preset again", not "read some
+   * stored slot": the page re-reads object 22 so Save and the bypass control
+   * stay available without a manual reload. A slot read of any other position
+   * still disarms writes until the active preset is read back.
+   */
+  const [activePresetAt, setActivePresetAt] = useState<{
+    setlist: SetlistKind;
+    slot: number;
+  } | null>(null);
   const [writing, setWriting] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveBackup, setSaveBackup] = useState<SaveBackup | null>(null);
@@ -756,6 +781,7 @@ export default function App() {
         slot,
       );
       setActivePresetLoaded(true);
+      setActivePresetAt(slot === null ? null : { setlist, slot });
       appendLog(
         `Connect: active preset "${result.structure.preset.name || 'unnamed'}" ` +
           `(${SETLIST_LABELS[setlist]} ${
@@ -788,6 +814,7 @@ export default function App() {
       setDeviceReport(null);
       setWriteEnabled(false);
       setActivePresetLoaded(false);
+      setActivePresetAt(null);
       setSaveOpen(false);
       setSaveBackup(null);
       setSaveBackupError(null);
@@ -887,18 +914,26 @@ export default function App() {
     setDeviceReport({ kind: 'preset', label, ...result });
   }
 
-  async function readPresetFromDevice() {
-    const connection = connectionRef.current;
-    if (!connection) {
-      return;
-    }
-    if (!confirmDiscardPedalDrafts()) {
-      return;
-    }
+  /**
+   * Read the pedal's active preset (object 23 then object 22) and make it the
+   * edit target again.
+   *
+   * Shared by the **Read active preset** button and by re-opening the slot the
+   * pedal has active: either way the page must end up holding the pedal's
+   * current edit buffer, not a stored slot body, before Save (op 30/71) or the
+   * bypass control is allowed to act on it.
+   */
+  async function loadActivePreset(
+    connection: PodgoConnection,
+    reason: string,
+  ): Promise<{
+    ok: boolean;
+    location: { setlist: SetlistKind; slot: number } | null;
+  }> {
     setUsbError(null);
     setDeviceReport(null);
     setUsbBusy('Handshake…');
-    appendLog('Reading the active preset…');
+    appendLog(reason);
     try {
       // The fallback read (object 22 only) cannot tell the slot, so only reuse
       // a name when the editor already shows the pedal's active preset.
@@ -913,20 +948,35 @@ export default function App() {
       const setlist: SetlistKind =
         result.structure.preset.setlist === 0 ? 0 : 1;
       showPreset(result, 'active preset from pedal', 'Active preset', setlist, slot);
+      const location = slot === null ? null : { setlist, slot };
       setActivePresetLoaded(true);
+      setActivePresetAt(location);
       setUsbBusy(null);
       appendLog(
         `Read active preset: ${result.chunks} chunk(s)${
           result.truncated ? ', truncated' : ''
         }, ${result.structure.preset.name || 'unnamed'}.`,
       );
+      return { ok: true, location };
     } catch (error) {
       setUsbBusy(null);
       const message = errorMessage(error);
       setUsbError(message);
       appendLog(`ERROR active preset: ${message}`);
       console.error('[POD Go] active preset read failed', error);
+      return { ok: false, location: null };
     }
+  }
+
+  async function readPresetFromDevice() {
+    const connection = connectionRef.current;
+    if (!connection) {
+      return;
+    }
+    if (!confirmDiscardPedalDrafts()) {
+      return;
+    }
+    await loadActivePreset(connection, 'Reading the active preset…');
   }
 
   async function openSlotFromDevice(
@@ -940,10 +990,39 @@ export default function App() {
     if (!confirmDiscardPedalDrafts()) {
       return;
     }
+    const label = `${SETLIST_LABELS[setlist]} ${slotLabel(entry.slot)}`;
+
+    // Clicking the slot the pedal has active is the user's way of returning to
+    // it after browsing another preset. Re-read the active preset instead of
+    // the stored slot body: that keeps Save and the bypass control armed, and
+    // it picks up the pedal's current edit buffer too.
+    if (
+      activePresetAt !== null &&
+      activePresetAt.setlist === setlist &&
+      activePresetAt.slot === entry.slot
+    ) {
+      const { ok, location } = await loadActivePreset(
+        connection,
+        `Re-reading the pedal's active preset ${label}…`,
+      );
+      if (
+        ok &&
+        location &&
+        (location.setlist !== setlist || location.slot !== entry.slot)
+      ) {
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `The pedal's active preset is now ${SETLIST_LABELS[location.setlist]} ` +
+            `${slotLabel(location.slot)}; the editor opened that preset.`,
+        });
+      }
+      return;
+    }
+
     setUsbError(null);
     setDeviceReport(null);
     setUsbBusy('Handshake…');
-    const label = `${SETLIST_LABELS[setlist]} ${slotLabel(entry.slot)}`;
     appendLog(`Reading ${label} (${entry.name})…`);
     try {
       const result = await readPresetSlot(
@@ -2527,6 +2606,14 @@ export default function App() {
         'the bypass change',
         { doc: created.doc, setlist: 1, slot: created.slot },
       );
+      setSaveNotice({
+        kind: 'info',
+        text:
+          `Block ${block + 1} ${enabled ? 'enabled' : 'bypassed'} on the ` +
+          'editable offline copy. The pedal is unchanged: this build has no ' +
+          'validated bypass write. Use the effect footswitch on the pedal, ' +
+          'or export the copy as .pgp.',
+      });
       return;
     }
     commitSnapshotDraft(
@@ -2536,6 +2623,12 @@ export default function App() {
       } in snapshot ${index + 1} (not written).`,
       'the bypass change',
     );
+    setSaveNotice({
+      kind: 'info',
+      text:
+        `Block ${block + 1} ${enabled ? 'enabled' : 'bypassed'} on the ` +
+        'offline copy. Nothing was sent to the pedal.',
+    });
   }
 
   /** Change the LED colour of one snapshot. */
@@ -2855,6 +2948,8 @@ export default function App() {
       (isWorking ? workingDoc : null) ?? localDocs[localKey(kind, slot)];
     const loadedHere =
       structure?.preset.setlist === kind && structure.preset.slot === slot;
+    /** The source is the pedal's current edit buffer, so op 71 can copy it. */
+    const activeHere = loadedHere && activePresetLoaded && workingDoc === null;
     const sourceName =
       slotName(kind, slot) ||
       preset?.name ||
@@ -2887,7 +2982,10 @@ export default function App() {
       !window.confirm(
         `Overwrite User ${slotLabel(target)}` +
           (destinationName ? ` (“${destinationName}”)` : '') +
-          '?\n\nThe destination preset is replaced.',
+          '?\n\nThe destination preset is replaced' +
+          (activeHere
+            ? ' on the pedal with operation 71 (the active preset is the source).'
+            : '.'),
       )
     ) {
       return;
@@ -2946,6 +3044,18 @@ export default function App() {
     }
     const connection = connectionRef.current;
     if (!connection || busy) {
+      return;
+    }
+
+    // Copying the pedal's active preset does not need a body read: operation
+    // 71 stores the current edit buffer in the destination slot. That path is
+    // captured from POD Go Edit (docs/protocol/writes.md §2.5) and avoids the
+    // unvalidated op-5 stream for the most common copy case.
+    if (activeHere) {
+      await writeActivePresetToSlot(
+        target,
+        sourceName || structure?.preset.name || DEFAULT_PRESET_NAME,
+      );
       return;
     }
 
@@ -3616,6 +3726,127 @@ export default function App() {
   }
 
   /**
+   * Copy the pedal's active preset into another User slot with operation 71.
+   *
+   * Operation 71 stores the pedal's current edit buffer under a destination
+   * slot and name, so copying the preset the editor already has active needs
+   * no body stream. Pending model/parameter drafts are applied first, exactly
+   * like Save, so the copy matches what is on screen. The destination name is
+   * read back afterwards; a mismatch is reported instead of assumed.
+   *
+   * The op-71 frame is taken from a POD Go Edit capture (writes.md §2.5). It
+   * has not been validated from this build on hardware.
+   */
+  async function writeActivePresetToSlot(
+    destSlot: number,
+    name: string,
+  ): Promise<void> {
+    const connection = connectionRef.current;
+    if (!connection || actionBusy) {
+      return;
+    }
+    if (!writeEnabled) {
+      setActionError('Enable writing first.');
+      return;
+    }
+    if (!activePresetLoaded) {
+      setActionError('Read the active preset from the pedal before copying it.');
+      return;
+    }
+    const error = validatePresetName(name);
+    if (error) {
+      setActionError(error);
+      return;
+    }
+
+    setActionError(null);
+    setActionBusy(true);
+    setUsbBusy('Copying the active preset…');
+    appendLog(
+      `Copy: storing the active preset as "${name}" in User ` +
+        `${slotLabel(destSlot)} (operation 71)…`,
+    );
+    try {
+      const applied = await applyPendingDrafts(connection);
+      if (applied.models + applied.params > 0) {
+        appendLog(
+          `Copy: ${applied.models} model(s) and ${applied.params} ` +
+            'parameter draft(s) applied before storing the destination.',
+        );
+      }
+      const stored = await savePreset(
+        connection,
+        { slot: destSlot, name },
+        reportProgress,
+      );
+      appendLog(
+        `Copy: active preset stored at User ${slotLabel(destSlot)} after ` +
+          `${stored.attempts} attempt(s); frame ${frameHex(stored.frame)}.`,
+      );
+
+      // The pedal owns this slot now; drop a stale browser draft for it.
+      const key = localKey(1, destSlot);
+      setLocalDocs((current) => {
+        if (!(key in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      clearSlotDirty(key);
+      setFreshBackup(null);
+
+      // Confirm the destination name; the body came from the edit buffer, so
+      // the name is the only value op 71 lets us check directly.
+      try {
+        const list = await readSetlist(connection, 1, reportProgress);
+        setSetlists((current) => ({ ...current, 1: list.entries }));
+        const entry = list.entries[destSlot];
+        if (entry?.name === name) {
+          setSaveNotice({
+            kind: 'info',
+            text:
+              `Copied the active preset to User ${slotLabel(destSlot)} as ` +
+              `“${name}”. Recall that slot on the pedal to verify the sound.`,
+          });
+          appendLog(
+            `Copy verified: User ${slotLabel(destSlot)} reads "${entry.name}".`,
+          );
+        } else {
+          setSaveNotice({
+            kind: 'error',
+            text:
+              `The pedal accepted the copy, but User ${slotLabel(destSlot)} ` +
+              `reads “${entry?.name || 'empty'}”, expected “${name}”.`,
+          });
+          appendLog(
+            `WARNING copy verification: User ${slotLabel(destSlot)} reads ` +
+              `"${entry?.name ?? '—'}", expected "${name}".`,
+          );
+        }
+      } catch (error) {
+        appendLog(`WARNING copy verification failed: ${errorMessage(error)}`);
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `The active preset was sent to User ${slotLabel(destSlot)} as ` +
+            `“${name}”, but the setlist could not be re-read to verify it.`,
+        });
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      setActionError(message);
+      setSaveNotice({ kind: 'error', text: `Copy failed: ${message}` });
+      appendLog(`ERROR copy active preset: ${message}`);
+      console.error('[POD Go] active-preset copy failed', error);
+    } finally {
+      setActionBusy(false);
+      setUsbBusy(null);
+    }
+  }
+
+  /**
    * Write a pedal-body blob to one User slot with operation 5.
    *
    * Shared by **Paste**, **Move** and **Copy to…**. The caller already has a
@@ -3687,6 +3918,13 @@ export default function App() {
         builder.free();
       }
 
+      // A read session may still be draining late replies. Give them a moment
+      // to arrive (and drop them) before the op-5 preamble starts, like the
+      // write-channel driver does.
+      await connection.discard();
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
+      await connection.discard();
+
       const result = await restoreFullBackup(connection, bytes, (progress) => {
         if (progress.done > 0) {
           reportProgress(
@@ -3700,18 +3938,92 @@ export default function App() {
 
       const list = await readSetlist(connection, 1, reportProgress);
       setSetlists((current) => ({ ...current, 1: list.entries }));
-      clearPendingForSetlist(1);
       const entry = list.entries[destSlot];
-      if (entry?.name === name) {
-        appendLog(`Preset write verified: User ${slotLabel(destSlot)} reads "${name}".`);
+      const nameOk = entry?.name === name;
+      if (nameOk) {
+        appendLog(`Preset write: User ${slotLabel(destSlot)} reads "${name}".`);
       } else {
         appendLog(
           `WARNING preset write: User ${slotLabel(destSlot)} reads "${
             entry?.name ?? '—'
-          }", expected "${name}". The body may have been written without the ` +
-            'name (operation 9 is not sent by this build).',
+          }", expected "${name}". The name may not travel with operation 5 ` +
+            '(operation 9 is not sent by this build).',
         );
       }
+
+      // A name match does not prove that the body changed. Read the
+      // destination back and compare it byte for byte with what was sent, so
+      // the page can say whether the copy actually landed.
+      let bodyVerified: boolean | null = null;
+      try {
+        reportProgress(`Verifying the body at User ${slotLabel(destSlot)}…`);
+        const written = await readPresetSlot(
+          connection,
+          1,
+          destSlot,
+          name,
+          reportProgress,
+        );
+        bodyVerified = sameBytes(written.blob, blob);
+        appendLog(
+          bodyVerified
+            ? `Preset write body verified: User ${slotLabel(
+                destSlot,
+              )} matches the source byte for byte.`
+            : `WARNING preset write body: User ${slotLabel(
+                destSlot,
+              )} differs from the source (${written.blob.length} B written, ` +
+                `${blob.length} B sent).`,
+        );
+      } catch (readError) {
+        appendLog(
+          `WARNING preset write body read-back failed: ${errorMessage(
+            readError,
+          )}`,
+        );
+      }
+
+      if (bodyVerified === false) {
+        setActionError(
+          `The pedal accepted the stream, but User ${slotLabel(
+            destSlot,
+          )} does not read the source body. The slot may not have changed.`,
+        );
+        setSaveNotice({
+          kind: 'error',
+          text:
+            `The pedal accepted the write, but User ${slotLabel(destSlot)} ` +
+            'does not match the source body. Recall the slot and check it ' +
+            'before relying on the copy.',
+        });
+      } else if (bodyVerified === true && nameOk) {
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `Copied “${name}” to User ${slotLabel(destSlot)}. The destination ` +
+            'body was read back and matches the source byte for byte.',
+        });
+      } else if (bodyVerified === true) {
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `User ${slotLabel(destSlot)} now holds the copied body ` +
+            `(verified byte for byte), but its name still reads “${
+              entry?.name || 'empty'
+            }”. Operation 9 is not sent by this build; recall the slot to ` +
+            'verify the sound.',
+        });
+      } else {
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `The preset was streamed to User ${slotLabel(
+              destSlot,
+            )}, but the destination body could not be read back. ` +
+            'Recall the slot on the pedal to verify it.',
+        });
+      }
+
       if (mode === 'move' && source) {
         appendLog(
           `Move: the source ${SETLIST_LABELS[source.setlist]} ` +
@@ -4275,7 +4587,7 @@ export default function App() {
                 workingDoc ? toggleSnapshotParam : undefined
               }
               onSetBlockEnabled={setBlockEnabled}
-              canSetBlockEnabled={connected && activePresetLoaded}
+              canSetBlockEnabled={connected}
               onPresetMenu={
                 currentPresetTarget() ? openCurrentPresetMenu : undefined
               }

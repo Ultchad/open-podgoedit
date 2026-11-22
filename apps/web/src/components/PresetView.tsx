@@ -325,6 +325,7 @@ export default function PresetView({
                 label: menuEntry.enabled
                   ? `Bypass in snapshot ${snapshotIndex + 1}`
                   : `Enable in snapshot ${snapshotIndex + 1}`,
+                hint: editable ? undefined : 'Offline copy',
                 onSelect: () =>
                   onSetBlockEnabled(blockMenu.index, !menuEntry.enabled),
               },
