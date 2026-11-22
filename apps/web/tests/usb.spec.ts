@@ -1874,6 +1874,123 @@ test('keeps the write arm when switching presets', async ({ page }) => {
 });
 
 /**
+ * Hardware report: after browsing another slot and clicking the pedal's active
+ * slot again, Save stayed disabled until "Read active preset" was pressed by
+ * hand. Re-opening the active slot is the user's way of saying "show that
+ * preset again", so it must re-read the edit buffer and keep Save armed.
+ */
+test('re-opening the pedal active slot keeps Save and the bypass armed', async ({
+  page,
+}) => {
+  // Object 23 in the fake device reports setlist 1, slot 2.
+  const fixture = smallSetlist(['Lead A', 'Lead B', 'Lead C']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await page.locator('#arm-writes').check();
+  await expect(page.locator('#save-to-slot')).toBeEnabled();
+
+  // Browsing a stored slot disarms Save and keeps the bypass control usable.
+  await page.getByRole('tab', { name: /User/ }).click();
+  await page.locator('.preset-item').nth(0).click();
+  await expect(page.locator('.preset-title')).toContainText('Lead A');
+  await expect(page.locator('#save-to-slot')).toBeDisabled();
+  await expect(page.locator('.inspector-state.is-toggle')).toHaveCount(1);
+
+  // Clicking the active slot again re-reads the active preset instead of its
+  // stored body, so Save and the bypass stay armed.
+  await page.locator('.preset-item').nth(2).click();
+  await expect(page.locator('.report.log')).toContainText(
+    "Re-reading the pedal's active preset",
+  );
+  await expect(page.locator('.preset-title-name')).toHaveText('US Deluxe Nrm');
+  await expect(page.locator('#save-to-slot')).toBeEnabled();
+  await expect(page.locator('.inspector-state.is-toggle')).toHaveCount(1);
+  await expect(page.locator('.report.error')).toHaveCount(0);
+});
+
+/**
+ * Hardware report: "copy to another preset" did nothing. Copying the preset
+ * the pedal has active must store its edit buffer with operation 71 instead
+ * of streaming an unvalidated operation-5 body read.
+ */
+test('copies the pedal active preset with operation 71', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const fixture = smallSetlist(['Lead A', 'Lead B', 'Lead C']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await page.locator('#arm-writes').check();
+  await expect(page.locator('#save-to-slot')).toBeEnabled();
+
+  // The active preset is open; copy it from the title's ⋯ menu.
+  await page.locator('#preset-more').click();
+  await expect(page.locator('#menu-copy-to')).toBeEnabled();
+
+  const dialogs: string[] = [];
+  let overwrite = '';
+  page.on('dialog', (dialog) => {
+    dialogs.push(dialog.type());
+    if (dialog.type() === 'prompt') {
+      void dialog.accept('01A');
+    } else {
+      overwrite = dialog.message();
+      void dialog.accept();
+    }
+  });
+  await page.locator('#menu-copy-to').click();
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Copy: storing the active preset as "US Deluxe Nrm" in User 01A',
+  );
+  await expect(page.locator('.report.log')).toContainText(
+    'Copy verified: User 01A reads "US Deluxe Nrm"',
+  );
+  await expect(page.locator('#save-notice')).toContainText(
+    'Copied the active preset to User 01A',
+  );
+  expect(dialogs).toContain('prompt');
+  expect(dialogs).toContain('confirm');
+  expect(overwrite).toContain('operation 71');
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writes).toHaveLength(1);
+  const decoded = readMsgpack(new Uint8Array(writes[0]), 24).value;
+  const body = decoded as { [key: number]: MsgValue };
+  expect(body[100]).toBe(71);
+  const inner = body[101] as { [key: number]: MsgValue };
+  expect(inner[107]).toBe(1);
+  expect(inner[108]).toBe(0);
+  expect(inner[109]).toBe('US Deluxe Nrm\0');
+  await expect(page.locator('.report.error')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+/**
  * The Android shell exposes `window.podgoAndroidUsb` instead of WebUSB. The
  * bridge methods are synchronous on purpose: they are served from a queue the
  * fake pedal fills, like the native reader thread does.
@@ -2006,6 +2123,9 @@ test('copies a pedal slot to another slot from the right-click menu', async ({
     'Copy to: reading User',
   );
   await expect(page.locator('.report.log')).toContainText('Preset write:');
+  await expect(page.locator('.report.log')).toContainText(
+    'body verified: User 02D matches the source byte for byte',
+  );
   expect(dialogs).toContain('prompt');
   expect(dialogs).toContain('confirm');
 

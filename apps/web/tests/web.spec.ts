@@ -228,6 +228,22 @@ test('opens effect actions from right-click, long-press and the inspector', asyn
   await expect(page.locator('#block-menu-copy')).toBeEnabled();
   await expect(page.locator('#block-menu-paste')).toBeDisabled();
   await expect(page.locator('#block-menu-move-left')).toBeDisabled();
+  // Bypass is reachable from the right-click menu on an offline preset and
+  // acts on the editable copy.
+  await expect(page.locator('#block-menu-bypass')).toBeEnabled();
+  await expect(page.locator('#block-menu-bypass')).toContainText(
+    /Bypass in snapshot 1/,
+  );
+  await page.locator('#block-menu-bypass').click();
+  await expect(page.locator('#save-notice')).toContainText(
+    'offline copy. Nothing was sent to the pedal.',
+  );
+  await expect(page.locator('.inspector-state.is-toggle')).toHaveText(
+    'bypassed',
+  );
+  // Undo so the rest of the test still sees the amp active.
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.inspector-state.is-toggle')).toHaveText('active');
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
 
