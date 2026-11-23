@@ -12,7 +12,10 @@ mod write;
 
 pub use backup::{verify_backup, BackupBuilder, RestoreFlow};
 pub use preset::{preset_structure, PresetFlow};
-pub use write::{ParamWriteFlow, SavePresetFlow};
+pub use write::{
+    BypassFlow, ChainWriteFlow, ModelWriteFlow, ParamWriteFlow, RecallFlow, RemoveEffectFlow,
+    SavePresetFlow,
+};
 
 use podgo_domain::preset_list::scan_preset_entries;
 use podgo_protocol::constants::{
@@ -61,6 +64,22 @@ pub fn setlist_entries_json(bytes: &[u8]) -> Result<String, String> {
         return Err("no preset entries found in the stream".to_owned());
     }
     Ok(render_entries_from(&entries))
+}
+
+/// Move one processing block inside an `l6-helix` container.
+///
+/// `from` and `to` are **raw** chain indices (input is 0), so a processing
+/// slot shown as `0` in the UI is raw `1`. The returned container keeps every
+/// unknown field and is ready for an op-21 upload.
+///
+/// # Errors
+///
+/// Returns a message when the container is malformed, an index is out of range
+/// or either index is the input/output stage.
+#[wasm_bindgen]
+pub fn move_chain_entry(bytes: &[u8], from: u32, to: u32) -> Result<Vec<u8>, String> {
+    podgo_domain::l6helix::move_chain_entry(bytes, from as usize, to as usize)
+        .map_err(|err| err.to_string())
 }
 
 /// Render scanned entries (`slot` = stream position).

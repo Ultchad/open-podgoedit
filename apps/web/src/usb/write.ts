@@ -9,7 +9,15 @@
 // `set_param` edits the preset in RAM; `save_preset` writes its metadata
 // (setlist, slot and name) to the pedal's User list.
 
-import { ModelWriteFlow, ParamWriteFlow, SavePresetFlow } from '../wasmClient';
+import {
+  BypassFlow,
+  ChainWriteFlow,
+  ModelWriteFlow,
+  ParamWriteFlow,
+  RecallFlow,
+  RemoveEffectFlow,
+  SavePresetFlow,
+} from '../wasmClient';
 import { PodgoUsbError, type PodgoConnection } from './podgoUsb';
 
 /** The pedal often ignores the first write handshake after a read. */
@@ -52,6 +60,34 @@ export interface ModelWriteRequest {
   noSnapshotBypass: boolean;
 }
 
+/** One `recall_preset` request (operation 20). */
+export interface RecallRequest {
+  /** Setlist: 0 = Factory, 1 = User. */
+  setlist: 0 | 1;
+  /** Slot in that setlist (0-based). */
+  slot: number;
+}
+
+/** One bypass request (operation 41). */
+export interface BypassRequest {
+  /** Raw chain index (input is 0). */
+  block: number;
+  /** `true` leaves the effect on; `false` bypasses it. */
+  enabled: boolean;
+}
+
+/** One remove-effect request (operations 28 and 78). */
+export interface RemoveEffectRequest {
+  /** Raw chain index (input is 0). */
+  block: number;
+}
+
+/** One whole-chain upload (operation 21). */
+export interface ChainWriteRequest {
+  /** Complete `l6-helix` container to apply. */
+  blob: Uint8Array;
+}
+
 export interface WriteResult {
   /** Handshake attempts used before the device answered. */
   attempts: number;
@@ -68,6 +104,16 @@ interface WriteFlow {
   restart_handshake(): void;
   is_finished(): boolean;
   result_json(): string | undefined;
+}
+
+/**
+ * Flow whose first command chains a follow-up (`remove`: op 28 then op 78).
+ *
+ * The page has to stop draining the channel once the current command's status
+ * arrives, otherwise it waits for a second status that never comes.
+ */
+interface ChainedWriteFlow extends WriteFlow {
+  status_received(): boolean;
 }
 
 function delay(ms: number): Promise<void> {
@@ -131,7 +177,8 @@ async function driveWriteFlow(
           // The device answers with one or more bare acknowledgements, then a
           // framed echo carrying the status. Keep reading until it arrives.
           let empty = 0;
-          while (!flow.is_finished() && empty < DRAIN_READS) {
+          let status = false;
+          while (!flow.is_finished() && !status && empty < DRAIN_READS) {
             const response = await device.readWrite(flow.timeout_ms());
             if (!response) {
               empty += 1;
@@ -139,8 +186,14 @@ async function driveWriteFlow(
             }
             empty = 0;
             flow.accept_response(response);
+            // A removal chains op 78 after op 28: once this command's status
+            // arrived, the follow-up frame must be sent instead of waiting.
+            status =
+              'status_received' in flow
+                ? (flow as ChainedWriteFlow).status_received()
+                : flow.is_finished();
           }
-          if (!flow.is_finished()) {
+          if (!flow.is_finished() && !status) {
             throw new PodgoUsbError(
               `aucun statut du pédalier après la commande ${label}`,
             );
@@ -292,5 +345,164 @@ export async function savePreset(
     },
     'Sauvegarde',
     onProgress,
+  );
+}
+
+/**
+ * Recall a stored preset (operation 20).
+ *
+ * This is what turns a preset switch into an audible change: it loads the slot
+ * into the pedal's edit buffer. The status is `1` in the captured editor; the
+ * flow accepts `0` as well.
+ */
+export async function recallPreset(
+  device: PodgoConnection,
+  request: RecallRequest,
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () => {
+      try {
+        return new RecallFlow(
+          request.setlist,
+          request.slot,
+          (transactionCounter += 1),
+        );
+      } catch (error) {
+        throw new PodgoUsbError(`rappel impossible: ${messageOf(error)}`);
+      }
+    },
+    'Rappel du preset',
+    onProgress,
+  );
+}
+
+/**
+ * Set one block's bypass state (operation 41).
+ *
+ * Key `59` carries the enabled flag (`false` = bypassed). The pedal echoes the
+ * new state as an op-49 notification.
+ */
+export async function writeBypass(
+  device: PodgoConnection,
+  request: BypassRequest,
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () =>
+      new BypassFlow(
+        request.block,
+        request.enabled,
+        (transactionCounter += 1),
+      ),
+    'Contournement',
+    onProgress,
+  );
+}
+
+/**
+ * Remove one effect (operations 28 then 78).
+ *
+ * The two commands share one write session; the Rust flow builds the second
+ * one after the first status and advances the cursor from that status.
+ */
+export async function removeEffect(
+  device: PodgoConnection,
+  request: RemoveEffectRequest,
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () => new RemoveEffectFlow(request.block, (transactionCounter += 1)),
+    'Suppression de l’effet',
+    onProgress,
+  );
+}
+
+/**
+ * Upload a whole preset body (operation 21).
+ *
+ * Reordering is only possible by uploading the complete chain, so the caller
+ * must pass the `l6-helix` container to apply. That container should come from
+ * a fresh object-22 read, with the move already applied by the Rust domain
+ * layer, so the upload matches the pedal's current edit buffer.
+ *
+ * Unlike a single command, the pedal answers while the stream is still being
+ * written. The flow is therefore driven frame by frame, with one response read
+ * after each frame; the status advances the cursor and bare acks are ignored.
+ */
+export async function writeChain(
+  device: PodgoConnection,
+  request: ChainWriteRequest,
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
+    device.discard();
+    await delay(READ_SETTLE_MS);
+    device.discard();
+
+    let flow: ChainWriteFlow;
+    try {
+      flow = new ChainWriteFlow(request.blob, (transactionCounter += 1));
+    } catch (error) {
+      throw new PodgoUsbError(`écriture de chaîne impossible: ${messageOf(error)}`);
+    }
+
+    let lastFrame: Uint8Array | null = null;
+    try {
+      while (!flow.is_finished()) {
+        const frame = flow.next_request();
+        if (frame) {
+          await device.send(frame);
+          lastFrame = frame;
+          onProgress?.(
+            `Envoi de la chaîne… ${flow.describe()}`,
+          );
+        }
+        while (flow.expects_response() && !flow.is_finished()) {
+          const response = await device.readWrite(flow.timeout_ms());
+          if (response === null) {
+            flow.accept_timeout();
+          } else {
+            flow.accept_response(response);
+          }
+        }
+      }
+
+      const result = flow.result_json();
+      if (!result) {
+        throw new PodgoUsbError('le flux de chaîne s’est arrêté sans résultat');
+      }
+      const parsed = JSON.parse(result) as { ok?: boolean; message?: string };
+      if (parsed.ok !== true) {
+        throw new PodgoUsbError(
+          parsed.message ?? 'le pédalier a refusé la chaîne',
+        );
+      }
+      if (!lastFrame) {
+        throw new PodgoUsbError('aucune trame de chaîne n’a été envoyée');
+      }
+      return { attempts: attempt, frame: lastFrame };
+    } catch (error) {
+      lastError = error;
+      if (attempt < MAX_WRITE_ATTEMPTS) {
+        onProgress?.(
+          `Chaîne : tentative ${attempt}/${MAX_WRITE_ATTEMPTS} échouée, nouvelle tentative…`,
+        );
+        await delay(BACKOFF_BASE_MS * 2 ** (attempt - 1));
+      }
+    } finally {
+      flow.free();
+    }
+  }
+
+  throw new PodgoUsbError(
+    `écriture de chaîne impossible après ${MAX_WRITE_ATTEMPTS} tentatives: ${messageOf(
+      lastError,
+    )}`,
   );
 }

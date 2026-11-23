@@ -93,6 +93,12 @@ above 49 was observed.
 | `46` | snapshot state | `{92: index}` | follows `42` |
 | `49` | absolute bypass | `{98: block, 59: enabled}` | footswitch; also `null` during snapshots |
 
+`49` is the pedal's echo of the block's enabled flag: `false` means the effect
+is bypassed. A `set_bypass` write (operation 41, see
+[writes.md](writes.md) §2.5a) carries the same `{98, 59}` pair and produces
+this notification a few milliseconds later. Bypass writes made by the editor
+therefore show up twice in the log: the write echo, then the notification.
+
 Envelope: ops `4`, `8`, `22`, `30`, `39` and `49` wrap their data as
 `{82, 68, 121, 106: {...}}`; the others carry the map directly.
 
