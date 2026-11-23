@@ -19,9 +19,9 @@ He was inspired by the project [openpodgo](https://github.com/agarat/openpodgo)
   of any kind. The author is **not responsible** for any damage to your pedal,
   its firmware, your presets or any other data, nor for any loss arising from
   its use.
-- **Keep a backup.** Before enabling device writes, export a full backup from
-  POD Go Edit. Writes are opt-in, gated behind the **Enable writing** checkbox,
-  and never enabled by default.
+- **Keep a backup.** Before editing a preset on the pedal, export a full backup
+  from POD Go Edit. With a pedal connected every edit is written to it
+  immediately; Save stores the preset in its slot.
 - Some features (device writes, restore, `.pgb` export) are inferred from
   observation and are not all validated on hardware. See the
   [roadmap](docs/roadmap.md) for the evidence level of each feature.
@@ -137,9 +137,8 @@ inspector and model catalog. In Chrome or Edge it can also open the POD Go
 through WebUSB and read a Factory or User setlist, or the active preset
 (object 23, then object 22). Reads are validated by automated fake-device tests
 plus recorded setlist reads on a POD Go Wireless (firmware 2.50). With the
-**Enable device writes** checkbox armed, a continuous effect parameter can be
-changed with **Set** (op 30, RAM only, confirmed per change) and the active
-preset saved to a User slot (op 71). **Full backup / restore** downloads a
+pedal connected, a continuous effect parameter can be changed as you drag it
+(op 30, RAM only) and the active preset stored with Save (op 71). **Full backup / restore** downloads a
 self-checking `.pgbak` of both setlists and every non-empty slot, and can stream
 it back with operation 5 after verifying the file in Rust and showing a
 destination diff, followed by one explicit confirmation. Restore is destructive

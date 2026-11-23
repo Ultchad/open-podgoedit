@@ -44,7 +44,8 @@ interface Props {
   /** Another device operation is running. */
   busy: boolean;
   connected: boolean;
-  writeArmed: boolean;
+  /** Deprecated: writes are live whenever a pedal is connected. */
+  writeArmed?: boolean;
   activePresetLoaded: boolean;
   structure: PresetStructure | null;
   setlists: Record<0 | 1, SetlistEntry[] | null>;
@@ -81,7 +82,7 @@ export default function PresetActionsDialog({
   open,
   busy,
   connected,
-  writeArmed,
+  // `writeArmed` is deprecated and intentionally unused.
   activePresetLoaded,
   structure,
   setlists,
@@ -164,7 +165,6 @@ export default function PresetActionsDialog({
   const unsaved = pending.length > 0;
   const canWriteRename =
     connected &&
-    writeArmed &&
     activePresetLoaded &&
     sourceSetlist === 1 &&
     !busy &&
@@ -173,7 +173,6 @@ export default function PresetActionsDialog({
     rename !== sourceName;
   const canWritePaste =
     connected &&
-    writeArmed &&
     clipboard !== null &&
     nameError === null &&
     !busy &&
@@ -182,9 +181,6 @@ export default function PresetActionsDialog({
   const writeBlockers: string[] = [];
   if (!connected) {
     writeBlockers.push('connect the pedal');
-  }
-  if (!writeArmed) {
-    writeBlockers.push('enable editing');
   }
 
   return (
