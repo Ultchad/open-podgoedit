@@ -247,9 +247,6 @@ export default function BackupRestoreDialog({
   if (!connected) {
     missing.push('connect the pedal');
   }
-  if (!writeArmed) {
-    missing.push('enable editing');
-  }
   if (selected === null) {
     missing.push('open a .pgbak file');
   } else if (totalEntries === 0) {

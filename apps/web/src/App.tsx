@@ -386,12 +386,10 @@ export default function App() {
     setlist: SetlistKind;
     slot: number;
   } | null>(null);
-  /**
-   * The single guard for the pedal: drafts can always be edited in the page,
-   * but nothing is written until the user enables writing for this session.
-   * The checkbox is only shown while a pedal is connected.
-   */
-  const [writeEnabled, setWriteEnabled] = useState(false);
+  // The pedal's write path is always live while a pedal is connected: the old
+  // "Enable writing" arm was removed on request, together with the per-action
+  // confirmations. An edit reaches the pedal as soon as it is made and Save
+  // stores it; nothing is ever sent while no pedal is connected.
   /** True only when the editor shows the preset the pedal has active. */
   const [activePresetLoaded, setActivePresetLoaded] = useState(false);
   /**
@@ -647,7 +645,6 @@ export default function App() {
           // A file or fixture is not the pedal's active preset: writes would
           // target a different sound, so disarm until the device is re-read.
           setActivePresetLoaded(false);
-          setWriteEnabled(false);
         } catch {
           // The text report already carries the diagnostic.
         }
@@ -731,7 +728,7 @@ export default function App() {
     setSetlists({ 0: factory, 1: emptyUserSetlist(DEFAULT_PRESET_NAME) });
     setLocalDocs({ [localKey(1, 0)]: preset });
     setActiveSetlist(1);
-    openLocalPreset(1, 0, preset);
+    void openLocalPreset(1, 0, preset);
     appendLog('Offline workspace ready: factory names + a default User preset.');
   }
 
@@ -901,7 +898,6 @@ export default function App() {
       connectionRef.current = null;
       setDeviceInfo(null);
       setDeviceReport(null);
-      setWriteEnabled(false);
       setActivePresetLoaded(false);
       setActivePresetAt(null);
       setSaveOpen(false);
@@ -922,7 +918,7 @@ export default function App() {
     if (!connection) {
       return;
     }
-    if (!confirmDiscardPedalDrafts()) {
+    if (!(await confirmDiscardPedalDrafts())) {
       return;
     }
     setUsbError(null);
@@ -1062,7 +1058,7 @@ export default function App() {
     if (!connection) {
       return;
     }
-    if (!confirmDiscardPedalDrafts()) {
+    if (!(await confirmDiscardPedalDrafts())) {
       return;
     }
     await loadActivePreset(connection, 'Reading the active preset…');
@@ -1076,7 +1072,7 @@ export default function App() {
     if (!connection) {
       return;
     }
-    if (!confirmDiscardPedalDrafts()) {
+    if (!(await confirmDiscardPedalDrafts())) {
       return;
     }
     const label = `${SETLIST_LABELS[setlist]} ${slotLabel(entry.slot)}`;
@@ -1109,10 +1105,9 @@ export default function App() {
       return;
     }
 
-    // Connected and armed: switching presets is a real recall (op 20), so the
-    // pedal plays the slot and the editor reads back its edit buffer. Save
-    // stays armed because the recalled preset is the active one.
-    if (writeEnabled) {
+    // Switching presets is a real recall (op 20) while a pedal is connected,
+    // so the pedal plays the slot and the editor reads back its edit buffer.
+    if (connected) {
       setUsbError(null);
       setDeviceReport(null);
       setUsbBusy('Recall…');
@@ -1202,13 +1197,6 @@ export default function App() {
       );
       return;
     }
-    if (!writeEnabled) {
-      setSaveNotice({
-        kind: 'error',
-        text: 'Check “Enable writing” before saving to the pedal.',
-      });
-      return;
-    }
     if (workingDoc) {
       setSaveNotice({
         kind: 'error',
@@ -1281,47 +1269,46 @@ export default function App() {
       return;
     }
 
-    const labels = [
-      ...models.map(([, model]) => `• model ${model.label}`),
-      ...entries.map(([, edit]) => `• ${edit.label}`),
-    ];
-    const lines = labels.slice(0, 8).join('\n');
-    const more =
-      labels.length > 8 ? `\n… and ${labels.length - 8} more` : '';
-    const liveLine = liveChanges
-      ? 'Live changes already applied to the pedal will be stored.\n\n'
-      : '';
     const confirmed = window.confirm(
-      `Save the active preset to the pedal?\n\n` +
-        `${liveLine}${lines}${more ? `${more}\n\n` : ''}` +
-        `Destination: User ${slotLabel(slot)} "${name}"\n\n` +
-        'Pending model changes and parameters are applied first, then the ' +
-        'preset is stored in its slot so the change survives a preset switch ' +
-        'or a reboot.',
+      `Save the active preset to User ${slotLabel(slot)} "${name}"?`,
     );
     if (!confirmed) {
       appendLog('Save cancelled by the user.');
       return;
     }
 
+    if (!(await storeActivePreset(connection))) {
+      return;
+    }
+  }
+
+  /**
+   * Store the active preset in its User slot with operation 71.
+   *
+   * Live changes are already on the pedal, so this only stores: it waits for
+   * the write channel, applies any drafts queued while no pedal was connected,
+   * sends op 71, then verifies the setlist name. Returns false on failure.
+   */
+  async function storeActivePreset(
+    connection: PodgoConnection,
+  ): Promise<boolean> {
+    const slot = structure?.preset.slot ?? null;
+    const name = (structure?.preset.name ?? '').trim();
+    if (slot === null || name.length === 0) {
+      setSaveNotice({
+        kind: 'error',
+        text: 'The active preset has no User slot or name to store.',
+      });
+      return false;
+    }
     setUsbError(null);
     setSaveNotice(null);
     setWriting(true);
     try {
-      // Let every live edit finish on the single write channel before the
-      // pending drafts and the store command run.
       await flushLiveWrites();
       const applied = await applyPendingDrafts(connection);
-      appendLog(
-        `Save: ${applied.models} model(s) and ${applied.params} parameter(s) ` +
-          `applied in RAM; storing User ${slotLabel(slot)}…`,
-      );
       reportProgress(`Storing User ${slotLabel(slot)} "${name}"…`);
-      const stored = await savePreset(
-        connection,
-        { slot, name },
-        reportProgress,
-      );
+      const stored = await savePreset(connection, { slot, name }, reportProgress);
       appendLog(
         `Save: stored after ${stored.attempts} attempt(s); frame ` +
           `${frameHex(stored.frame)}.`,
@@ -1341,11 +1328,6 @@ export default function App() {
             : '') +
           'The preset is stored on the pedal.',
       });
-      appendLog(
-        `Save: ${applied.models} model(s) and ${applied.params} ` +
-          `parameter(s) applied and stored at User ${slotLabel(slot)}.`,
-      );
-
       // Confirm the pedal's setlist still reports the stored slot.
       try {
         const list = await readSetlist(connection, 1, reportProgress);
@@ -1353,9 +1335,7 @@ export default function App() {
         clearPendingForSetlist(1);
         const entry = list.entries[slot];
         if (entry && entry.name === name) {
-          appendLog(
-            `Save verified: User ${slotLabel(slot)} reads "${entry.name}".`,
-          );
+          appendLog(`Save verified: User ${slotLabel(slot)} reads "${entry.name}".`);
         } else {
           appendLog(
             `WARNING save verification: User ${slotLabel(slot)} reads "${
@@ -1364,16 +1344,16 @@ export default function App() {
           );
         }
       } catch (error) {
-        appendLog(
-          `WARNING save verification failed: ${errorMessage(error)}`,
-        );
+        appendLog(`WARNING save verification failed: ${errorMessage(error)}`);
       }
+      return true;
     } catch (error) {
       const message = errorMessage(error);
       setUsbError(message);
       setSaveNotice({ kind: 'error', text: `Save failed: ${message}` });
       appendLog(`ERROR save: ${message}`);
-      console.error('[POD Go] batched parameter save failed', error);
+      console.error('[POD Go] save failed', error);
+      return false;
     } finally {
       setWriting(false);
       setUsbBusy(null);
@@ -1512,7 +1492,7 @@ export default function App() {
 
   /** Open the save dialog, reusing the active preset's slot and name. */
   function openSaveDialog() {
-    if (!connected || !writeEnabled || !activePresetLoaded || busy) {
+    if (!connected || !activePresetLoaded || busy) {
       return;
     }
     setSaveBackup(null);
@@ -1662,24 +1642,52 @@ export default function App() {
   }
 
   /**
-   * Offline drafts are kept in `localDocs`, so switching slots no longer
-   * throws them away. Only the pedal's RAM drafts (`pendingParams` and
-   * `pendingModels`) vanish when another preset is opened, so ask before
-   * dropping those.
+   * Ask before leaving the pedal's preset with changes that were not stored.
+   *
+   * Live edits are audible on the pedal but are not stored until Save runs
+   * operation 71, so switching presets would lose them. The user picks
+   * Save / Don't save / Cancel; Save stores the current preset first.
+   * Returns true when it is fine to continue.
    */
-  function confirmDiscardPedalDrafts(): boolean {
+  async function confirmDiscardPedalDrafts(): Promise<boolean> {
     const count =
       Object.keys(pendingParams).length + Object.keys(pendingModels).length;
-    // A live edit is already audible on the pedal but is not stored until Save
-    // runs operation 71, so switching presets would lose it.
     const liveUnsaved = activePresetLoaded && dirty && !workingDoc;
-    if (count === 0 && !liveUnsaved) {
+    if (!connected || (count === 0 && !liveUnsaved)) {
       return true;
     }
-    return window.confirm(
-      'Discard the changes that are live on the pedal but not saved to its ' +
-        'slot?',
+    const connection = connectionRef.current;
+    const canStore =
+      connection !== null &&
+      structure?.preset.setlist === 1 &&
+      structure.preset.slot !== null;
+    const choice = window.prompt(
+      'This preset has changes that are not saved to its slot.\n\n' +
+        (canStore
+          ? 'Type "save" to store it first, "no" to discard the changes, ' +
+            'or Cancel to stay.'
+          : 'Type "no" to discard the changes, or Cancel to stay.'),
+      canStore ? 'save' : 'no',
     );
+    if (choice === null) {
+      return false;
+    }
+    const answer = choice.trim().toLowerCase();
+    if (answer === 'save' && canStore && connection) {
+      if (await storeActivePreset(connection)) {
+        return true;
+      }
+      // The store failed; the notice explains why. Stay on the preset.
+      return false;
+    }
+    if (answer === 'no') {
+      setPendingParams({});
+      setPendingModels({});
+      setDirty(false);
+      appendLog('Discarded the unsaved changes.');
+      return true;
+    }
+    return false;
   }
 
   /** Record an offline edit so the slot reopens with its draft and chip. */
@@ -1878,7 +1886,7 @@ export default function App() {
    * exports (or saves, which is pedal-only and currently unsupported for
    * JSON bodies).
    */
-  function openLocalPreset(
+  async function openLocalPreset(
     setlist: SetlistKind,
     slot: number,
     source?: EditPreset,
@@ -1888,12 +1896,12 @@ export default function App() {
       /** The `.pgb` this copy came from, when **Export .pgb** is available. */
       backup?: EditBackup | null;
     },
-  ): boolean {
+  ): Promise<boolean> {
     const preset = source ?? localDocs[localKey(setlist, slot)];
     if (!preset) {
       return false;
     }
-    if (!options?.draftsConfirmed && !confirmDiscardPedalDrafts()) {
+    if (!options?.draftsConfirmed && !(await confirmDiscardPedalDrafts())) {
       return false;
     }
     const key = localKey(setlist, slot);
@@ -1937,19 +1945,9 @@ export default function App() {
   }
 
   /** Start a neutral preset in a User slot (no pedal required). */
-  function startNewPreset(slot?: number): void {
+  async function startNewPreset(slot?: number): Promise<void> {
     const target = slot ?? firstEmptyUserSlot();
-    if (!confirmDiscardPedalDrafts()) {
-      return;
-    }
-    if (
-      localDocs[localKey(1, target)] &&
-      !window.confirm(
-        `Replace the preset at User ${slotLabel(
-          target,
-        )}? Its offline copy and unsaved changes will be discarded.`,
-      )
-    ) {
+    if (!(await confirmDiscardPedalDrafts())) {
       return;
     }
     const name = slotName(1, target) || DEFAULT_PRESET_NAME;
@@ -1961,30 +1959,33 @@ export default function App() {
       [localKey(1, target)]: preset,
     }));
     updateSetlistName(1, target, name);
-    openLocalPreset(1, target, preset, {
+    void openLocalPreset(1, target, preset, {
       fresh: true,
       draftsConfirmed: true,
     });
     appendLog(`New offline preset at User ${slotLabel(target)}.`);
   }
 
-  /** Open a slot: local copy offline, pedal read when connected. */
+  /**
+   * Open a slot.
+   *
+   * With a pedal connected the click always recalls the slot on the pedal and
+   * shows its edit buffer, even when a browser copy of that slot exists: the
+   * pedal's preset is what the user hears, so that is what must open. Offline,
+   * a local copy opens, otherwise a new document starts.
+   */
   function openSlot(kind: SetlistKind, entry: SetlistEntry): void {
+    if (connected) {
+      void openSlotFromDevice(kind, entry);
+      return;
+    }
     if (kind === 1) {
       const preset = localDocs[localKey(1, entry.slot)];
       if (preset) {
-        openLocalPreset(1, entry.slot, preset);
+        void openLocalPreset(1, entry.slot, preset);
         return;
       }
-      if (connected) {
-        void openSlotFromDevice(1, entry);
-        return;
-      }
-      startNewPreset(entry.slot);
-      return;
-    }
-    if (connected) {
-      void openSlotFromDevice(0, entry);
+      void startNewPreset(entry.slot);
       return;
     }
     setSaveNotice({
@@ -2036,7 +2037,7 @@ export default function App() {
       backup && source && backup.container
         ? { ...backup, source: { setlist: source.setlist, slot: source.slot } }
         : null;
-    openLocalPreset(1, target.slot, stored, {
+    void openLocalPreset(1, target.slot, stored, {
       fresh: true,
       backup: fromBackup,
     });
@@ -2101,7 +2102,7 @@ export default function App() {
       setImportedParam(workingDoc, block - 1, param.n, value);
       setWorkingDoc({ ...workingDoc });
     } else if (activePresetLoaded && connected) {
-      if (writeEnabled && connectionRef.current) {
+      if (connectionRef.current) {
         // Armed: op 30 reaches the pedal now, so the change is audible while
         // the user keeps turning the knob. Save (op 71) is what stores it.
         const connection = connectionRef.current;
@@ -2181,14 +2182,9 @@ export default function App() {
    * A device body is not a `.pgp` document, so this rebuilds one from the
    * structure the editor already shows. The copy stays in the browser: it can
    * be edited and exported as `.pgp`, but this build cannot write a preset
-   * body back to the pedal. The user is asked to confirm only when a model tap
-   * triggers the conversion implicitly.
+   * body back to the pedal.
    */
-  function createEditableCopy(options?: {
-    confirm?: boolean;
-    /** What the user is about to change, for the confirmation text. */
-    reason?: string;
-  }): { doc: EditPreset; slot: number } | null {
+  function createEditableCopy(): { doc: EditPreset; slot: number } | null {
     if (!structure) {
       return null;
     }
@@ -2197,19 +2193,6 @@ export default function App() {
         doc: workingDoc,
         slot: workingSlot?.slot ?? structure.preset.slot ?? 0,
       };
-    }
-    if (
-      options?.confirm &&
-      !window.confirm(
-        `${options.reason ?? 'Change the amp or effect'} on an editable ` +
-          'copy?\n\n' +
-          'A preset body read from the pedal is read-only in this build. ' +
-          'The copy stays in the browser: you can edit it and export a .pgp, ' +
-          'but it cannot be written back to the pedal.\n\n' +
-          'Continue?',
-      )
-    ) {
-      return null;
     }
 
     const sourceSlot =
@@ -2287,7 +2270,7 @@ export default function App() {
 
     // Connected and armed: op 40 changes the pedal's edit buffer immediately.
     // Save (op 71) is what stores it, exactly like the official editor.
-    if (!workingDoc && connected && activePresetLoaded && writeEnabled) {
+    if (!workingDoc && connected && activePresetLoaded) {
       const wireId = wireIdOf(model);
       if (wireId === null) {
         setSaveNotice({
@@ -2377,7 +2360,7 @@ export default function App() {
       return;
     }
 
-    const created = workingDoc ? null : createEditableCopy({ confirm: true });
+    const created = workingDoc ? null : createEditableCopy();
     if (!workingDoc && !created) {
       return;
     }
@@ -2432,24 +2415,10 @@ export default function App() {
         });
         return;
       }
-      if (!writeEnabled) {
-        setSaveNotice({
-          kind: 'error',
-          text: 'Check “Enable writing” before reordering blocks on the pedal.',
-        });
-        return;
-      }
       if (writing || busy) {
         return;
       }
-      const confirmed = window.confirm(
-        `Move block ${from + 1} to position ${to + 1} on the pedal?\n\n` +
-          'The editor uploads the reordered chain (operation 21). The pedal ' +
-          'plays the new order immediately; press Save to store it in the slot.',
-      );
-      if (confirmed) {
-        void moveBlockOnPedal(from, to);
-      }
+      void moveBlockOnPedal(from, to);
       return;
     }
     pushHistory('the block move');
@@ -2540,26 +2509,10 @@ export default function App() {
     if (!connection || !activePresetLoaded || workingDoc) {
       return;
     }
-    if (!writeEnabled) {
-      setSaveNotice({
-        kind: 'error',
-        text:
-          'Check “Enable writing” before removing an effect from the pedal.',
-      });
-      return;
-    }
     if (writing || busy) {
       return;
     }
     const raw = block + 1;
-    const confirmed = window.confirm(
-      `Remove the effect in block ${raw} from the pedal?\n\n` +
-        'The editor sends operations 28 and 78. The pedal removes it ' +
-        'immediately; press Save to store the preset without it.',
-    );
-    if (!confirmed) {
-      return;
-    }
 
     setUsbError(null);
     setSaveNotice(null);
@@ -2701,7 +2654,6 @@ export default function App() {
       !workingDoc &&
       connected &&
       activePresetLoaded &&
-      writeEnabled &&
       connectionRef.current
     ) {
       const connection = connectionRef.current;
@@ -2830,7 +2782,7 @@ export default function App() {
     }
 
     // Offline document (or a pedal read-only preset converted on request).
-    const created = workingDoc ? null : createEditableCopy({ confirm: true });
+    const created = workingDoc ? null : createEditableCopy();
     if (!workingDoc && !created) {
       return;
     }
@@ -2950,7 +2902,22 @@ export default function App() {
 
   /** Load one snapshot in an offline draft. */
   function selectSnapshot(index: number): void {
-    if (!workingDoc || structure?.currentSnapshot === index) {
+    if (structure?.currentSnapshot === index) {
+      return;
+    }
+    if (!workingDoc) {
+      // The pedal's snapshot is chosen on the pedal. No capture shows how the
+      // editor recalls one, so the page only follows it.
+      setSaveNotice({
+        kind: 'info',
+        text:
+          `Snapshot ${index + 1} is selected in the editor. The pedal keeps ` +
+          'its own snapshot: switch it on the pedal. Changing it here is not ' +
+          'sent.',
+      });
+      setStructure((current) =>
+        current ? { ...current, currentSnapshot: index } : current,
+      );
       return;
     }
     commitSnapshotDraft(
@@ -2963,6 +2930,12 @@ export default function App() {
   /** Rename one snapshot in an offline draft (10 printable ASCII chars). */
   function renameSnapshot(index: number, name: string): void {
     if (!workingDoc) {
+      setSaveNotice({
+        kind: 'info',
+        text:
+          'Snapshot names can be edited on an offline copy. The pedal keeps ' +
+          `snapshot ${index + 1} as it is.`,
+      });
       return;
     }
     const error = validateSnapshotName(name);
@@ -3054,7 +3027,6 @@ export default function App() {
       !workingDoc &&
       connected &&
       activePresetLoaded &&
-      writeEnabled &&
       connectionRef.current
     ) {
       const connection = connectionRef.current;
@@ -3083,10 +3055,7 @@ export default function App() {
       // The pedal body stays read-only: the first bypass change on a
       // pedal-read preset asks for an editable offline copy, then applies the
       // bypass to that copy in the same step.
-      const created = createEditableCopy({
-        confirm: true,
-        reason: 'Change the bypass state',
-      });
+      const created = createEditableCopy();
       if (!created) {
         return;
       }
@@ -3126,6 +3095,12 @@ export default function App() {
   /** Change the LED colour of one snapshot. */
   function setSnapshotLedColor(index: number, color: number): void {
     if (!workingDoc) {
+      setSaveNotice({
+        kind: 'info',
+        text:
+          'Snapshot LED colours can be edited on an offline copy. The pedal ' +
+          'keeps its own colours.',
+      });
       return;
     }
     commitSnapshotDraft(
@@ -3467,21 +3442,6 @@ export default function App() {
       return;
     }
 
-    const destinationName = slotName(1, target);
-    const destinationDoc = localDocs[localKey(1, target)];
-    if (
-      (destinationName || destinationDoc) &&
-      !window.confirm(
-        `Overwrite User ${slotLabel(target)}` +
-          (destinationName ? ` (“${destinationName}”)` : '') +
-          '?\n\nThe destination preset is replaced' +
-          (activeHere
-            ? ' on the pedal with operation 71 (the active preset is the source).'
-            : '.'),
-      )
-    ) {
-      return;
-    }
 
     // Offline document: clone locally, no pedal needed.
     if (preset) {
@@ -3524,13 +3484,6 @@ export default function App() {
         text:
           'Connect the pedal to read this slot, or open it first to copy it ' +
           'as an offline document.',
-      });
-      return;
-    }
-    if (!writeEnabled) {
-      setSaveNotice({
-        kind: 'error',
-        text: 'Check “Enable writing” before copying a pedal body to another slot.',
       });
       return;
     }
@@ -3633,13 +3586,6 @@ export default function App() {
         });
         return;
       }
-      if (!writeEnabled) {
-        setSaveNotice({
-          kind: 'error',
-          text: 'Check “Enable writing” before pasting a pedal body.',
-        });
-        return;
-      }
       const bodyName = clipboard.name || DEFAULT_PRESET_NAME;
       void writeBodyToSlot(slot, bodyName, clipboardBlob, mode, {
         setlist: clipboard.setlist,
@@ -3692,7 +3638,7 @@ export default function App() {
       (workingSlot.slot === slot ||
         (mode === 'move' && workingSlot.slot === clipboard.slot))
     ) {
-      openLocalPreset(1, slot, dest, { fresh: true });
+      void openLocalPreset(1, slot, dest, { fresh: true });
     }
   }
 
@@ -3819,7 +3765,7 @@ export default function App() {
         id: 'menu-new',
         label: 'New preset here',
         disabled: kind === 0,
-        onSelect: () => startNewPreset(slot),
+        onSelect: () => void startNewPreset(slot),
       });
     }
     items.push(
@@ -3827,12 +3773,8 @@ export default function App() {
       {
         id: 'menu-save',
         label: 'Save to Pedal',
-        hint: !connected
-          ? 'No pedal connected'
-          : !writeEnabled
-            ? 'Enable writing first'
-            : 'Apply the drafts',
-        disabled: !connected || !writeEnabled,
+        hint: !connected ? 'No pedal connected' : 'Store the preset',
+        disabled: !connected,
         onSelect: () => void saveWorkingPreset(),
       },
       {
@@ -4059,7 +4001,7 @@ export default function App() {
     if (!connection || saveBusy) {
       return;
     }
-    if (!writeEnabled || !activePresetLoaded) {
+    if (!activePresetLoaded) {
       appendLog('ERROR save refused: enable editing and read the active preset first.');
       return;
     }
@@ -4139,15 +4081,15 @@ export default function App() {
    *
    * Operation 71 stores the active preset's metadata, so this is only offered
    * when the editor shows the active preset and it belongs to the User setlist.
-   * One gate: the write button, then one `window.confirm`.
+   * One gate: the write button. No confirmation dialog.
    */
   async function writeRename(name: string) {
     const connection = connectionRef.current;
     if (!connection || actionBusy) {
       return;
     }
-    if (!writeEnabled || !activePresetLoaded) {
-      setActionError('Enable writing and read the active preset first.');
+    if (!activePresetLoaded) {
+      setActionError('Read the active preset from the pedal first.');
       return;
     }
     if (
@@ -4166,16 +4108,6 @@ export default function App() {
       return;
     }
     const slot = structure.preset.slot;
-    const confirmed = window.confirm(
-      `Rename the active preset to "${name}" on the pedal?\n\n` +
-        `Destination: User ${slotLabel(slot)}\n\n` +
-        'Operation 71 stores the active preset metadata. The sound is the ' +
-        'active one; this is not a pure name edit.',
-    );
-    if (!confirmed) {
-      appendLog('Rename cancelled by the user.');
-      return;
-    }
 
     setActionError(null);
     setActionBusy(true);
@@ -4235,10 +4167,6 @@ export default function App() {
   ): Promise<void> {
     const connection = connectionRef.current;
     if (!connection || actionBusy) {
-      return;
-    }
-    if (!writeEnabled) {
-      setActionError('Enable writing first.');
       return;
     }
     if (!activePresetLoaded) {
@@ -4346,7 +4274,7 @@ export default function App() {
    * same: writing armed, one confirmation, then a read-back of the User
    * setlist. A one-entry `.pgbak` is built with the Rust core and replayed by
    * `RestoreFlow`, so the stream framing is exactly the tested restore path.
-   * The slot is overwritten; one `window.confirm` is the only gate after the
+   * The slot is overwritten; there is no confirmation dialog after the
    * explicit write button.
    */
   async function writeBodyToSlot(
@@ -4360,28 +4288,9 @@ export default function App() {
     if (!connection || actionBusy) {
       return;
     }
-    if (!writeEnabled) {
-      setActionError('Enable writing first.');
-      return;
-    }
     const error = validatePresetName(name);
     if (error) {
       setActionError(error);
-      return;
-    }
-    const existing = setlists[1]?.[destSlot]?.name ?? '';
-    const confirmed = window.confirm(
-      `Write the preset to User ${slotLabel(destSlot)}?\n\n` +
-        `Current: ${existing || 'empty'}\nNew name: ${name}\n\n` +
-        'This overwrites the slot with operation 5 and cannot be undone ' +
-        'without a copy of the current contents. Operation 5 has not been ' +
-        'validated on hardware yet.' +
-        (mode === 'move'
-          ? '\n\nThe source slot is left untouched on the pedal.'
-          : ''),
-    );
-    if (!confirmed) {
-      appendLog('Preset write cancelled by the user.');
       return;
     }
 
@@ -4430,6 +4339,26 @@ export default function App() {
 
       const list = await readSetlist(connection, 1, reportProgress);
       setSetlists((current) => ({ ...current, 1: list.entries }));
+      // The destination now holds the pedal's bytes, so any browser copy of
+      // that slot is stale: drop it and let the pedal be the source again.
+      const destKey = localKey(1, destSlot);
+      setLocalDocs((current) => {
+        if (!current[destKey]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[destKey];
+        return next;
+      });
+      clearSlotDirty(destKey);
+      setPending((current) =>
+        current.filter((item) => item.key !== destKey),
+      );
+      if (!list.entries[destSlot]?.name) {
+        // Operation 5 does not carry the name slot, so show the name the user
+        // asked for instead of leaving the row empty.
+        updateSetlistName(1, destSlot, name);
+      }
       const entry = list.entries[destSlot];
       const nameOk = entry?.name === name;
       if (nameOk) {
@@ -4628,20 +4557,6 @@ export default function App() {
     if (!connection || restoreBusy) {
       return;
     }
-    if (!writeEnabled) {
-      setRestoreError('Enable writing first.');
-      return;
-    }
-    const confirmed = window.confirm(
-      `Restore ${summary.entries.length} preset(s) to the pedal?\n\n` +
-        `File SHA-256: ${summary.digest}\n\n` +
-        'Operation 5 overwrites the target slots. Slots absent from the file ' +
-        'are left untouched. This cannot be undone without a backup.',
-    );
-    if (!confirmed) {
-      appendLog('Restore cancelled by the user.');
-      return;
-    }
 
     setUsbError(null);
     setRestoreError(null);
@@ -4755,9 +4670,7 @@ export default function App() {
   const editable = canEditHere && !busy;
   const editHint = workingDoc
     ? 'Edits change this offline copy. Use Export .pgp to keep them.'
-    : writeEnabled
-      ? 'Changes are drafts until you press Save (Ctrl+S), which writes them to the pedal and stores the preset in its slot.'
-      : 'Changes are drafts. Enable writing, then press Save (Ctrl+S) to write and store them on the pedal.';
+    : 'Changes reach the pedal as you make them. Press Save (Ctrl+S) to store the preset in its slot.';
 
   /**
    * Ctrl+S / Cmd+S saves the working copy, exactly like the header button:
@@ -4768,11 +4681,9 @@ export default function App() {
   saveRef.current = saveWorkingPreset;
   const saveBlockReason = !connected
     ? 'No POD Go connected. Export .pgp works offline.'
-    : !writeEnabled
-      ? 'Check “Enable writing” to save to the pedal. Export .pgp needs no pedal.'
-      : !activePresetLoaded
-        ? 'Read the active preset from the pedal before saving.'
-        : null;
+    : !activePresetLoaded
+      ? 'Read the active preset from the pedal before saving.'
+      : null;
   const saveBlockRef = useRef<string | null>(saveBlockReason);
   saveBlockRef.current = saveBlockReason;
   const undoRef = useRef(undoEdit);
@@ -4917,57 +4828,20 @@ export default function App() {
             title={
               !connected
                 ? 'Connect a POD Go to save. Export .pgp works offline.'
-                : !writeEnabled
-                  ? 'Check “Enable writing” first. Export .pgp needs no pedal.'
-                  : !activePresetLoaded
-                    ? 'Read the active preset from the pedal first.'
-                    : 'Write the drafts to the pedal and store the preset in its slot (Ctrl+S)'
+                : !activePresetLoaded
+                  ? 'Read the active preset from the pedal first.'
+                  : 'Store the preset in its slot (Ctrl+S)'
             }
           >
             Save
           </button>
-
-          {connected && (
-            <label
-              className="edit-arm"
-              title="Safeguard: Save is disabled until you enable writing for this session"
-            >
-              <input
-                id="arm-writes"
-                type="checkbox"
-                checked={writeEnabled}
-                disabled={busy}
-                onChange={(event) => {
-                  const armed = event.target.checked;
-                  setWriteEnabled(armed);
-                  setSaveNotice(null);
-                  // Un-arming does not undo live edits already on the pedal.
-                  if (!armed && connected && activePresetLoaded && dirty) {
-                    setSaveNotice({
-                      kind: 'info',
-                      text:
-                        'Writing is off. Changes already applied to the pedal ' +
-                        'are still live but not stored; enable writing again ' +
-                        'and press Save to keep them.',
-                    });
-                  }
-                  appendLog(
-                    armed
-                      ? 'Writing enabled for this session.'
-                      : 'Writing disabled.',
-                  );
-                }}
-              />
-              <span>Enable writing</span>
-            </label>
-          )}
 
           <button
             id="new-preset"
             type="button"
             className="toolbar-button"
             disabled={!moduleReady || busy}
-            onClick={() => startNewPreset()}
+            onClick={() => void startNewPreset()}
             title="Create a neutral preset in the first empty User slot"
           >
             New
@@ -5085,11 +4959,9 @@ export default function App() {
                     }
               }
               onMoveBlock={workingDoc || connected ? moveBlock : undefined}
-              onSelectSnapshot={workingDoc ? selectSnapshot : undefined}
-              onRenameSnapshot={workingDoc ? renameSnapshot : undefined}
-              onSetSnapshotLedColor={
-                workingDoc ? setSnapshotLedColor : undefined
-              }
+              onSelectSnapshot={selectSnapshot}
+              onRenameSnapshot={renameSnapshot}
+              onSetSnapshotLedColor={setSnapshotLedColor}
               onToggleSnapshotParam={
                 workingDoc ? toggleSnapshotParam : undefined
               }
@@ -5221,7 +5093,7 @@ export default function App() {
             <button
               id="save-to-slot"
               type="button"
-              disabled={!connected || !writeEnabled || !activePresetLoaded || busy}
+              disabled={!connected || !activePresetLoaded || busy}
               onClick={openSaveDialog}
               title="Store the active preset in a User slot (metadata only)"
             >
@@ -5232,7 +5104,7 @@ export default function App() {
           {deviceInfo && (
             <p className="device-info">
               {describeDevice(deviceInfo)} ·{' '}
-              {writeEnabled ? 'writing enabled' : 'read-only'}
+              {'live editing'}
             </p>
           )}
           {usbBusy && <p className="progress">{usbBusy}</p>}
@@ -5340,7 +5212,7 @@ export default function App() {
       <BackupRestoreDialog
         open={backupOpen}
         connected={connected}
-        writeArmed={writeEnabled}
+        writeArmed={connected}
         busy={busy || saveBusy}
         setlists={setlists}
         freshBackup={freshBackup}
@@ -5370,7 +5242,7 @@ export default function App() {
         open={actionsOpen}
         busy={busy || saveBusy || restoreBusy || backupBusy}
         connected={connected}
-        writeArmed={writeEnabled}
+        writeArmed={connected}
         activePresetLoaded={activePresetLoaded}
         structure={structure}
         setlists={setlists}

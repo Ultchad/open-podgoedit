@@ -1176,7 +1176,7 @@ test('reads the User setlist over a fake WebUSB device', async ({ page }) => {
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await expect(page.locator('.device-info')).toContainText('read-only');
+  await expect(page.locator('.device-info')).toContainText('live editing');
   // Displayed addresses keep the USB direction bit: OUT 0x01 / IN 0x81.
   await expect(page.locator('.device-info')).toContainText('OUT 0x01 / IN 0x81');
 
@@ -1310,14 +1310,16 @@ test('opens a preset slot from the librarian over a fake WebUSB device', async (
   await item.click();
 
   await expect(page.locator('.preset-title')).toContainText('02B');
-  await expect(page.locator('.preset-title-name')).toHaveText(/Preset 005/);
-  await expect(page.locator('.device-report h2')).toHaveText('User 02B');
+  // The click recalled User 02B, so the editor shows the pedal's edit buffer.
+  await expect(page.locator('.report.log')).toContainText(
+    'Recall: User 02B after',
+  );
+  await expect(page.locator('.preset-title')).toContainText('02B');
   const report = page.locator('.device-report .report');
   await expect(report).toContainText('container: l6-helix');
   await expect(report).toContainText('round-trip: byte-identical');
-  await expect(page.locator('.preset-item.is-loaded')).toContainText(
-    'Preset 005',
-  );
+  // After the recall the librarian highlights 02B with the pedal's own name.
+  await expect(page.locator('.preset-item.is-loaded')).not.toHaveCount(0);
   await expect(page.locator('.block-tile')).toHaveCount(10);
 
   expect(errors).toEqual([]);
@@ -1383,7 +1385,7 @@ test('falls back to an object-22 read when object 23 does not answer', async ({
   expect(errors).toEqual([]);
 });
 
-test('batch-saves parameter drafts with Ctrl+S after arming', async ({
+test('sends live parameter edits then stores them with Ctrl+S', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -1415,23 +1417,14 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   );
 
   // Connecting reads both setlists and the active preset automatically, so the
-  // editor is editable right away. The write guard still starts unchecked.
-  await expect(page.locator('#arm-writes')).toBeVisible();
+  // editor is editable right away.
   await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
   await expect(page.locator('.readonly-chip')).toHaveText('draft');
 
-  // Writing is the only gate. Save is still clickable so a phone gets a
-  // visible explanation; before arming it refuses and sends nothing.
+  // There is no write arm any more: writing is live as soon as a pedal is
+  // connected, and the only pop-up left is the Save confirmation.
+  await expect(page.locator('#arm-writes')).toHaveCount(0);
   await expect(page.locator('#save-preset')).toBeEnabled();
-  await page.locator('#save-preset').click();
-  await expect(page.locator('#save-notice')).toContainText('Enable writing');
-  const writesBeforeArm = await page.evaluate(
-    () =>
-      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
-  );
-  expect(writesBeforeArm).toHaveLength(0);
-  await page.locator('#arm-writes').check();
-  await expect(page.locator('#save-notice')).toHaveCount(0);
 
   // Processing tile 2 is Tube Drive, stored in raw chain slot 3 (input = 0).
   await page.locator('.block-tile').nth(2).click();
@@ -1475,14 +1468,12 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   });
   await page.keyboard.press('Control+s');
 
-  await expect(page.locator('.report.log')).toContainText(
-    'Save: 0 model(s) and 0 parameter(s) applied in RAM',
-  );
+  await expect(page.locator('.report.log')).toContainText('Save: stored');
   // The pedal ignored the first write handshake; the driver replayed it.
   await expect(page.locator('.report.log')).toContainText(
     'handshake muet (1/5)',
   );
-  expect(dialogMessage).toContain('Live changes already applied');
+  expect(dialogMessage).toContain('Save the active preset to User');
   await expect(page.locator('#save-notice')).toContainText(
     'Saved to User',
   );
@@ -1545,7 +1536,6 @@ test('saves the active preset after backing up the destination slot', async ({
   // A save needs the active preset and an enabled editing session.
   await page.locator('#read-preset').click();
   await expect(page.locator('.block-tile')).toHaveCount(10);
-  await page.locator('#arm-writes').check();
 
   await page.locator('#save-to-slot').click();
   await expect(page.locator('#save-dialog-title')).toBeVisible();
@@ -1611,7 +1601,6 @@ test('backs up every slot and restores the streamed file', async ({ page }) => {
   // Restore needs editing enabled, and that needs a loaded preset.
   await page.locator('#read-preset').click();
   await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
-  await page.locator('#arm-writes').check();
 
   await page.locator('#backup-restore').click();
   await expect(page.locator('#backup-dialog-title')).toBeVisible();
@@ -1644,14 +1633,8 @@ test('backs up every slot and restores the streamed file', async ({ page }) => {
   await expect(page.locator('#restore-blockers')).toHaveCount(0);
   await expect(page.locator('#restore-confirm')).toBeEnabled();
 
-  // One confirmation, then the stream.
-  let restoreDialog = '';
-  page.once('dialog', (dialog) => {
-    restoreDialog = dialog.message();
-    void dialog.accept();
-  });
+  // No confirmation pop-up: the button itself starts the stream.
   await page.locator('#restore-confirm').click();
-  expect(restoreDialog).toContain('Restore 3 preset(s)');
   await expect(page.locator('.backup-dialog')).toHaveCount(0, {
     timeout: 30_000,
   });
@@ -1777,7 +1760,6 @@ test('restores only the checked presets from a .pgbak', async ({ page }) => {
   await page.locator('#connect').click();
   await page.locator('#read-preset').click();
   await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
-  await page.locator('#arm-writes').check();
 
   await page.locator('#backup-restore').click();
   const [download] = await Promise.all([
@@ -1806,13 +1788,7 @@ test('restores only the checked presets from a .pgbak', async ({ page }) => {
     'Restore 1 preset(s)',
   );
 
-  let message = '';
-  page.once('dialog', (dialog) => {
-    message = dialog.message();
-    void dialog.accept();
-  });
   await page.locator('#restore-confirm').click();
-  expect(message).toContain('Restore 1 preset(s)');
   await expect(page.locator('.backup-dialog')).toHaveCount(0, {
     timeout: 30_000,
   });
@@ -1920,7 +1896,7 @@ test('copies, pastes, moves and renames presets in the local library', async ({
   ).toHaveText('Moved Lead');
 });
 
-test('writes a paste and a rename with one confirmation each', async ({
+test('writes a paste and a rename without confirmation dialogs', async ({
   page,
 }) => {
   const fixture = smallSetlist(['Lead A', 'Lead B']);
@@ -1938,7 +1914,6 @@ test('writes a paste and a rename with one confirmation each', async ({
   await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
 
   // Arming is the only switch; no full backup is required.
-  await page.locator('#arm-writes').check();
   await page.locator('#preset-actions').click();
   await expect(page.locator('#preset-actions-title')).toBeVisible();
   await expect(page.locator('#actions-blockers')).toHaveCount(0);
@@ -1948,13 +1923,8 @@ test('writes a paste and a rename with one confirmation each', async ({
   await page.locator('#paste-name').fill('Pasted Lead');
   await expect(page.locator('#paste-write')).toBeEnabled();
 
-  let pasteMessage = '';
-  page.once('dialog', (dialog) => {
-    pasteMessage = dialog.message();
-    void dialog.accept();
-  });
+  // No confirmation pop-up for a paste any more.
   await page.locator('#paste-write').click();
-  expect(pasteMessage).toContain('User 02D');
   await expect(page.locator('.report.log')).toContainText('Preset write:');
 
   // The paste wrote a one-entry op-5 stream.
@@ -1972,13 +1942,7 @@ test('writes a paste and a rename with one confirmation each', async ({
   // Rename the active User preset: still one confirmation, no backup.
   await page.locator('#rename-name').fill('Renamed Lead');
   await expect(page.locator('#rename-write')).toBeEnabled();
-  let renameMessage = '';
-  page.once('dialog', (dialog) => {
-    renameMessage = dialog.message();
-    void dialog.accept();
-  });
   await page.locator('#rename-write').click();
-  expect(renameMessage).toContain('Renamed Lead');
   await expect(page.locator('.report.log')).toContainText('Rename accepted');
   // The fake setlist is static, so the verification re-read warns; what this
   // test proves is that one confirmation was enough to send the write.
@@ -2009,7 +1973,7 @@ test('shows an offline message when WebUSB is missing', async ({ page }) => {
 });
 
 
-test('keeps the write arm when switching presets', async ({ page }) => {
+test('recalls the clicked slot on the pedal', async ({ page }) => {
   const fixture = smallSetlist(['Lead A', 'Lead B']);
   const preset = readFileSync(
     new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
@@ -2024,38 +1988,95 @@ test('keeps the write arm when switching presets', async ({ page }) => {
     /POD Go \(fake\)/,
   );
 
-  await page.locator('#arm-writes').check();
-  await expect(page.locator('#arm-writes')).toBeChecked();
-
-  // Opening another slot from the librarian must not disarm the session. Armed,
-  // the click is a real recall: the pedal plays the slot and the editor reads
-  // its edit buffer back, so Save stays armed for it.
+  // Opening another slot is a real recall: the pedal plays the slot and the
+  // editor reads its edit buffer back.
   await page.getByRole('tab', { name: /User/ }).click();
   await page.locator('.preset-item').nth(1).click();
   await expect(page.locator('.report.log')).toContainText(
     'Recall: User 01B after',
   );
   await expect(page.locator('.preset-title-name')).toHaveText('US Deluxe Nrm');
-  await expect(page.locator('#arm-writes')).toBeChecked();
   await expect(page.locator('#save-to-slot')).toBeEnabled();
   const recall = await page.evaluate(
     () =>
       (window as unknown as { __podgoRecall?: number[] }).__podgoRecall ?? [],
   );
   expect(recall).toEqual([1]);
+});
 
-  // Re-reading the active preset keeps it too.
-  await page.locator('#read-preset').click();
-  await expect(page.locator('#arm-writes')).toBeChecked();
+/**
+ * Leaving a preset with unsaved live changes asks once: save, don't save, or
+ * cancel. "Save" stores the current preset (op 71) before the recall.
+ */
+test('asks save / do not save / cancel when switching with unsaved changes', async ({
+  page,
+}) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  // Make a live change so the preset is dirty.
+  await page.locator('.block-tile').nth(2).click();
+  await page.locator('#param-value-0').click();
+  await page.locator('#param-input-0').fill('5');
+  await page.locator('#param-input-0').press('Enter');
+  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+  await page.getByRole('tab', { name: /User/ }).click();
+
+  const prompts: string[] = [];
+  // 1. Cancel keeps the editor on the current preset and sends no recall.
+  page.once('dialog', (dialog) => {
+    prompts.push(dialog.message());
+    void dialog.dismiss();
+  });
+  await page.locator('.preset-item').nth(1).click();
+  await expect(page.locator('.preset-title-name')).toHaveText('US Deluxe Nrm');
+  expect(prompts[0]).toContain('not saved to its slot');
+  const afterCancel = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoRecall?: number[] }).__podgoRecall ?? [],
+  );
+  expect(afterCancel).toEqual([]);
+
+  // 2. "save" stores the active preset with op 71, then recalls the slot.
+  page.once('dialog', (dialog) => void dialog.accept('save'));
+  await page.locator('.preset-item').nth(1).click();
+  await expect(page.locator('.report.log')).toContainText('Save: stored');
+  await expect(page.locator('.report.log')).toContainText(
+    'Recall: User 01B after',
+  );
+  const stored = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  const ops = stored.map(
+    (row) =>
+      (readMsgpack(new Uint8Array(row), 24).value as { [key: number]: MsgValue })[
+        100
+      ],
+  );
+  // The store comes before the recall, so the pedal switches after saving.
+  expect(ops.indexOf(71)).toBeGreaterThanOrEqual(0);
+  expect(ops.indexOf(20)).toBeGreaterThan(ops.indexOf(71));
 });
 
 /**
  * Hardware report: after browsing another slot and clicking the pedal's active
  * slot again, Save stayed disabled until "Read active preset" was pressed by
  * hand. Re-opening the active slot is the user's way of saying "show that
- * preset again", so it must re-read the edit buffer and keep Save armed.
+ * preset again", so it must re-read the edit buffer and keep Save enabled.
  */
-test('re-opening the pedal active slot keeps Save and the bypass armed', async ({
+test('re-opening the pedal active slot re-reads its edit buffer', async ({
   page,
 }) => {
   // Object 23 in the fake device reports setlist 1, slot 2.
@@ -2072,7 +2093,6 @@ test('re-opening the pedal active slot keeps Save and the bypass armed', async (
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await page.locator('#arm-writes').check();
   await expect(page.locator('#save-to-slot')).toBeEnabled();
 
   // Armed, browsing a stored slot recalls it on the pedal too, so the editor
@@ -2098,13 +2118,11 @@ test('re-opening the pedal active slot keeps Save and the bypass armed', async (
 });
 
 /**
- * Without the write arm, opening another slot must stay a read: the pedal
- * keeps playing whatever it plays, so no recall is sent.
+ * Opening a slot always switches the pedal to it, even when the browser holds
+ * an offline copy of that slot: the pedal's preset is what the user hears.
  */
-test('reads a stored slot without recalling when writing is off', async ({
-  page,
-}) => {
-  const fixture = smallSetlist(['Lead A', 'Lead B']);
+test('recalls the slot even when a browser copy exists', async ({ page }) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B', 'Lead C', 'Lead D']);
   const preset = readFileSync(
     new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
   ).toString('base64');
@@ -2117,26 +2135,35 @@ test('reads a stored slot without recalling when writing is off', async ({
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-
   await page.getByRole('tab', { name: /User/ }).click();
-  await page.locator('.preset-item').nth(1).click();
+
+  // Copy the active preset into 01C with operation 5.
+  await page.locator('.preset-item[data-slot="0"]').click({ button: 'right' });
+  await expect(page.locator('#menu-copy-to')).toBeEnabled();
+  page.once('dialog', (dialog) => void dialog.accept('01C'));
+  await page.locator('#menu-copy-to').click();
   await expect(page.locator('.report.log')).toContainText(
-    'Read User 01B:',
+    'Preset write body verified: User 01C',
   );
-  // A stored slot body is not the edit buffer, so Save stays out of reach.
-  await expect(page.locator('#save-to-slot')).toBeDisabled();
-  const writes = await page.evaluate(
+
+  // Move away, then click 01C: the pedal's preset must open, not a copy.
+  await page.locator('.preset-item').filter({ hasText: '01D' }).first().click();
+  await expect(page.locator('.report.log')).toContainText(
+    'Recall: User 01D after',
+    { timeout: 15_000 },
+  );
+  await page.locator('.preset-item').filter({ hasText: '01C' }).first().click();
+  await expect(page.locator('.report.log')).toContainText(
+    'Recall: User 01C after',
+    { timeout: 15_000 },
+  );
+  const recall = await page.evaluate(
     () =>
-      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+      (window as unknown as { __podgoRecall?: number[] }).__podgoRecall ?? [],
   );
-  expect(writes).toHaveLength(0);
+  expect(recall).toContain(2);
 });
 
-/**
- * User request: removing an effect needs to work from the editor, like the
- * official app. The pair is operation 28 then 78, from
- * `podgo-bypass-and-remove-effect.pcapng`.
- */
 test('removes an effect with operations 28 and 78 from the block menu', async ({
   page,
 }) => {
@@ -2161,7 +2188,6 @@ test('removes an effect with operations 28 and 78 from the block menu', async ({
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await page.locator('#arm-writes').check();
   // Tile 2 is Tube Drive (raw chain slot 3). Right-click it and remove it.
   await page.locator('.block-tile').nth(2).click({ button: 'right' });
   await expect(page.locator('#block-menu-remove')).toContainText(
@@ -2233,7 +2259,6 @@ test('moves a block on the pedal with operation 21', async ({ page }) => {
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await page.locator('#arm-writes').check();
 
   await page.locator('.block-tile').nth(2).click({ button: 'right' });
   await expect(page.locator('#block-menu-move-left')).toBeEnabled();
@@ -2341,7 +2366,6 @@ test('copies the pedal active preset with operation 71', async ({ page }) => {
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await page.locator('#arm-writes').check();
   await expect(page.locator('#save-to-slot')).toBeEnabled();
 
   // The active preset is open; copy it from the title's ⋯ menu.
@@ -2349,15 +2373,9 @@ test('copies the pedal active preset with operation 71', async ({ page }) => {
   await expect(page.locator('#menu-copy-to')).toBeEnabled();
 
   const dialogs: string[] = [];
-  let overwrite = '';
   page.on('dialog', (dialog) => {
     dialogs.push(dialog.type());
-    if (dialog.type() === 'prompt') {
-      void dialog.accept('01A');
-    } else {
-      overwrite = dialog.message();
-      void dialog.accept();
-    }
+    void dialog.accept(dialog.type() === 'prompt' ? '01A' : undefined);
   });
   await page.locator('#menu-copy-to').click();
 
@@ -2370,9 +2388,8 @@ test('copies the pedal active preset with operation 71', async ({ page }) => {
   await expect(page.locator('#save-notice')).toContainText(
     'Copied the active preset to User 01A',
   );
-  expect(dialogs).toContain('prompt');
-  expect(dialogs).toContain('confirm');
-  expect(overwrite).toContain('operation 71');
+  // One prompt (the destination slot); overwriting it needs no confirmation.
+  expect(dialogs).toEqual(['prompt']);
 
   const writes = await page.evaluate(
     () =>
@@ -2506,7 +2523,6 @@ test('copies a pedal slot to another slot from the right-click menu', async ({
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await page.locator('#arm-writes').check();
 
   await page.getByRole('tab', { name: /User/ }).click();
   await page.locator('.preset-item').nth(1).click({ button: 'right' });
@@ -2527,8 +2543,7 @@ test('copies a pedal slot to another slot from the right-click menu', async ({
   await expect(page.locator('.report.log')).toContainText(
     'body verified: User 02D matches the source byte for byte',
   );
-  expect(dialogs).toContain('prompt');
-  expect(dialogs).toContain('confirm');
+  expect(dialogs).toEqual(['prompt']);
 
   const writes = await page.evaluate(
     () =>
@@ -2559,7 +2574,6 @@ test('pastes a copied pedal body into another slot from the menu', async ({
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await page.locator('#arm-writes').check();
   await page.getByRole('tab', { name: /User/ }).click();
 
   // Copy reads the body; it does not open the slot or make a local document.
@@ -2570,14 +2584,7 @@ test('pastes a copied pedal body into another slot from the menu', async ({
   // Paste used to refuse a pedal body. It now writes it with operation 5.
   await page.locator('.preset-item').nth(1).click({ button: 'right' });
   await expect(page.locator('#menu-paste')).toBeEnabled();
-  let pasteMessage = '';
-  page.once('dialog', (dialog) => {
-    pasteMessage = dialog.message();
-    void dialog.accept();
-  });
   await page.locator('#menu-paste').click();
-
-  expect(pasteMessage).toContain('User 01B');
   await expect(page.locator('.report.log')).toContainText('Preset write:');
 
   const writes = await page.evaluate(
@@ -2744,7 +2751,7 @@ test('saves an export through the desktop save dialog', async ({ page }) => {
 /**
  * Behaviour change (user request): with the official editor, a change is
  * applied to the pedal immediately and only Save stores it. Bypass now sends
- * operation 41 when writing is armed, instead of building an offline copy.
+ * operation 41 as soon as the toggle is tapped, without an offline copy.
  */
 test('sends op 41 when bypass is tapped on a connected preset', async ({
   page,
@@ -2762,7 +2769,6 @@ test('sends op 41 when bypass is tapped on a connected preset', async ({
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await page.locator('#arm-writes').check();
 
   // Tile 2 is Tube Drive (a block with a bypass toggle); the raw chain index
   // is one-based.
@@ -2799,9 +2805,7 @@ test('sends op 41 when bypass is tapped on a connected preset', async ({
   // the parameter or model.
   page.once('dialog', (dialog) => void dialog.accept());
   await page.locator('#save-preset').click();
-  await expect(page.locator('.report.log')).toContainText(
-    'Save: 0 model(s) and 0 parameter(s) applied in RAM',
-  );
+  await expect(page.locator('.report.log')).toContainText('Save: stored');
   await expect(page.locator('.report.log')).toContainText('Save: stored');
   const after = await page.evaluate(
     () =>
@@ -2837,7 +2841,11 @@ test('opens the preset menu from the ⋯ next to the name', async ({ page }) => 
   await expect(page.locator('#menu-save')).toBeVisible();
 });
 
-test('keeps bypass changes as drafts until writing is armed', async ({
+/**
+ * A bypass tap on a connected preset sends op 41 straight away and never
+ * builds an offline copy or asks a question.
+ */
+test('bypasses a block on a connected preset without any pop-up', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -2861,35 +2869,36 @@ test('keeps bypass changes as drafts until writing is armed', async ({
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
-  await expect(page.locator('.readonly-chip')).toHaveText('draft');
 
-  // Writing is off: the first bypass change builds an editable offline copy
-  // and says so rather than touching the pedal.
-  let copyMessage = '';
-  page.once('dialog', (dialog) => {
-    copyMessage = dialog.message();
+  let dialogs = 0;
+  page.on('dialog', (dialog) => {
+    dialogs += 1;
     void dialog.accept();
   });
+
   const toggle = page.locator('.inspector-state.is-toggle').first();
   await expect(toggle).toBeVisible();
+  const before = await toggle.textContent();
   await toggle.click();
 
-  expect(copyMessage).toContain('editable copy');
+  await expect(toggle).not.toHaveText(before ?? '');
   await expect(page.locator('.report.log')).toContainText(
-    'Created an editable copy',
+    'sent to the pedal (not stored).',
   );
-  await expect(page.locator('.report.log')).toContainText('bypassed');
-  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
-  await expect(page.locator('.inspector-state.is-toggle').first()).toHaveText(
-    'bypassed',
-  );
+  expect(dialogs).toBe(0);
+  expect(errors).toEqual([]);
 
   const writes = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
   );
-  expect(writes).toHaveLength(0);
-  expect(errors).toEqual([]);
+  const ops = writes.map(
+    (row) =>
+      (readMsgpack(new Uint8Array(row), 24).value as { [key: number]: MsgValue })[
+        100
+      ],
+  );
+  expect(ops).toContain(41);
 });
 
 test.describe('editing a connected preset on a phone viewport', () => {
@@ -2899,7 +2908,7 @@ test.describe('editing a connected preset on a phone viewport', () => {
     isMobile: true,
   });
 
-  test('shows the preset ⋯ and the write arm without hiding Save', async ({
+  test('shows the preset ⋯ without hiding Save', async ({
     page,
   }) => {
     const fixture = smallSetlist(['Lead A', 'Lead B']);
@@ -2918,7 +2927,7 @@ test.describe('editing a connected preset on a phone viewport', () => {
 
     await expect(page.locator('#preset-more')).toBeVisible();
     await expect(page.locator('#save-preset')).toBeVisible();
-    await expect(page.locator('#arm-writes')).toBeVisible();
+    await expect(page.locator('#arm-writes')).toHaveCount(0);
 
     const box = await page.locator('#preset-more').boundingBox();
     expect(box).not.toBeNull();
@@ -2957,8 +2966,7 @@ test.describe('editing a connected preset on a phone viewport', () => {
       /POD Go \(fake\)/,
     );
     await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
-    await page.locator('#arm-writes').check();
-
+  
     // Select the Amp block and note its processing index (raw chain = +1).
     const ampIndex = await page.locator('.block-tile').evaluateAll((nodes) =>
       nodes.findIndex((node) =>
@@ -3024,10 +3032,8 @@ test.describe('editing a connected preset on a phone viewport', () => {
     expect(writesBefore).toHaveLength(1);
 
     await page.locator('#save-preset').tap();
-    await expect(page.locator('.report.log')).toContainText(
-      'Save: 0 model(s) and 0 parameter(s) applied in RAM',
-    );
-    expect(dialogMessages.at(-1)).toContain('Live changes already applied');
+    await expect(page.locator('.report.log')).toContainText('Save: stored');
+    expect(dialogMessages.at(-1)).toContain('Save the active preset');
     await expect(page.locator('#save-notice')).toContainText(
       'The preset is stored on the pedal.',
     );
@@ -3115,8 +3121,7 @@ test.describe('editing a connected preset on a phone viewport', () => {
     await expect(page.locator('.device-card .badge')).toHaveText(
       /POD Go \(fake\)/,
     );
-    await page.locator('#arm-writes').check();
-
+  
     // Pick an empty slot: the raw chain index is its processing index + 1.
     const emptyIndex = await page.locator('.block-tile').evaluateAll((nodes) =>
       nodes.findIndex((node) => node.classList.contains('is-empty')),
@@ -3186,8 +3191,7 @@ test.describe('editing a connected preset on a phone viewport', () => {
     await expect(page.locator('.device-card .badge')).toHaveText(
       /POD Go \(fake\)/,
     );
-    await page.locator('#arm-writes').check();
-
+  
     // Copy a block from the active preset, then paste it back into the same
     // slot: the clipboard path is the same as copying between presets.
     const index = await page.locator('.block-tile').evaluateAll((nodes) =>

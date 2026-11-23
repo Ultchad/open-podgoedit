@@ -632,14 +632,11 @@ la modification), le rappeler sur le pédalier, puis :
 
 - [X] Connecter, **Read active preset**, puis cliquer **Download .bin** et
       archiver le fichier (copie octet-exacte avant écriture).
-- [X] Vérifier que *Enable device writes* est désactivé tant que le preset
-      actif n'a pas été lu, et qu'il se décoche après une lecture de slot.
-- [X] Cocher *Enable device writes* ; le badge passe à `writes armed`.
-- [X] Sélectionner un effet (ex. Tube Drive), saisir une valeur (ex. `5`),
-      cliquer **Set**, refuser la confirmation : rien ne doit partir.
-- [X] Refaire l'opération et accepter : le journal doit afficher `Write
-      accepted … frame …` et l'écran du pédalier doit montrer la nouvelle
-      valeur.
+- [ ] Historique : ces étapes décrivent l'ancienne case « Enable writing »,
+      supprimée. Voir §3.14 pour le comportement actuel (écriture en direct).
+- [ ] Sélectionner un effet (ex. Tube Drive), saisir une valeur (ex. `5`) :
+      le journal doit afficher la ligne `Live:` et l'écran du pédalier la
+      nouvelle valeur, sans aucune confirmation.
 - [X] Vérifier la valeur sur le pédalier (molette), puis **Read active preset**
       et comparer : la nouvelle valeur doit revenir du pédalier.
 - [X] Changer de preset puis revenir : la valeur d'origine doit réapparaître
@@ -798,71 +795,79 @@ n'est pas exigée.
 
 **Résultat :** à compléter (date, firmware, slots, noms, écarts).
 
-### 3.14 Édition en direct : le pédalier Sonne, Save enregistre
+### 3.14 Édition en direct : le pédalier sonne, Save enregistre
 
-Comportement demandé (celui de POD Go Edit officiel) :
-**écritures armées**, l'éditeur affiche le preset **actif** du pédalier.
+**Plus aucune case « Enable writing », plus aucun pop-up.** Dès que le
+pédalier est connecté et que l'éditeur affiche son preset actif, chaque
+modification part au pédalier. Seuls deux pop-ups restent :
 
-Tant que **Enable writing** est décoché, rien ne part au pédalier : les
-modifications restent des brouillons, appliqués au moment de Save.
+1. **Save** (bouton ou Ctrl+S) ;
+2. changement de preset avec des modifications non enregistrées :
+   **save / no / Cancel** (taper `save` pour enregistrer d'abord).
 
-1. Paramètres
-- [ ] Cocher **Enable writing**, tourner un potentiomètre (ou saisir une
-      valeur). Le son doit changer **immédiatement** sur le pédalier, le
-      bandeau indique `unsaved changes`, et le journal affiche
-      `Live: … sent to the pedal (not stored)`.
-- [ ] Faire glisser un potentiomètre d'un trait : les écritures op 30 doivent
-      être regroupées (une poignée de `Live:` à la fin, pas une par pixel) et
-      le pédalier garde la dernière valeur.
-- [ ] Rappeler un autre preset **sur le pédalier** (molette) puis revenir :
-      la modification non enregistrée doit avoir disparu.
-- [ ] Refaire la modification, presser **Save** : le journal affiche
-      `Save: 0 model(s) and 0 parameter(s) applied in RAM` puis
-      `Save: stored…`. Rappeler un autre preset et revenir : la valeur doit
-      être conservée.
+Préparation : brancher, laisser la connexion se faire (l'éditeur lit les deux
+setlists puis le preset actif), ouvrir **Developer tools** pour voir le journal.
 
-2. Changement de modèle (op 40)
-- [ ] Choisir un autre ampli/effet dans l'inspecteur : le son change tout de
-      suite, journal `Live: block N → <modèle>`.
-- [ ] **Save**, puis rappeler le preset : le nouveau modèle doit revenir.
+1. Paramètres — doit sonner tout de suite
+- [ ] Tourner un potentiomètre : le son change **immédiatement**, le bandeau
+      passe à `unsaved changes`, le journal écrit `Live: … sent to the pedal`.
+- [ ] Glisser un potentiomètre d'un trait : une poignée de lignes `Live:`, pas
+      une par pixel ; le pédalier garde la dernière valeur.
+- [ ] Save : **un seul** pop-up. Rappeler un autre preset et revenir : la
+      valeur doit être conservée.
 
-3. Contournement (op 41)
-- [ ] Clic droit sur un effet → **Bypass in snapshot N** : l'effet est
-      contourné immédiatement, la notification op 49 apparaît dans le journal
-      de l'appareil, et le journal de la page affiche `Live: block N bypassed`.
-- [ ] **Save**, rappeler le preset : l'état contourné doit être conservé.
+2. Contournement (op 41) — plus de pop-up
+- [ ] Clic droit sur un effet → **Bypass in snapshot N** : aucun pop-up,
+      l'effet est contourné tout de suite, journal `Live: block N bypassed`.
+- [ ] Vérifier à l'écran du pédalier que le bloc est bien contourné.
+- [ ] Save puis rappeler : l'état contourné est conservé.
 
-4. Suppression d'un effet (op 28 puis 78)
-- [ ] Clic droit sur un effet → **Remove <modèle>** : une seule confirmation,
-      le slot devient vide sur le pédalier, journal
-      `Live: removed block N with operations 28+78`.
-- [ ] Vérifier sur l'écran du pédalier que le bloc a bien disparu (et pas
-      seulement contourné).
-- [ ] **Save**, rappeler le preset : le slot doit rester vide.
+3. Changement de modèle / ajout d'effet (op 40)
+- [ ] Choisir un autre ampli : le son change tout de suite, aucun pop-up.
+- [ ] Coller un effet dans un slot vide (Ctrl+V) : même comportement.
 
-5. Réorganisation (op 21)
-- [ ] Clic droit sur un effet → **Move left / Move right** : une confirmation,
-      puis `Live: moved block A to B with operation 21`. Le pédalier doit
-      jouer le nouvel ordre ; l'éditeur relit le preset juste après.
-- [ ] Contrôler sur le pédalier : ordre de la chaîne, assignations de
-      footswitch et états de snapshot pour ce bloc.
-- [ ] **Save**, rappeler le preset : l'ordre doit être conservé.
-- [ ] Cas le moins prouvé : déplacer un bloc **vide**. Si le pédalier refuse,
-      noter le statut affiché et ne pas réessayer en boucle.
+4. Suppression d'un effet (op 28 puis 78) — plus de pop-up
+- [ ] Clic droit → **Remove (nom du modèle)** : le bloc disparaît du pédalier,
+      journal `Live: removed block N with operations 28+78`.
+- [ ] Save puis rappeler : le slot reste vide.
 
-6. Changement de preset (op 20)
-- [ ] Avec écritures armées, cliquer un autre slot dans la bibliothèque : le
-      pédalier joue **ce** preset (vérifier à l'oreille et à l'écran), le
-      journal affiche `Recall: …` puis la relecture, et **Save** reste actif.
-- [ ] Décocher **Enable writing** puis cliquer un autre slot : le pédalier ne
-      doit **pas** changer de son (simple lecture), et Save doit être
-      désactivé.
-- [ ] Modifier quelque chose sans Save puis cliquer un autre slot : une
-      confirmation doit avertir que les modifications en direct seront
-      perdues.
+5. Réorganisation (op 21) — plus de pop-up
+- [ ] Clic droit → **Move left / Move right** : journal
+      `Live: moved block A to B with operation 21`, l'éditeur relit le preset.
+- [ ] **Le pédalier joue-t-il vraiment le nouvel ordre ?** Noter oui/non.
+      Si non, copier les 40 dernières lignes du journal.
+- [ ] Contrôler footswitch et snapshots du bloc déplacé.
+- [ ] Save puis rappeler : l'ordre est conservé.
 
-**Résultat :** à compléter (date, firmware, preset, opérations essayées,
-écarts, statuts refusés).
+6. Copier un preset — à ré-essayer maintenant
+- [ ] Ouvrir dans la bibliothèque le preset **actif**, menu ⋯ → **Copy to…**,
+      taper `02D`. Attendu : journal `Copy: storing the active preset …` puis
+      `Copy verified`, un **seul** pop-up (le slot cible).
+- [ ] Sur le **pédalier**, rappeler 02D : le son doit être celui du preset.
+- [ ] Refaire avec un slot **non actif** : journal `Preset write:` puis
+      `body verified`.
+- [ ] Si « copy preset » ne fait toujours rien : noter ce qui s'affiche
+      (bandeau, journal, pop-up) et à quel moment.
+
+7. Changer de preset (op 20)
+- [ ] Cliquer un autre slot : le pédalier **joue ce preset**, journal
+      `Recall: …` puis la relecture.
+- [ ] Cliquer un slot qui a une **copie locale** dans le navigateur : c'est
+      bien la version du **pédalier** qui doit s'ouvrir.
+- [ ] Modifier puis cliquer un autre slot : pop-up
+      save / no / Cancel.
+  - [ ] `Cancel` : on reste sur le preset, aucune trame op 20.
+  - [ ] `save` : journal `Save: stored` **puis** `Recall:` ; le preset
+        enregistré garde la modification.
+  - [ ] `no` : le son change, la modification est perdue.
+
+8. Snapshots — à ré-essayer maintenant
+- [ ] Alors que le pédalier est connecté, cliquer une autre puce snapshot :
+      le message doit dire que le pédalier garde son snapshot (aucune trame).
+- [ ] Clic droit sur une puce snapshot : le menu doit s'ouvrir.
+- [ ] Sur le **pédalier**, changer de snapshot : l'éditeur doit suivre.
+
+**Résultat :** à compléter (date, firmware, opérations, écarts, statuts refusés).
 
 ### 3.15 Édition hors ligne (rappel)
 
@@ -880,8 +885,8 @@ personnelles dans les fixtures du dépôt.
 - [ ] Ouvrir un export `.pgp` : le nom, le produit/firmware, les blocs, les
       footswitches et les contrôleurs s'affichent.
 - [ ] Cliquer **Open in editor** : la chaîne et l'inspecteur sont rendus ;
-      *Enable device writes*, **Save to slot**, **Actions…** et
-      **Download .bin** sont désactivés, le badge indique `offline copy`.
+      **Save**, **Save to slot**, **Actions…** et **Download .bin** sont
+      désactivés, le badge indique `offline copy`.
 - [ ] Modifier un paramètre continu d'un bloc (**Apply**) : le journal affiche
       `Local edit`, le badge passe à `offline copy · edited`, aucune requête ni
       écriture USB n'a lieu.
