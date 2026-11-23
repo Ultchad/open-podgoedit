@@ -794,14 +794,83 @@ n'est pas exigée.
 - [ ] Parcourir un autre slot puis recliquer le slot **actif** : le journal
       affiche `Re-reading the pedal's active preset …`, et
       **Save active preset to slot…** reste actif sans relire à la main.
-- [ ] Clic droit sur un effet, **Bypass / Enable in snapshot N** : le bloc
-      bascule sur la copie hors ligne et le bandeau précise que le pédalier
-      n'est pas modifié.
 - [ ] Archiver le journal et, si une sauvegarde a été prise, sa SHA-256.
 
 **Résultat :** à compléter (date, firmware, slots, noms, écarts).
 
-### 3.14 Import POD Go Edit `.pgp` / `.pgb`
+### 3.14 Édition en direct : le pédalier Sonne, Save enregistre
+
+Comportement demandé (celui de POD Go Edit officiel) :
+**écritures armées**, l'éditeur affiche le preset **actif** du pédalier.
+
+Tant que **Enable writing** est décoché, rien ne part au pédalier : les
+modifications restent des brouillons, appliqués au moment de Save.
+
+1. Paramètres
+- [ ] Cocher **Enable writing**, tourner un potentiomètre (ou saisir une
+      valeur). Le son doit changer **immédiatement** sur le pédalier, le
+      bandeau indique `unsaved changes`, et le journal affiche
+      `Live: … sent to the pedal (not stored)`.
+- [ ] Faire glisser un potentiomètre d'un trait : les écritures op 30 doivent
+      être regroupées (une poignée de `Live:` à la fin, pas une par pixel) et
+      le pédalier garde la dernière valeur.
+- [ ] Rappeler un autre preset **sur le pédalier** (molette) puis revenir :
+      la modification non enregistrée doit avoir disparu.
+- [ ] Refaire la modification, presser **Save** : le journal affiche
+      `Save: 0 model(s) and 0 parameter(s) applied in RAM` puis
+      `Save: stored…`. Rappeler un autre preset et revenir : la valeur doit
+      être conservée.
+
+2. Changement de modèle (op 40)
+- [ ] Choisir un autre ampli/effet dans l'inspecteur : le son change tout de
+      suite, journal `Live: block N → <modèle>`.
+- [ ] **Save**, puis rappeler le preset : le nouveau modèle doit revenir.
+
+3. Contournement (op 41)
+- [ ] Clic droit sur un effet → **Bypass in snapshot N** : l'effet est
+      contourné immédiatement, la notification op 49 apparaît dans le journal
+      de l'appareil, et le journal de la page affiche `Live: block N bypassed`.
+- [ ] **Save**, rappeler le preset : l'état contourné doit être conservé.
+
+4. Suppression d'un effet (op 28 puis 78)
+- [ ] Clic droit sur un effet → **Remove <modèle>** : une seule confirmation,
+      le slot devient vide sur le pédalier, journal
+      `Live: removed block N with operations 28+78`.
+- [ ] Vérifier sur l'écran du pédalier que le bloc a bien disparu (et pas
+      seulement contourné).
+- [ ] **Save**, rappeler le preset : le slot doit rester vide.
+
+5. Réorganisation (op 21)
+- [ ] Clic droit sur un effet → **Move left / Move right** : une confirmation,
+      puis `Live: moved block A to B with operation 21`. Le pédalier doit
+      jouer le nouvel ordre ; l'éditeur relit le preset juste après.
+- [ ] Contrôler sur le pédalier : ordre de la chaîne, assignations de
+      footswitch et états de snapshot pour ce bloc.
+- [ ] **Save**, rappeler le preset : l'ordre doit être conservé.
+- [ ] Cas le moins prouvé : déplacer un bloc **vide**. Si le pédalier refuse,
+      noter le statut affiché et ne pas réessayer en boucle.
+
+6. Changement de preset (op 20)
+- [ ] Avec écritures armées, cliquer un autre slot dans la bibliothèque : le
+      pédalier joue **ce** preset (vérifier à l'oreille et à l'écran), le
+      journal affiche `Recall: …` puis la relecture, et **Save** reste actif.
+- [ ] Décocher **Enable writing** puis cliquer un autre slot : le pédalier ne
+      doit **pas** changer de son (simple lecture), et Save doit être
+      désactivé.
+- [ ] Modifier quelque chose sans Save puis cliquer un autre slot : une
+      confirmation doit avertir que les modifications en direct seront
+      perdues.
+
+**Résultat :** à compléter (date, firmware, preset, opérations essayées,
+écarts, statuts refusés).
+
+### 3.15 Édition hors ligne (rappel)
+
+- [ ] Clic droit sur un effet sans écritures armées, **Bypass / Enable in
+      snapshot N** : une copie hors ligne éditable est créée et le bandeau
+      précise que le pédalier n'est pas modifié.
+
+### 3.16 Import POD Go Edit `.pgp` / `.pgb`
 
 Aucune écriture, aucun accès réseau : le fichier est lu dans l'onglet et n'est
 ni envoyé ni stocké. Ne pas utiliser un backup contenant des données
@@ -838,8 +907,9 @@ personnelles dans les fixtures du dépôt.
 
 ## 4. À ne pas tester encore
 
-- Écriture de chaîne (op 21) : non implémentée ; le sceau de l'objet 14 n'est
-  pas résolu.
+- Écriture de chaîne (op 21) : **implémentée** (§3.14, point 5) mais jamais
+  rejouée depuis ce build ; la première tentative doit se faire sur un preset
+  dont vous avez une sauvegarde `.pgb`, une opération à la fois.
 - Restauration op 9/86/113 et op-254 final : non rejoués par ce build ; leur
   sémantique est inconnue. Seul le flux op-5 est envoyé (§3.12).
 - Effacement ou purge d'un slot : aucune opération n'est prouvée ; un

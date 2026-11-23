@@ -34,18 +34,44 @@ not independently reproduced).
 | `set_param` on input/output/looper | Not implemented | Same op, but the raw chain index and parameter order are not verified for these stages |
 | `set_model` / model swap (40) | Implemented, gated | Adds or replaces the model in one slot; layout from the reference capture, **not hardware-validated** |
 | `save_preset` (71) | Implemented, gated | Stores the active preset (current sound) under a User slot; captured from the editor |
-| Whole-chain write (op 21) | **Not implemented** | High corruption risk, object-14 seal unresolved |
-| Preset copy/move between slots | Not implemented | Needs the chain blob write |
+| `recall_preset` (20) | Implemented, gated | Loads a stored slot into the edit buffer, like turning the pedal's knob; answered by status **1** |
+| `set_bypass` (41) | Implemented, gated | `{98: raw block, 59: enabled}`, status **0**, echoed by op 49 |
+| `remove_effect` (28, then 78) | Implemented, gated | The official editor sends the pair a few seconds apart; the page chains them |
+| Whole-chain write (op 21) | Implemented, gated | Streams the complete `l6-helix` container; status **1**, **not hardware-validated** |
+| Preset move (chain reorder) | Implemented, gated | op 21 with the chain, snapshot enables and footswitch targets spliced |
+| Preset copy/move between slots | Not implemented | When the active preset is the source, op 71 stores it under the destination; a stored body is not re-targeted |
 | Preset restore (op 5, streamed) | Implemented, gated | Op 5 only; **not hardware-validated** |
 | Restore op 9 / 86 / 113 and the final op 254 | **Not implemented** | Semantics unresolved; not needed for a replay of the captured op-5 stream |
 
 `set_param` changes the preset in RAM only. Recalling another preset,
 switching snapshots that restore the parameter, or powering the pedal off
 discards the change unless it is followed by `save_preset`. The Save button
-does exactly that: it applies every draft with op 30, then sends op 71 for the
-active preset's own User slot, so one confirmation both edits and stores the
-preset. A full restore replaces preset bodies on the pedal and also survives a
-reboot.
+sends op 71 for the active preset's own User slot, so one confirmation stores
+the preset. A full restore replaces preset bodies on the pedal and also
+survives a reboot.
+
+## 1.1 Live editing: the pedal hears it, Save stores it
+
+This mirrors the official editor and is what the page does when writing is
+armed and the editor shows the pedal's active preset:
+
+- parameter edits send op 30 as they happen (coalesced per parameter, one
+  write at a time);
+- a model swap sends op 40, a bypass tap sends op 41, "Remove effect" sends
+  op 28 then 78, and a reorder uploads the whole chain with op 21;
+- opening another slot from the librarian sends op 20 (recall), so the pedal
+  plays that preset, then re-reads objects 23 and 22;
+- **Save** only sends op 71. It does not re-send any of the edits, because the
+  pedal is already running them.
+
+Nothing is written until **Enable writing** is ticked. While it is off, edits
+are drafts that Save applies before op 71, and opening a slot is a plain read
+that does not change the pedal's sound.
+
+Actions that own the channel for several seconds (recall, chain upload,
+removal) set the page's `writing` flag; Save, move and remove refuse to
+interleave with them. Live edits are applied optimistically to the view and
+reported in the diagnostics log as live, not stored.
 
 ## 2. Write channel
 
@@ -158,6 +184,16 @@ bytes) and then a framed echo:
 error code) means it rejected it, typically because the cursor was out of step
 or the parameter index was sent in key `26`.
 
+Two commands answer with status **1** instead: recall (op 20) and the chain
+upload (op 21). The flows accept `0` for recall as well, so a firmware that
+answers differently is not treated as a rejection.
+
+**The cursor advances by the framed status footprint** (`8 + status body
+length`), not by the command footprint. A `set_param` echo carries the
+parameter (23-byte body, +31) while op 28/41/71 echoes are 9 bytes (+17), and
+the pedal uses the echoed length for the next command. The frame is built at
+the cursor the handshake left behind; only the status moves it.
+
 ### 2.5 `save_preset` (operation 71)
 
 #### 2.5.1 Capture evidence
@@ -242,6 +278,62 @@ checks that the destination slot now reads the requested name. A mismatch is
 reported in the diagnostics log without pretending the write failed. Operation
 71 carries no body, so the copy path cannot compare the destination sound; the
 page says so and asks the user to recall the slot.
+
+### 2.5a `recall_preset` (20), `set_bypass` (41), `remove_effect` (28, 78)
+
+Captured from POD Go Edit in
+`reverse/exports/podgo-bypass-and-remove-effect.pcapng`:
+
+```text
+recall:  {102: tx, 100: 20, 101: {107: setlist, 108: slot}}        -> status 1
+bypass:  {102: tx, 100: 41, 101: {98: raw block, 59: enabled}}     -> status 0
+remove:  {102: tx, 100: 28, 101: {98: raw block}}                  -> status 0
+         {102: tx, 100: 78, 101: {98: raw block}}                  -> status 0
+```
+
+`59` is the block's **enabled** flag: `false` bypasses the effect, and the
+pedal echoes the same boolean in its op-49 notification. The remove pair
+shares one write session; the official editor sends op 28, waits for the
+status, then op 78 with the same block. The page chains the two commands from
+one flow, so the cursor advance (+17) follows the first status.
+
+`107` is `0` for Factory and `1` for User. Recall does not store anything: it
+loads the slot into the edit buffer, exactly like turning the pedal's own knob.
+Factory slots recall the same way.
+
+### 2.5b Chain upload (operation 21)
+
+Captured in `reverse/exports/podgo-move-effect.pcapng`. The body is
+`{102: tx, 100: 21, 101: {110: <l6-helix blob>}}` and is **streamed** on the
+write channel:
+
+| Frame | Body after the 16-byte header | Cursor |
+|---|---|---|
+| first | `01 00 06 00` + u32 MessagePack length + up to 488 bytes | starts at the object-76 cursor |
+| continuations | up to 496 raw bytes, zero-padded to 4 | unchanged until the status |
+| status (`{102, 103: 1, 104: nil}`) | — | +17 |
+
+The header length field is `frame length - 8` on every frame, and outgoing
+packets are padded to 512 bytes. The pedal may answer the status while the
+stream is still being written; bare per-frame acknowledgements are ignored.
+
+Reordering is the only way to change the chain order. The editor re-reads
+object 22 first (a stale copy would undo live parameter edits), then the Rust
+domain layer (`crates/podgo-domain/src/l6helix.rs`) applies the same edits the
+official editor performs:
+
+1. splice the 12-entry chain array in `body[0][22]` (input and output stay
+   first and last);
+2. splice the per-snapshot enable lists in `body[10][10][*][3]`;
+3. remap footswitch targets in `body[3][8][*][*][11][8]`;
+4. set `body[6][98]` to the destination raw index;
+5. re-encode with the captured offset table
+   `[body_start, off(0), off(1), off(3), off(4), off(2), off(5), off(6),
+   off(7), off(10), blob_end, blob_end]`.
+
+Every other member is copied verbatim, so unknown fields survive. Send status
+`1` only advances the cursor; the page re-reads the preset afterwards, so a
+pedal that rejects the chain is reported instead of assumed.
 
 ### 2.6 Backup (`.pgbak`)
 
@@ -432,6 +524,9 @@ Limits, stated in the dialog:
   so the log states whether the copy landed. Name and body mismatches are
   reported as warnings, never as success.
 - No write path here is hardware-validated in this build; all are `ITM`.
+- Recall (op 20), bypass (op 41), the remove pair (28/78) and the chain upload
+  (op 21) come from captures of the official editor (§2.5a, §2.5b) but have
+  not been replayed from this build on hardware.
 
 ### 2.9 `set_model` (operation 40)
 
@@ -463,16 +558,17 @@ this build has been sent to a pedal yet.
 Parameters are not part of op 40: the pedal creates the block with its own
 defaults. The page therefore:
 
-1. updates the in-memory chain (catalog defaults, existing bypass flags) as a
-   draft and drops the old model's parameter drafts and controller/snapshot
-   overrides for that slot;
-2. on Save, sends one op 40 per changed slot, then the queued op-30 parameter
-   drafts, then op 71 for the active User slot.
+1. updates the in-memory chain (catalog defaults, existing bypass flags) and
+   drops the old model's parameter drafts and controller/snapshot overrides
+   for that slot;
+2. when writing is armed, sends op 40 immediately, then any queued op-30
+   parameter drafts; Save then runs op 71.
+   With writing off, the op 40 lands at Save, before the parameter drafts.
 
 An **empty slot** is the least proven case: op 40 is expected to create the
-block, but nothing here has seen it on hardware. If the pedal rejects it, Save
-reports the status and the draft stays queued. Structural writes that reorder
-the chain (op 21) are still not implemented.
+block, but nothing here has seen it on hardware. If the pedal rejects it, the
+page reports the status in the log and as a notice. Structural writes that
+reorder the chain use op 21 (§2.5b).
 
 ## 3. Runtime gates (ADR-0007)
 
@@ -484,9 +580,15 @@ A write is sent only when **all** of these hold:
 3. the user ticked **Enable device writes** for this session;
 4. the editor shows the preset read from the pedal's **active** preset this
    session — a file, a fixture or a librarian slot read disarms writes;
-5. the user made one explicit confirmation for the action: the per-change
-   `window.confirm` (`set_param`, `save_preset`, rename, paste) or the
+5. the user made one explicit confirmation for the action: a `window.confirm`
+   for the destructive or multi-second ones (`save_preset`, rename, paste,
+   recall from the librarian, chain move, remove effect) or the
    **Restore N preset(s)** button plus its single `window.confirm`.
+
+Live single-command edits (a parameter, a model swap, a bypass tap) are sent
+as the user makes them; **Enable writing** is their confirmation, and the
+change is visible and audible on the pedal immediately. Nothing is stored
+until Save runs op 71.
 
 `save_preset` adds two more gates: the destination is limited to the **User**
 setlist, and the slot must have been read in the same dialog with its SHA-256
@@ -546,8 +648,9 @@ pedal.
 
 | Layer | Test |
 |---|---|
-| Frame builders | `cargo test -p podgo-protocol --features device-write` (`set_param`, captured op-71, op-254 and op-5 golden/stream vectors, name validation, op-40 structure) |
+| Frame builders | `cargo test -p podgo-protocol --features device-write` (`set_param`, captured op-20/op-28/op-41/op-71 golden frames, the op-21 stream, op-254 and op-5 golden/stream vectors, name validation, op-40 structure) |
 | Container | `cargo test -p podgo-domain` (`backup::tests`: round trip, digests, duplicates, tamper, out-of-range entries) |
-| Flow state machine | `apps/web/wasm` `write::tests` (handshake, bare acks, status, rejection, save body, model body) and `backup::tests` (builder round trip, tamper rejection, preamble, window status, cursor advance, timeout) |
-| Browser | `apps/web/tests/usb.spec.ts` → "writes one continuous effect parameter after arming", "batch-saves parameter drafts with Ctrl+S after arming", "saves the active preset after backing up the destination slot", the phone-viewport "drafts a model change and saves it with op 40" / "adds an effect to an empty slot and sends op 40 there", and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-40/op-71 frames, serves both setlists, acknowledges every restore frame and records the completed op-5 messages) |
+| Flow state machine | `apps/web/wasm` `write::tests` (handshake, bare acks, status, rejection, save body, model body, recall status 1, bypass body, the op-28→78 chain with its status advance, and the op-21 stream with its single status) and `backup::tests` (builder round trip, tamper rejection, preamble, window status, cursor advance, timeout) |
+| Chain reorder | `cargo test -p podgo-domain` (`l6helix::tests`: `move_chain_entry` splices the chain, snapshot enables and footswitch targets, keeps unknown bytes, and re-encodes with the captured offset table) |
+| Browser | `apps/web/tests/usb.spec.ts` → "batch-saves parameter drafts with Ctrl+S after arming" (op 30 live, then op 71), "keeps the write arm when switching presets" and "reads a stored slot without recalling when writing is off" (op 20), "sends op 41 when bypass is tapped on a connected preset", "removes an effect with operations 28 and 78 from the block menu", "moves a block on the pedal with operation 21", "saves the active preset after backing up the destination slot", the phone-viewport "drafts a model change and saves it with op 40" / "adds an effect to an empty slot and sends op 40 there", and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-40/op-71 frames, serves both setlists, acknowledges every restore frame and records the completed op-5 messages) |
 | Hardware | Manual checklist in `docs/development/manual-testing-todo.md` (all writes; restore is still unvalidated) |

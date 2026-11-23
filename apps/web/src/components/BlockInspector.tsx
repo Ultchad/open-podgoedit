@@ -178,7 +178,7 @@ export default function BlockInspector({
               aria-pressed={!enabled}
               title={`${enabled ? 'Bypass' : 'Enable'} this block in snapshot ${
                 snapshotIndex + 1
-              } (draft, not written)`}
+              }; on a connected pedal the change is live, Save stores it`}
               onClick={() => onSetBlockEnabled(!enabled)}
             >
               {enabled ? 'active' : 'bypassed'}

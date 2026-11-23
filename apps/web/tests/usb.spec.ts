@@ -176,34 +176,36 @@ function fakeWebUsb({
   const setlistNames = scanSetlistNames(bytes);
   let setlistBytes =
     setlistNames.length === 128 ? buildSetlist(setlistNames) : bytes;
+  // The slot the fake pedal reports as active. Object 23 (state) carries the
+  // slot and object 22 (the blob) answers with the preset body, so a recall
+  // picks the slot it recalled.
+  let activeSlot = 2;
   // The active preset arrives as a complete {102, 103, 104} message whose key
   // 104 is a bin8 blob: `83 cd 00 66 <txn> cd 00 67 00 cd 00 68 c4 <len>`.
-  let objectMessage = (() => {
-    if (!presetBlob) {
-      return new Uint8Array(0);
-    }
-    const message = new Uint8Array(14 + presetBlob.length);
+  function objectMessageFor(blob: Uint8Array): Uint8Array {
+    const message = new Uint8Array(14 + blob.length);
     message.set([
       0x83, 0xcd, 0x00, 0x66, 0xcd, 0x03, 0xea, 0xcd, 0x00, 0x67, 0x00, 0xcd,
       0x00, 0x68,
     ]);
     // bin8 for blobs under 256 bytes, bin16 otherwise.
-    if (presetBlob.length < 256) {
-      const out = new Uint8Array(14 + 2 + presetBlob.length);
+    if (blob.length < 256) {
+      const out = new Uint8Array(14 + 2 + blob.length);
       out.set(message.slice(0, 14));
       out[14] = 0xc4;
-      out[15] = presetBlob.length;
-      out.set(presetBlob, 16);
+      out[15] = blob.length;
+      out.set(blob, 16);
       return out;
     }
-    const out = new Uint8Array(14 + 3 + presetBlob.length);
+    const out = new Uint8Array(14 + 3 + blob.length);
     out.set(message.slice(0, 14));
     out[14] = 0xc5;
-    out[15] = (presetBlob.length >> 8) & 0xff;
-    out[16] = presetBlob.length & 0xff;
-    out.set(presetBlob, 17);
+    out[15] = (blob.length >> 8) & 0xff;
+    out[16] = blob.length & 0xff;
+    out.set(blob, 17);
     return out;
-  })();
+  }
+  let objectMessage = presetBlob ? objectMessageFor(presetBlob) : new Uint8Array(0);
   if (padObject && objectMessage.length > 0) {
     // Hardware symptom: the last chunk is sent at full size, so zero padding
     // follows the MessagePack map. The blob's own length is authoritative.
@@ -213,18 +215,19 @@ function fakeWebUsb({
   }
   // Object 23 (active state): {102: 1002, 103: 0, 104: {107: 0, 108: 2,
   // 109: "US Deluxe Nrm\0"}}. Keys are encoded as uint16, like the device.
-  const stateMessage = (() => {
+  // Object 23 (state): the pedal's active location and edit-buffer name.
+  function stateMessageFor(slot: number): Uint8Array {
     const name = new TextEncoder().encode('US Deluxe Nrm\0');
     const head = Uint8Array.from([
       0x83, 0xcd, 0x00, 0x66, 0xcd, 0x03, 0xea, 0xcd, 0x00, 0x67, 0x00, 0xcd,
-      0x00, 0x68, 0x83, 0xcd, 0x00, 0x6b, 0x01, 0xcd, 0x00, 0x6c, 0x02, 0xcd,
-      0x00, 0x6d, 0xd9, name.length,
+      0x00, 0x68, 0x83, 0xcd, 0x00, 0x6b, 0x01, 0xcd, 0x00, 0x6c,
+      slot & 0xff, 0xcd, 0x00, 0x6d, 0xd9, name.length,
     ]);
     const out = new Uint8Array(head.length + name.length);
     out.set(head);
     out.set(name, head.length);
     return out;
-  })();
+  }
   // The operation byte of an open request is at index 30 (the MessagePack body
   // starts at 24: `83 66 cd <txn> 64 <op> …`).
   const objectOperation = (request: Uint8Array) =>
@@ -341,10 +344,11 @@ function fakeWebUsb({
   function readCommandBody(
     data: Uint8Array,
     start: number,
-  ): { op: number; slot: number; name: string } {
+  ): { op: number; slot: number; name: string; recallSlot: number } {
     let op = 0;
     let slot = -1;
     let name = '';
+    let recallSlot = -1;
     let pos = start;
     const outer = data[pos++] & 0x0f;
     for (let i = 0; i < outer; i += 1) {
@@ -377,7 +381,10 @@ function fakeWebUsb({
                   ? (data[pos++] << 8) | data[pos++]
                   : tag;
             if (innerKey === 0x6c) {
+              // Key 108 is the save destination (op 71) and the recall slot
+              // (op 20); the caller picks the right one from `op`.
               slot = value;
+              recallSlot = value;
             }
           } else if (innerKey === 0x6d) {
             const tag = data[pos++];
@@ -407,8 +414,18 @@ function fakeWebUsb({
         }
       }
     }
-    return { op, slot, name };
+    return { op, slot, name, recallSlot };
   }
+
+  interface ChainState {
+    total: number;
+    body: Uint8Array;
+    received: number;
+    statusSent: boolean;
+  }
+  let chainStream: ChainState | null = null;
+  // True once the first op-21 frame opened a stream; continuations follow.
+  let chainOpen = false;
 
   function writeResponseFor(request: Uint8Array): Uint8Array | null {
     const seq = request[9];
@@ -428,9 +445,25 @@ function fakeWebUsb({
     }
 
     // `set_param` / `save_preset` command body: {102: tx, 100: op, 101: {…}}.
-    const store = window as unknown as { __podgoWrites?: number[][] };
+    const store = window as unknown as {
+      __podgoWrites?: number[][];
+      __podgoRecall?: number[];
+      __podgoChain?: number;
+    };
     store.__podgoWrites = store.__podgoWrites ?? [];
     store.__podgoWrites.push(Array.from(request));
+    if (!chainOpen) {
+      // Anything that is not a continuation starts a fresh command.
+      chainStream = null;
+    }
+    if (isChainStart(request)) {
+      chainOpen = true;
+      chainStream = { total: 0, body: new Uint8Array(0), received: 0, statusSent: false };
+      return chainResponseFor(request);
+    }
+    if (chainOpen && chainStream) {
+      return chainResponseFor(request);
+    }
     const decoded = readCommandBody(request, 24);
     if (decoded.op === 71) {
       const slot = decoded.slot;
@@ -444,9 +477,97 @@ function fakeWebUsb({
         setlistBytes = buildSetlist(setlistNames);
       }
     }
+    if (decoded.op === 20) {
+      // Recall: the pedal loads the slot into its edit buffer and answers
+      // status 1, as in `podgo-bypass-and-remove-effect.pcapng`.
+      const target = decoded.recallSlot;
+      store.__podgoRecall = store.__podgoRecall ?? [];
+      store.__podgoRecall.push(target);
+      if (Number.isInteger(target) && target >= 0 && target < 128) {
+        activeSlot = target;
+        if (presetBlob) {
+          objectMessage = objectMessageFor(presetBlob);
+        }
+      }
+      const transaction =
+        request.length > 28 ? (request[27] << 8) | request[28] : 0;
+      return framedWriteAck(request, statusBody(transaction, 1));
+    }
     const transaction =
       request.length > 28 ? (request[27] << 8) | request[28] : 0;
     return framedWriteAck(request, statusBody(transaction));
+  }
+
+  // --- Chain upload (op 21 on the write channel) ---------------------------
+  //
+  // The official editor streams the whole `l6-helix` container: the first
+  // frame carries the subheader and the total length, continuations carry raw
+  // bytes, and the pedal answers one framed status 1 while the stream runs.
+
+
+  function chainResponseFor(request: Uint8Array): Uint8Array | null {
+    const chain = chainStream;
+    if (!chain) {
+      return null;
+    }
+    let chunk: Uint8Array;
+    const framed = isChainStart(request);
+    if (framed) {
+      chain.total =
+        request[20] |
+        (request[21] << 8) |
+        (request[22] << 16) |
+        (request[23] << 24);
+      chain.body = new Uint8Array(chain.total);
+      chain.received = 0;
+      chain.statusSent = false;
+      chunk = request.slice(24);
+    } else {
+      chunk = request.slice(16);
+    }
+    const room = Math.min(chunk.length, chain.total - chain.received);
+    if (room > 0) {
+      chain.body.set(chunk.slice(0, room), chain.received);
+      chain.received += room;
+    }
+    const store = window as unknown as {
+      __podgoChain?: number;
+      __podgoChainRaw?: number[];
+    };
+    if (chain.received >= chain.total) {
+      store.__podgoChain = chain.total;
+      store.__podgoChainRaw = Array.from(chain.body);
+    }
+    if (chain.received >= chain.total && !chain.statusSent) {
+      chain.statusSent = true;
+      chainOpen = false;
+      const transaction =
+        chain.total > 1 ? (chain.body[2] << 8) | chain.body[3] : 0;
+      return framedWriteAck(request, statusBody(transaction, 1));
+    }
+    return bareWriteAck(request);
+  }
+
+  // Detect a first op-21 frame before the generic command path consumes it.
+  // Declared with `function` so the hoisted `writeResponseFor` can call it.
+  function isChainStart(request: Uint8Array): boolean {
+    return (
+      request.length >= 32 &&
+      request[4] === 0x80 &&
+      request[5] === 0x10 &&
+      request[24] === 0x83 &&
+      request[16] === 0x01 &&
+      request[17] === 0x00 &&
+      request[18] === 0x06 &&
+      request[19] === 0x00 &&
+      // MessagePack body: {102: tx, 100: 21, 101: {110: <blob>}}. The
+      // subheader and length take 16..24, then 83 66 cd <tx hi> <tx lo> 64 15.
+      request[24] === 0x83 &&
+      request[25] === 0x66 &&
+      request[26] === 0xcd &&
+      request[29] === 0x64 &&
+      request[30] === 21
+    );
   }
 
   // --- Restore stream (op 5 on the read channel) ---------------------------
@@ -654,8 +775,28 @@ function fakeWebUsb({
     });
   }
 
+  // A continuation of a streamed op-21 upload: write-channel header, no
+  // subheader, carrying raw MessagePack bytes.
+  function isChainContinuation(request: Uint8Array): boolean {
+    return (
+      chainStream !== null &&
+      request.length > 16 &&
+      request[4] === 0x80 &&
+      request[5] === 0x10 &&
+      !(
+        request[16] === 0x01 &&
+        request[17] === 0x00 &&
+        request[18] === 0x06 &&
+        request[19] === 0x00
+      )
+    );
+  }
+
   function responseFor(request: Uint8Array): Uint8Array | null {
-    if (request[4] === 0x80 && request[5] === 0x10) {
+    if (
+      (request[4] === 0x80 && request[5] === 0x10) ||
+      isChainContinuation(request)
+    ) {
       return writeResponseFor(request);
     }
     if (request[4] === 0x01 && request[5] === 0x10) {
@@ -673,6 +814,12 @@ function fakeWebUsb({
         }
       }
     }
+    // Every branch below is a read-channel request. A write-channel packet
+    // (0x1080 -> 0x03ED) can be the same size, so check the direction first.
+    const isReadChannel = request[4] === 0x01 && request[5] === 0x10;
+    if (!isReadChannel) {
+      return new Uint8Array(16);
+    }
     // A new read session starts with its 20-byte handshake packet: drop the
     // object opened by a previous session so a later setlist read is served.
     if (
@@ -682,8 +829,16 @@ function fakeWebUsb({
     ) {
       currentObject = null;
     }
-    // `OPEN_STREAM` selects the setlist at byte 34.
-    if (request.length === 40 && request[11] === 0x0c) {
+    // `OPEN_STREAM` selects the setlist at byte 34. A write-channel request
+    // must not match: a short command (op 28/41/71) is 40 bytes once the
+    // subheader is counted, exactly like this packet.
+    if (
+      request.length === 40 &&
+      request[11] === 0x0c &&
+      request[4] === 0x01 &&
+      request[5] === 0x10 &&
+      request[6] !== 0xed
+    ) {
       currentSetlist = request[34] === 0 ? 0 : 1;
     }
     const seq = request[9];
@@ -711,7 +866,7 @@ function fakeWebUsb({
     ) {
       const stream =
         currentObject === 23
-          ? stateMessage
+          ? stateMessageFor(activeSlot)
           : currentObject === 22 && objectMessage.length > 0
             ? objectMessage
             : currentSetlist === 0 && factoryBytes
@@ -1288,15 +1443,31 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   await input.fill('5');
   await input.press('Enter');
 
-  // The draft is visible but not written yet.
+  // Armed, the edit is live: operation 30 already reached the pedal, and the
+  // chip still says unsaved because nothing is stored yet.
   await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+  await expect(page.locator('.report.log')).toContainText(
+    'Live: Tube Drive · Drive = 0.5 (live, not stored) sent to the pedal',
+  );
   const writesBefore = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
   );
-  expect(writesBefore).toHaveLength(0);
+  expect(writesBefore).toHaveLength(1);
+  const liveBody = readMsgpack(new Uint8Array(writesBefore[0]), 24).value;
+  const live = liveBody as { [key: number]: MsgValue };
+  expect(live[100]).toBe(30);
+  const liveInner = live[101] as { [key: number]: MsgValue };
+  expect(liveInner[98]).toBe(3);
+  expect(liveInner[26]).toBe(0);
+  expect(liveInner[28]).toBe(0);
+  expect(liveInner[29]).toBe(true);
+  expect(liveInner[119]).toBeCloseTo(0.5, 6);
 
-  // Ctrl+S is the same as the Save button: one confirmation, one batch.
+  // Ctrl+S is the same as the Save button: one confirmation, then operation
+  // 71 stores the preset whose edit buffer is already live. Text fields keep
+  // their native Ctrl+S, so leave the parameter input first.
+  await page.locator('.inspector-model').click();
   let dialogMessage = '';
   page.once('dialog', (dialog) => {
     dialogMessage = dialog.message();
@@ -1305,15 +1476,18 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   await page.keyboard.press('Control+s');
 
   await expect(page.locator('.report.log')).toContainText(
-    'Save: 0 model(s) and 1 parameter(s) applied in RAM',
+    'Save: 0 model(s) and 0 parameter(s) applied in RAM',
   );
   // The pedal ignored the first write handshake; the driver replayed it.
   await expect(page.locator('.report.log')).toContainText(
     'handshake muet (1/5)',
   );
-  expect(dialogMessage).toContain('Tube Drive');
+  expect(dialogMessage).toContain('Live changes already applied');
   await expect(page.locator('#save-notice')).toContainText(
-    '0 model(s) and 1 parameter(s) saved',
+    'Saved to User',
+  );
+  await expect(page.locator('#save-notice')).toContainText(
+    'The preset is stored on the pedal.',
   );
 
   // The accepted value is reflected immediately without re-reading the pedal.
@@ -1322,22 +1496,13 @@ test('batch-saves parameter drafts with Ctrl+S after arming', async ({
   await expect(row.locator('.param-value')).toHaveText('5.0');
   await expect(page.locator('.report.error')).toHaveCount(0);
 
-  // Two commands: the parameter (op 30) then the store (op 71), so the change
-  // survives a preset switch or a reboot.
+  // Two commands: the live parameter (op 30) then the store (op 71), so the
+  // change survives a preset switch or a reboot.
   const writes = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
   );
   expect(writes).toHaveLength(2);
-  const decoded = readMsgpack(new Uint8Array(writes[0]), 24).value;
-  const body = decoded as { [key: number]: MsgValue };
-  expect(body[100]).toBe(30);
-  const inner = body[101] as { [key: number]: MsgValue };
-  expect(inner[98]).toBe(3);
-  expect(inner[26]).toBe(0);
-  expect(inner[28]).toBe(0);
-  expect(inner[29]).toBe(true);
-  expect(inner[119]).toBeCloseTo(0.5, 6);
 
   const stored = readMsgpack(new Uint8Array(writes[1]), 24).value as {
     [key: number]: MsgValue;
@@ -1862,11 +2027,22 @@ test('keeps the write arm when switching presets', async ({ page }) => {
   await page.locator('#arm-writes').check();
   await expect(page.locator('#arm-writes')).toBeChecked();
 
-  // Opening another slot from the librarian must not disarm the session.
+  // Opening another slot from the librarian must not disarm the session. Armed,
+  // the click is a real recall: the pedal plays the slot and the editor reads
+  // its edit buffer back, so Save stays armed for it.
   await page.getByRole('tab', { name: /User/ }).click();
   await page.locator('.preset-item').nth(1).click();
-  await expect(page.locator('.preset-title')).toContainText('Lead Bread-only');
+  await expect(page.locator('.report.log')).toContainText(
+    'Recall: User 01B after',
+  );
+  await expect(page.locator('.preset-title-name')).toHaveText('US Deluxe Nrm');
   await expect(page.locator('#arm-writes')).toBeChecked();
+  await expect(page.locator('#save-to-slot')).toBeEnabled();
+  const recall = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoRecall?: number[] }).__podgoRecall ?? [],
+  );
+  expect(recall).toEqual([1]);
 
   // Re-reading the active preset keeps it too.
   await page.locator('#read-preset').click();
@@ -1899,16 +2075,19 @@ test('re-opening the pedal active slot keeps Save and the bypass armed', async (
   await page.locator('#arm-writes').check();
   await expect(page.locator('#save-to-slot')).toBeEnabled();
 
-  // Browsing a stored slot disarms Save and keeps the bypass control usable.
+  // Armed, browsing a stored slot recalls it on the pedal too, so the editor
+  // keeps acting on the preset the pedal is playing.
   await page.getByRole('tab', { name: /User/ }).click();
   await page.locator('.preset-item').nth(0).click();
-  await expect(page.locator('.preset-title')).toContainText('Lead A');
-  await expect(page.locator('#save-to-slot')).toBeDisabled();
+  await expect(page.locator('.report.log')).toContainText(
+    'Recall: User 01A after',
+  );
+  await expect(page.locator('#save-to-slot')).toBeEnabled();
   await expect(page.locator('.inspector-state.is-toggle')).toHaveCount(1);
 
-  // Clicking the active slot again re-reads the active preset instead of its
-  // stored body, so Save and the bypass stay armed.
-  await page.locator('.preset-item').nth(2).click();
+  // Clicking the slot the pedal now has active re-reads its edit buffer
+  // instead of opening the stored body again.
+  await page.locator('.preset-item').nth(0).click();
   await expect(page.locator('.report.log')).toContainText(
     "Re-reading the pedal's active preset",
   );
@@ -1916,6 +2095,228 @@ test('re-opening the pedal active slot keeps Save and the bypass armed', async (
   await expect(page.locator('#save-to-slot')).toBeEnabled();
   await expect(page.locator('.inspector-state.is-toggle')).toHaveCount(1);
   await expect(page.locator('.report.error')).toHaveCount(0);
+});
+
+/**
+ * Without the write arm, opening another slot must stay a read: the pedal
+ * keeps playing whatever it plays, so no recall is sent.
+ */
+test('reads a stored slot without recalling when writing is off', async ({
+  page,
+}) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  await page.getByRole('tab', { name: /User/ }).click();
+  await page.locator('.preset-item').nth(1).click();
+  await expect(page.locator('.report.log')).toContainText(
+    'Read User 01B:',
+  );
+  // A stored slot body is not the edit buffer, so Save stays out of reach.
+  await expect(page.locator('#save-to-slot')).toBeDisabled();
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writes).toHaveLength(0);
+});
+
+/**
+ * User request: removing an effect needs to work from the editor, like the
+ * official app. The pair is operation 28 then 78, from
+ * `podgo-bypass-and-remove-effect.pcapng`.
+ */
+test('removes an effect with operations 28 and 78 from the block menu', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      errors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await page.locator('#arm-writes').check();
+  // Tile 2 is Tube Drive (raw chain slot 3). Right-click it and remove it.
+  await page.locator('.block-tile').nth(2).click({ button: 'right' });
+  await expect(page.locator('#block-menu-remove')).toContainText(
+    'Remove Tube Drive',
+  );
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.locator('#block-menu-remove').click();
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Live: removed block 3 with operations 28+78',
+  );
+  await expect(page.locator('#save-notice')).toContainText(
+    'Effect in block 3 removed from the pedal',
+  );
+  await expect(page.locator('#save-notice')).toContainText(
+    'press Save to keep it',
+  );
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writes).toHaveLength(2);
+  const first = readMsgpack(new Uint8Array(writes[0]), 24).value as {
+    [key: number]: MsgValue;
+  };
+  const second = readMsgpack(new Uint8Array(writes[1]), 24).value as {
+    [key: number]: MsgValue;
+  };
+  expect(first[100]).toBe(28);
+  expect(second[100]).toBe(78);
+  for (const body of [first, second]) {
+    const inner = body[101] as { [key: number]: MsgValue };
+    expect(inner[98]).toBe(3);
+  }
+  // The second command starts after the first status, not the command frame.
+  const secondFrame = new Uint8Array(writes[1]);
+  const firstFrame = new Uint8Array(writes[0]);
+  const cursor = (frame: Uint8Array) =>
+    frame[12] | (frame[13] << 8) | (frame[14] << 16) | (frame[15] << 24);
+  expect(cursor(secondFrame) >>> 0).toBe((cursor(firstFrame) + 17) >>> 0);
+  expect(errors).toEqual([]);
+});
+
+/**
+ * Reordering an armed preset is operation 21: the editor re-reads the pedal's
+ * edit buffer, splices the chain with the Rust domain layer and streams the
+ * whole container back. The stream is driven frame by frame.
+ */
+test('moves a block on the pedal with operation 21', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      errors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await page.locator('#arm-writes').check();
+
+  await page.locator('.block-tile').nth(2).click({ button: 'right' });
+  await expect(page.locator('#block-menu-move-left')).toBeEnabled();
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.locator('#block-menu-move-left').click();
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Live: moved block 3 to 2 with operation 21',
+  );
+  await expect(page.locator('#save-notice')).toContainText(
+    'Block moved from 3 to 2 on the pedal',
+  );
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  // The chain frames are 512-byte packets with the 8-byte subheader, so a
+  // first frame carries the complete body length at bytes 20..24.
+  const sent = writes.filter(
+    (row) =>
+      row.length === 512 &&
+      row[4] === 0x80 &&
+      row[5] === 0x10 &&
+      row[6] === 0xed &&
+      row[7] === 0x03 &&
+      row[16] === 0x01 &&
+      row[17] === 0x00 &&
+      row[18] === 0x06 &&
+      row[19] === 0x00,
+  );
+  expect(sent.length).toBeGreaterThanOrEqual(1);
+  // Every frame is a 512-byte write-channel packet, and only the first one
+  // carries the subheader.
+  const upload = writes.filter((row) => row.length === 512);
+  expect(upload.length).toBeGreaterThan(1);
+  for (const row of upload) {
+    expect(row[4]).toBe(0x80);
+    expect(row[5]).toBe(0x10);
+    expect(row[6]).toBe(0xed);
+    expect(row[7]).toBe(0x03);
+  }
+  const continuations = upload.filter((row) => !sent.includes(row));
+  expect(continuations.length).toBeGreaterThanOrEqual(1);
+  for (const row of continuations) {
+    expect(Array.from(row.slice(16, 20))).not.toEqual([0x01, 0x00, 0x06, 0x00]);
+  }
+  // The first frame carries the subheader and the complete body length; the
+  // rest are raw continuations on the same cursor until the status arrives.
+  const first = new Uint8Array(upload[0]);
+  expect(Array.from(first.slice(16, 20))).toEqual([0x01, 0x00, 0x06, 0x00]);
+  const total =
+    first[20] | (first[21] << 8) | (first[22] << 16) | (first[23] << 24);
+  const uploaded = await page.evaluate(
+    () => (window as unknown as { __podgoChain?: number }).__podgoChain ?? 0,
+  );
+  expect(uploaded).toBe(total);
+  const raw = await page.evaluate(
+    () => (window as unknown as { __podgoChainRaw?: number[] }).__podgoChainRaw,
+  );
+  expect(raw).toBeTruthy();
+  // The body is {102: tx, 100: 21, 101: {110: <l6-helix>}}. Keys are encoded
+  // as positive fixints here, so 83 66 <tx> 64 15 65 81 6e da <len> is the
+  // exact prefix; key 110 uses str16 (0xda) for the container.
+  const body = new Uint8Array(raw as number[]);
+  expect(Array.from(body.slice(0, 3))).toEqual([0x83, 0x66, 0xcd]);
+  const opIndex = body.slice(3).findIndex((byte) => byte === 0x64);
+  expect(opIndex).toBeGreaterThanOrEqual(0);
+  expect(body[3 + opIndex + 1]).toBe(21);
+  const opEnd = 3 + opIndex + 1;
+  expect(body[opEnd + 1]).toBe(0x65);
+  const blobAt = body.indexOf(0x6e, opEnd);
+  expect(blobAt).toBeGreaterThan(opEnd);
+  expect(body[blobAt + 1]).toBe(0xda);
+  const declared = (body[blobAt + 2] << 8) | body[blobAt + 3];
+  const blob = body.slice(blobAt + 4, blobAt + 4 + declared);
+  expect(blob.length).toBe(declared);
+  expect(blob[0]).toBe(0xa9);
+  expect(new TextDecoder().decode(blob.slice(1, 9))).toBe('l6-helix');
+  // Moving one effect rewrites the chain, so unknown bytes must survive: the
+  // uploaded container is exactly the size the pedal reported.
+  expect(declared).toBeGreaterThan(1000);
+  expect(errors).toEqual([]);
 });
 
 /**
@@ -2340,7 +2741,12 @@ test('saves an export through the desktop save dialog', async ({ page }) => {
   expect(text).toContain('New Preset');
 });
 
-test('creates the editable copy when bypass is tapped on a pedal-read preset', async ({
+/**
+ * Behaviour change (user request): with the official editor, a change is
+ * applied to the pedal immediately and only Save stores it. Bypass now sends
+ * operation 41 when writing is armed, instead of building an offline copy.
+ */
+test('sends op 41 when bypass is tapped on a connected preset', async ({
   page,
 }) => {
   const fixture = smallSetlist(['Lead A', 'Lead B']);
@@ -2356,33 +2762,57 @@ test('creates the editable copy when bypass is tapped on a pedal-read preset', a
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
   );
+  await page.locator('#arm-writes').check();
 
-  // A pedal-read preset still needs the toggle: the first tap asks for an
-  // editable offline copy and applies the bypass there.
-  const before = page.locator('.inspector-state.is-toggle');
-  await expect(before).toHaveCount(1);
-  await expect(before).toHaveText('active');
-
-  let copyMessage = '';
-  page.once('dialog', (dialog) => {
-    copyMessage = dialog.message();
-    void dialog.accept();
-  });
-  await before.click();
-
-  expect(copyMessage).toContain('editable copy');
+  // Tile 2 is Tube Drive (a block with a bypass toggle); the raw chain index
+  // is one-based.
+  const tileIndex = 2;
+  await page.locator('.block-tile').nth(tileIndex).click();
+  await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
   const toggle = page.locator('.inspector-state.is-toggle').first();
+  // The fixture stores Tube Drive bypassed; the first tap enables it.
   await expect(toggle).toHaveText('bypassed');
+
+  await toggle.click();
+
+  // Live: the chip still says unsaved, the toggle flips, no copy is made.
+  await expect(toggle).toHaveText('active');
   await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
   await expect(page.locator('.report.log')).toContainText(
-    'Created an editable copy',
+    'Live: block 3 enabled sent to the pedal (not stored).',
   );
 
   const writes = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
   );
-  expect(writes).toHaveLength(0);
+  expect(writes).toHaveLength(1);
+  const body = readMsgpack(new Uint8Array(writes[0]), 24).value as {
+    [key: number]: MsgValue;
+  };
+  expect(body[100]).toBe(41);
+  const inner = body[101] as { [key: number]: MsgValue };
+  expect(inner[98]).toBe(tileIndex + 1);
+  expect(inner[59]).toBe(true);
+
+  // Save stores the preset the pedal is already playing, without re-sending
+  // the parameter or model.
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.locator('#save-preset').click();
+  await expect(page.locator('.report.log')).toContainText(
+    'Save: 0 model(s) and 0 parameter(s) applied in RAM',
+  );
+  await expect(page.locator('.report.log')).toContainText('Save: stored');
+  const after = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(after).toHaveLength(2);
+  expect(
+    (readMsgpack(new Uint8Array(after[1]), 24).value as {
+      [key: number]: MsgValue;
+    })[100],
+  ).toBe(71);
 });
 
 test('opens the preset menu from the ⋯ next to the name', async ({ page }) => {
@@ -2407,7 +2837,7 @@ test('opens the preset menu from the ⋯ next to the name', async ({ page }) => 
   await expect(page.locator('#menu-save')).toBeVisible();
 });
 
-test('bypasses a block on a connected preset by creating an offline copy', async ({
+test('keeps bypass changes as drafts until writing is armed', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -2433,8 +2863,8 @@ test('bypasses a block on a connected preset by creating an offline copy', async
   );
   await expect(page.locator('.readonly-chip')).toHaveText('draft');
 
-  // The connected preset is read-only, so the first bypass change asks for an
-  // editable offline copy instead of inventing an unvalidated pedal write.
+  // Writing is off: the first bypass change builds an editable offline copy
+  // and says so rather than touching the pedal.
   let copyMessage = '';
   page.once('dialog', (dialog) => {
     copyMessage = dialog.message();
@@ -2582,21 +3012,26 @@ test.describe('editing a connected preset on a phone viewport', () => {
     await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
     await expect(page.locator('#export-pgp')).toBeDisabled();
 
+    // Armed, the swap is live: operation 40 already reached the pedal.
+    await expect(page.locator('.report.log')).toContainText(
+      'sent to the pedal (not stored).',
+    );
     const writesBefore = await page.evaluate(
       () =>
         (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ??
         [],
     );
-    expect(writesBefore).toHaveLength(0);
+    expect(writesBefore).toHaveLength(1);
 
     await page.locator('#save-preset').tap();
     await expect(page.locator('.report.log')).toContainText(
-      'Save: 1 model(s) and 0 parameter(s) applied in RAM',
+      'Save: 0 model(s) and 0 parameter(s) applied in RAM',
     );
-    expect(dialogMessages.at(-1)).toContain('model');
+    expect(dialogMessages.at(-1)).toContain('Live changes already applied');
     await expect(page.locator('#save-notice')).toContainText(
-      '1 model(s) and 0 parameter(s) saved',
+      'The preset is stored on the pedal.',
     );
+    await expect(page.locator('.report.log')).toContainText('Save: stored');
 
     // Operation 40 carries the raw block and the nested model node; operation
     // 71 then stores the preset. The layout follows the MIT reference capture.
@@ -2704,11 +3139,12 @@ test.describe('editing a connected preset on a phone viewport', () => {
       /is-empty/,
     );
 
+    await expect(page.locator('.report.log')).toContainText(
+      'sent to the pedal (not stored).',
+    );
     page.once('dialog', (dialog) => void dialog.accept());
     await page.locator('#save-preset').tap();
-    await expect(page.locator('#save-notice')).toContainText(
-      '1 model(s) and 0 parameter(s) saved',
-    );
+    await expect(page.locator('.report.log')).toContainText('Save: stored');
     const writes = await page.evaluate(
       () =>
         (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ??
@@ -2774,8 +3210,8 @@ test.describe('editing a connected preset on a phone viewport', () => {
       `Copied ${model}`,
     );
     await page.keyboard.press('Control+v');
-    await expect(page.locator('#save-notice')).toContainText(
-      'then the copied parameter drafts (op 30)',
+    await expect(page.locator('.report.log')).toContainText(
+      'op 40 + copied parameters)',
     );
     await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
 
@@ -2793,13 +3229,16 @@ test.describe('editing a connected preset on a phone viewport', () => {
     );
     await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
 
+    await expect(page.locator('.report.log')).toContainText(
+      'sent to the pedal (not stored).',
+    );
     page.once('dialog', (dialog) => void dialog.accept());
     await page.locator('#save-preset').tap();
-    await expect(page.locator('#save-notice')).toContainText(
-      /1 model\(s\) and \d+ parameter\(s\) saved/,
-    );
+    await expect(page.locator('.report.log')).toContainText('Save: stored');
 
     // Operation 40 first, then one op 30 per numeric parameter, then op 71.
+
+    // Pending drafts are flushed before the store command.
     const writes = await page.evaluate(
       () =>
         (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ??

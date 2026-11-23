@@ -8,6 +8,7 @@ import {
   initWasm,
   inspectPreset,
   inspectSetlist,
+  moveChainEntry,
   presetStructure,
   setlistEntries,
 } from './wasmClient';
@@ -28,7 +29,15 @@ import { readSetlist, type SetlistKind } from './usb/setlist';
 import { createFullBackup, createSelectedBackup } from './usb/backup';
 import type { BackupTarget } from './usb/backup';
 import { restoreFullBackup } from './usb/restore';
-import { savePreset, writeModel, writeParam } from './usb/write';
+import {
+  recallPreset,
+  removeEffect,
+  savePreset,
+  writeBypass,
+  writeChain,
+  writeModel,
+  writeParam,
+} from './usb/write';
 import type {
   BackupVerify,
   CatalogModel,
@@ -474,6 +483,86 @@ export default function App() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const connectionRef = useRef<PodgoConnection | null>(null);
+  /** Latest `usbBusy` for `await`ed code that must wait for the channel. */
+  const usbBusyRef = useRef<string | null>(null);
+  usbBusyRef.current = usbBusy;
+
+  /**
+   * Serialized, coalescing queue for live edits.
+   *
+   * The pedal applies every write immediately, but the write channel cannot
+   * interleave commands: a slider drag would otherwise start a new handshake
+   * before the previous command's status. Tasks are keyed by target (for
+   * example `block:param`) so only the latest value is sent, and a single
+   * promise chain runs them one at a time.
+   */
+  const liveQueueRef = useRef(
+    new Map<string, { label: string; run: () => Promise<unknown> }>(),
+  );
+  const liveChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  function queueLiveWrite(
+    key: string,
+    label: string,
+    run: () => Promise<unknown>,
+  ): void {
+    liveQueueRef.current.set(key, { label, run });
+    liveChainRef.current = liveChainRef.current.then(() => drainLiveWrites());
+  }
+
+  async function drainLiveWrites(): Promise<void> {
+    for (;;) {
+      const next = liveQueueRef.current.entries().next();
+      if (next.done) {
+        return;
+      }
+      const [key, task] = next.value;
+      liveQueueRef.current.delete(key);
+      try {
+        await task.run();
+        appendLog(`Live: ${task.label} sent to the pedal (not stored).`);
+      } catch (error) {
+        const message = errorMessage(error);
+        setSaveNotice({
+          kind: 'error',
+          text: `Live change failed: ${message}`,
+        });
+        appendLog(`ERROR live ${task.label}: ${message}`);
+      } finally {
+        // The flow reports progress, which the channel indicator shows; the
+        // live queue must release it so Save is not stuck waiting.
+        setUsbBusy(null);
+        setWriting(false);
+      }
+    }
+  }
+
+  /** Wait until every queued live edit has been sent. */
+  async function flushLiveWrites(): Promise<void> {
+    let chain: Promise<void>;
+    do {
+      chain = liveChainRef.current;
+      await chain;
+    } while (chain !== liveChainRef.current);
+  }
+
+  /**
+   * Run one pedal operation that is not a single slider edit.
+   *
+   * Recall, chain uploads and removals each own the write channel for several
+   * seconds. They set `writing` so Save, the move and the remove handlers
+   * refuse to interleave, and they must release it however they end.
+   */
+  async function runPedalOperation(task: () => Promise<void>): Promise<void> {
+    setWriting(true);
+    try {
+      await flushLiveWrites();
+      await task();
+    } finally {
+      setWriting(false);
+      setUsbBusy(null);
+    }
+  }
 
   // Warn before leaving with edits that only exist in this tab.
   useEffect(() => {
@@ -1020,6 +1109,40 @@ export default function App() {
       return;
     }
 
+    // Connected and armed: switching presets is a real recall (op 20), so the
+    // pedal plays the slot and the editor reads back its edit buffer. Save
+    // stays armed because the recalled preset is the active one.
+    if (writeEnabled) {
+      setUsbError(null);
+      setDeviceReport(null);
+      setUsbBusy('Recall…');
+      await runPedalOperation(async () => {
+        try {
+          appendLog(`Recalling ${label} (${entry.name}) on the pedal…`);
+          const recalled = await recallPreset(
+            connection,
+            { setlist, slot: entry.slot },
+            reportProgress,
+          );
+          appendLog(
+            `Recall: ${label} after ${recalled.attempts} attempt(s); ` +
+              'the pedal now plays that preset. Reading it back…',
+          );
+          await loadActivePreset(
+            connection,
+            `Reading the recalled preset ${label}…`,
+          );
+        } catch (error) {
+          const message = errorMessage(error);
+          setUsbError(message);
+          setSaveNotice({ kind: 'error', text: `Recall failed: ${message}` });
+          appendLog(`ERROR recall (${label}): ${message}`);
+          console.error('[POD Go] recall failed', error);
+        }
+      });
+      return;
+    }
+
     setUsbError(null);
     setDeviceReport(null);
     setUsbBusy('Handshake…');
@@ -1109,8 +1232,27 @@ export default function App() {
     const entries = Object.entries(pendingParams);
     const models = Object.entries(pendingModels);
     const changeCount = entries.length + models.length;
-    if (writing || busy) {
+    // Live edits are already audible on the pedal but not stored until op 71.
+    const liveChanges = dirty;
+    if (writing) {
+      setSaveNotice({
+        kind: 'info',
+        text: 'Another pedal write is still running; press Save again in a moment.',
+      });
       return;
+    }
+    // `usbBusy` also covers the connect-time reads, so wait for those instead
+    // of ignoring the key press.
+    if (usbBusy !== null) {
+      await flushLiveWrites();
+      // Bounded: a stalled indicator must not silently swallow the save.
+      for (
+        let waited = 0;
+        usbBusyRef.current !== null && waited < 20000;
+        waited += 150
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 150));
+      }
     }
 
     // Operation 71 stores the active preset in a User slot, so the destination
@@ -1134,7 +1276,7 @@ export default function App() {
       });
       return;
     }
-    if (changeCount === 0) {
+    if (changeCount === 0 && !liveChanges) {
       setSaveNotice({ kind: 'info', text: 'No changes to save.' });
       return;
     }
@@ -1146,13 +1288,16 @@ export default function App() {
     const lines = labels.slice(0, 8).join('\n');
     const more =
       labels.length > 8 ? `\n… and ${labels.length - 8} more` : '';
+    const liveLine = liveChanges
+      ? 'Live changes already applied to the pedal will be stored.\n\n'
+      : '';
     const confirmed = window.confirm(
-      `Save ${changeCount} change(s) to the pedal?\n\n` +
-        `${lines}${more}\n\n` +
+      `Save the active preset to the pedal?\n\n` +
+        `${liveLine}${lines}${more ? `${more}\n\n` : ''}` +
         `Destination: User ${slotLabel(slot)} "${name}"\n\n` +
-        'Model changes and parameters are applied first, then the preset is ' +
-        'stored in its slot so the change survives a preset switch or a ' +
-        'reboot. Model writes are not yet validated on hardware.',
+        'Pending model changes and parameters are applied first, then the ' +
+        'preset is stored in its slot so the change survives a preset switch ' +
+        'or a reboot.',
     );
     if (!confirmed) {
       appendLog('Save cancelled by the user.');
@@ -1163,6 +1308,9 @@ export default function App() {
     setSaveNotice(null);
     setWriting(true);
     try {
+      // Let every live edit finish on the single write channel before the
+      // pending drafts and the store command run.
+      await flushLiveWrites();
       const applied = await applyPendingDrafts(connection);
       appendLog(
         `Save: ${applied.models} model(s) and ${applied.params} parameter(s) ` +
@@ -1186,8 +1334,11 @@ export default function App() {
       setSaveNotice({
         kind: 'info',
         text:
-          `${applied.models} model(s) and ${applied.params} parameter(s) ` +
-          `saved to User ${slotLabel(slot)} "${name}". ` +
+          `Saved to User ${slotLabel(slot)} "${name}". ` +
+          (applied.models || applied.params
+            ? `${applied.models} model(s) and ${applied.params} parameter(s) ` +
+              'were applied first. '
+            : '') +
           'The preset is stored on the pedal.',
       });
       appendLog(
@@ -1246,6 +1397,23 @@ export default function App() {
           ),
         };
       });
+      return { ...current, chain };
+    });
+  }
+
+  /** Reflect an accepted bypass write in the in-memory structure only. */
+  function applyLocalBlockEnabled(block: number, enabled: boolean) {
+    setStructure((current) => {
+      if (!current) {
+        return current;
+      }
+      const rawSlot = block + 1;
+      const chain = current.chain.map((entry) =>
+        entry.slot === rawSlot &&
+        (entry.kind === 'block' || entry.kind === 'looper')
+          ? { ...entry, enabled }
+          : entry,
+      );
       return { ...current, chain };
     });
   }
@@ -1502,11 +1670,15 @@ export default function App() {
   function confirmDiscardPedalDrafts(): boolean {
     const count =
       Object.keys(pendingParams).length + Object.keys(pendingModels).length;
-    if (count === 0) {
+    // A live edit is already audible on the pedal but is not stored until Save
+    // runs operation 71, so switching presets would lose it.
+    const liveUnsaved = activePresetLoaded && dirty && !workingDoc;
+    if (count === 0 && !liveUnsaved) {
       return true;
     }
     return window.confirm(
-      'Discard the model and parameter changes that are not saved to the pedal?',
+      'Discard the changes that are live on the pedal but not saved to its ' +
+        'slot?',
     );
   }
 
@@ -1929,15 +2101,33 @@ export default function App() {
       setImportedParam(workingDoc, block - 1, param.n, value);
       setWorkingDoc({ ...workingDoc });
     } else if (activePresetLoaded && connected) {
-      setPendingParams((current) => ({
-        ...current,
-        [`${block}:${paramIndex}`]: {
-          block,
-          param: paramIndex,
-          value,
-          label: `${model?.display ?? 'Block'} · ${param.n} = ${value}`,
-        },
-      }));
+      if (writeEnabled && connectionRef.current) {
+        // Armed: op 30 reaches the pedal now, so the change is audible while
+        // the user keeps turning the knob. Save (op 71) is what stores it.
+        const connection = connectionRef.current;
+        queueLiveWrite(
+          `${block}:${paramIndex}`,
+          `${model?.display ?? 'Block'} · ${param.n} = ${value} (live, not stored)`,
+          () =>
+            writeParam(
+              connection,
+              { block, param: paramIndex, value },
+              reportProgress,
+            ),
+        );
+      } else {
+        // Not armed: keep the change in the page and let Save apply it after
+        // the user enables writing.
+        setPendingParams((current) => ({
+          ...current,
+          [`${block}:${paramIndex}`]: {
+            block,
+            param: paramIndex,
+            value,
+            label: `${model?.display ?? 'Block'} · ${param.n} = ${value}`,
+          },
+        }));
+      }
     } else {
       setSaveNotice({
         kind: 'error',
@@ -2095,6 +2285,55 @@ export default function App() {
       return;
     }
 
+    // Connected and armed: op 40 changes the pedal's edit buffer immediately.
+    // Save (op 71) is what stores it, exactly like the official editor.
+    if (!workingDoc && connected && activePresetLoaded && writeEnabled) {
+      const wireId = wireIdOf(model);
+      if (wireId === null) {
+        setSaveNotice({
+          kind: 'error',
+          text: `${model.display} has no on-wire id; it cannot be sent to the pedal.`,
+        });
+        return;
+      }
+      const rawBlock = block + 1;
+      const noSnapshotBypass =
+        entry && entry.kind === 'block' ? entry.noSnapshotBypass : false;
+      const connection = connectionRef.current;
+      pushHistory('the model change');
+      // The old model's parameter drafts refer to different parameters.
+      setPendingParams((queued) => {
+        const next = { ...queued };
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(`${rawBlock}:`)) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+      applyLocalModel(block, model);
+      setDirty(true);
+      setSaveNotice(null);
+      if (connection) {
+        setWriting(true);
+        queueLiveWrite(
+          `model:${rawBlock}`,
+          `block ${rawBlock} → ${model.display}`,
+          () =>
+            writeModel(
+              connection,
+              { block: rawBlock, wireId, noSnapshotBypass },
+              reportProgress,
+            ),
+        );
+      }
+      appendLog(
+        `Live: block ${rawBlock} → ${model.display} (${model.name}); ` +
+          'applied to the pedal, press Save to store it.',
+      );
+      return;
+    }
+
     // Pedal draft: queue op 40 and update the structure the panel shows.
     if (!workingDoc && connected && activePresetLoaded) {
       const wireId = wireIdOf(model);
@@ -2179,12 +2418,38 @@ export default function App() {
     );
   }
 
-  /** Reorder blocks in an offline preset (drag and drop on the chain). */
+  /** Reorder blocks in an offline preset or live on the pedal (op 21). */
   function moveBlock(from: number, to: number): void {
     if (from === to) {
       return;
     }
     if (!workingDoc) {
+      if (!connected || !activePresetLoaded || !connectionRef.current) {
+        setSaveNotice({
+          kind: 'error',
+          text:
+            'Read the active preset from the pedal before reordering blocks.',
+        });
+        return;
+      }
+      if (!writeEnabled) {
+        setSaveNotice({
+          kind: 'error',
+          text: 'Check “Enable writing” before reordering blocks on the pedal.',
+        });
+        return;
+      }
+      if (writing || busy) {
+        return;
+      }
+      const confirmed = window.confirm(
+        `Move block ${from + 1} to position ${to + 1} on the pedal?\n\n` +
+          'The editor uploads the reordered chain (operation 21). The pedal ' +
+          'plays the new order immediately; press Save to store it in the slot.',
+      );
+      if (confirmed) {
+        void moveBlockOnPedal(from, to);
+      }
       return;
     }
     pushHistory('the block move');
@@ -2206,6 +2471,132 @@ export default function App() {
     appendLog(
       `Draft: moved block ${from + 1} to ${to + 1} (not written to the pedal).`,
     );
+  }
+
+  /**
+   * Reorder the active preset's chain on the pedal (operation 21).
+   *
+   * The upload is a whole-chain write, so the blob must come from a fresh
+   * object-22 read: any earlier copy would overwrite parameter changes made
+   * live. The Rust domain layer splices the chain, the per-snapshot enables
+   * and the footswitch targets, then the pedal applies the result.
+   */
+  async function moveBlockOnPedal(from: number, to: number): Promise<void> {
+    const connection = connectionRef.current;
+    if (!connection) {
+      return;
+    }
+    setUsbError(null);
+    setSaveNotice(null);
+    await runPedalOperation(async () => {
+      try {
+        appendLog(
+          "Move: reading the pedal's current edit buffer before the chain upload…",
+        );
+        const result = await readActivePreset(connection, reportProgress);
+        const moved = moveChainEntry(result.blob, from + 1, to + 1);
+        reportProgress(
+          `Uploading the reordered chain: block ${from + 1} → ${to + 1}…`,
+        );
+        const sent = await writeChain(
+          connection,
+          { blob: moved },
+          reportProgress,
+        );
+        appendLog(
+          `Live: moved block ${from + 1} to ${to + 1} with operation 21 ` +
+            `(${sent.attempts} attempt(s)); applied to the pedal, not stored.`,
+        );
+        setDirty(true);
+        await loadActivePreset(
+          connection,
+          'Refreshing after the chain move…',
+        );
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `Block moved from ${from + 1} to ${to + 1} on the pedal. ` +
+            'The change is live but not stored: press Save to keep it.',
+        });
+      } catch (error) {
+        const message = errorMessage(error);
+        setUsbError(message);
+        setSaveNotice({ kind: 'error', text: `Chain move failed: ${message}` });
+        appendLog(`ERROR chain move: ${message}`);
+        console.error('[POD Go] chain move failed', error);
+      }
+    });
+  }
+
+  /**
+   * Remove one effect from the active preset (operations 28 then 78).
+   *
+   * The official editor sends the pair and the pedal then reports the slot as
+   * empty; the page re-reads the active preset so the chain (and the snapshot
+   * enables) match the pedal again.
+   */
+  async function removeActiveBlock(block: number): Promise<void> {
+    const connection = connectionRef.current;
+    if (!connection || !activePresetLoaded || workingDoc) {
+      return;
+    }
+    if (!writeEnabled) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'Check “Enable writing” before removing an effect from the pedal.',
+      });
+      return;
+    }
+    if (writing || busy) {
+      return;
+    }
+    const raw = block + 1;
+    const confirmed = window.confirm(
+      `Remove the effect in block ${raw} from the pedal?\n\n` +
+        'The editor sends operations 28 and 78. The pedal removes it ' +
+        'immediately; press Save to store the preset without it.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setUsbError(null);
+    setSaveNotice(null);
+    await runPedalOperation(async () => {
+      try {
+        reportProgress(`Removing the effect in block ${raw}…`);
+        const removed = await removeEffect(
+          connection,
+          { block: raw },
+          reportProgress,
+        );
+        appendLog(
+          `Live: removed block ${raw} with operations 28+78 ` +
+            `(${removed.attempts} attempt(s)); applied to the pedal, not stored.`,
+        );
+        setDirty(true);
+        await loadActivePreset(
+          connection,
+          'Refreshing after removing the effect…',
+        );
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `Effect in block ${raw} removed from the pedal. ` +
+            'The change is live but not stored: press Save to keep it.',
+        });
+      } catch (error) {
+        const message = errorMessage(error);
+        setUsbError(message);
+        setSaveNotice({
+          kind: 'error',
+          text: `Remove effect failed: ${message}`,
+        });
+        appendLog(`ERROR remove effect: ${message}`);
+        console.error('[POD Go] remove effect failed', error);
+      }
+    });
   }
 
   /** Copy one amp/effect block for pasting into another preset. */
@@ -2303,6 +2694,76 @@ export default function App() {
       return;
     }
     const rawBlock = block + 1;
+
+    // Connected and armed: op 40 loads the model, then op 30 applies each
+    // copied value, all on the live queue. Save (op 71) stores the result.
+    if (
+      !workingDoc &&
+      connected &&
+      activePresetLoaded &&
+      writeEnabled &&
+      connectionRef.current
+    ) {
+      const connection = connectionRef.current;
+      const wireId = wireIdOf(clip.model);
+      if (wireId === null) {
+        setSaveNotice({
+          kind: 'error',
+          text: `${clip.model.display} has no on-wire id; it cannot be sent to the pedal.`,
+        });
+        return;
+      }
+      const noSnapshotBypass =
+        entry.kind === 'block' ? entry.noSnapshotBypass : false;
+      pushHistory('the effect paste');
+      setPendingParams((queued) => {
+        const next = { ...queued };
+        for (const key of Object.keys(next)) {
+          if (key.startsWith(`${rawBlock}:`)) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+      applyLocalModel(block, clip.model);
+      setDirty(true);
+      setSaveNotice(null);
+      setWriting(true);
+      queueLiveWrite(
+        `model:${rawBlock}`,
+        `block ${rawBlock} → ${clip.model.display}`,
+        () =>
+          writeModel(
+            connection,
+            { block: rawBlock, wireId, noSnapshotBypass },
+            reportProgress,
+          ),
+      );
+      // Parameters are queued after the model and coalesced per parameter, so
+      // the pedal sees op 40 first and then the copied values.
+      clip.model.params.forEach((param, index) => {
+        const value = clip.params[index];
+        if (typeof value !== 'number') {
+          return;
+        }
+        applyLocalParam(rawBlock, index, value);
+        queueLiveWrite(
+          `${rawBlock}:${index}`,
+          `${clip.model.display} · ${param.n} = ${value} (live, not stored)`,
+          () =>
+            writeParam(
+              connection,
+              { block: rawBlock, param: index, value },
+              reportProgress,
+            ),
+        );
+      });
+      appendLog(
+        `Live: pasted ${clip.model.display} into block ${rawBlock} ` +
+          '(op 40 + copied parameters); applied to the pedal, press Save to store it.',
+      );
+      return;
+    }
 
     // Pedal draft: op 40 loads the model, then op 30 applies each value.
     if (!workingDoc && connected && activePresetLoaded) {
@@ -2587,6 +3048,37 @@ export default function App() {
    */
   function setBlockEnabled(block: number, enabled: boolean): void {
     const index = structure?.currentSnapshot ?? 0;
+
+    // Connected and armed: op 41 changes the pedal's edit buffer immediately.
+    if (
+      !workingDoc &&
+      connected &&
+      activePresetLoaded &&
+      writeEnabled &&
+      connectionRef.current
+    ) {
+      const connection = connectionRef.current;
+      pushHistory('the bypass change');
+      applyLocalBlockEnabled(block, enabled);
+      setDirty(true);
+      setSaveNotice(null);
+      queueLiveWrite(
+        `bypass:${block + 1}`,
+        `block ${block + 1} ${enabled ? 'enabled' : 'bypassed'}`,
+        () =>
+          writeBypass(
+            connection,
+            { block: block + 1, enabled },
+            reportProgress,
+          ),
+      );
+      appendLog(
+        `Live: block ${block + 1} ${enabled ? 'enabled' : 'bypassed'} in ` +
+          `snapshot ${index + 1}; applied to the pedal, press Save to store it.`,
+      );
+      return;
+    }
+
     if (!workingDoc) {
       // The pedal body stays read-only: the first bypass change on a
       // pedal-read preset asks for an editable offline copy, then applies the
@@ -4291,6 +4783,10 @@ export default function App() {
   copyBlockRef.current = copySelectedBlock;
   const pasteBlockRef = useRef(pasteSelectedBlock);
   pasteBlockRef.current = pasteSelectedBlock;
+  // Effects registered once read the state they closed over. Every action the
+  // listener needs goes through a ref that this render refreshes.
+  const saveNoticeRef = useRef(setSaveNotice);
+  saveNoticeRef.current = setSaveNotice;
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -4318,7 +4814,7 @@ export default function App() {
         event.preventDefault();
         const reason = saveBlockRef.current;
         if (reason) {
-          setSaveNotice({ kind: 'info', text: reason });
+          saveNoticeRef.current({ kind: 'info', text: reason });
           return;
         }
         void saveRef.current();
@@ -4416,7 +4912,7 @@ export default function App() {
             id="save-preset"
             type="button"
             className="toolbar-button is-primary"
-            disabled={!moduleReady || busy}
+            disabled={!moduleReady || writing}
             onClick={() => void saveWorkingPreset()}
             title={
               !connected
@@ -4442,10 +4938,21 @@ export default function App() {
                 checked={writeEnabled}
                 disabled={busy}
                 onChange={(event) => {
-                  setWriteEnabled(event.target.checked);
+                  const armed = event.target.checked;
+                  setWriteEnabled(armed);
                   setSaveNotice(null);
+                  // Un-arming does not undo live edits already on the pedal.
+                  if (!armed && connected && activePresetLoaded && dirty) {
+                    setSaveNotice({
+                      kind: 'info',
+                      text:
+                        'Writing is off. Changes already applied to the pedal ' +
+                        'are still live but not stored; enable writing again ' +
+                        'and press Save to keep them.',
+                    });
+                  }
                   appendLog(
-                    event.target.checked
+                    armed
                       ? 'Writing enabled for this session.'
                       : 'Writing disabled.',
                   );
@@ -4577,7 +5084,7 @@ export default function App() {
                       }
                     }
               }
-              onMoveBlock={workingDoc ? moveBlock : undefined}
+              onMoveBlock={workingDoc || connected ? moveBlock : undefined}
               onSelectSnapshot={workingDoc ? selectSnapshot : undefined}
               onRenameSnapshot={workingDoc ? renameSnapshot : undefined}
               onSetSnapshotLedColor={
@@ -4588,6 +5095,11 @@ export default function App() {
               }
               onSetBlockEnabled={setBlockEnabled}
               canSetBlockEnabled={connected}
+              onRemoveBlock={
+                !workingDoc && connected
+                  ? (block) => void removeActiveBlock(block)
+                  : undefined
+              }
               onPresetMenu={
                 currentPresetTarget() ? openCurrentPresetMenu : undefined
               }

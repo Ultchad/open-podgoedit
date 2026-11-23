@@ -2,6 +2,7 @@ import init, {
   core_version as wasmCoreVersion,
   inspect_preset,
   inspect_setlist,
+  move_chain_entry as wasmMoveChainEntry,
   preset_structure as wasmPresetStructure,
   setlist_entries_json as wasmSetlistEntries,
   subset_backup as wasmSubsetBackup,
@@ -30,6 +31,15 @@ export function inspectSetlist(bytes: Uint8Array): string {
 /** Structured preset view (JSON) for a raw `l6-helix` blob. */
 export function presetStructure(bytes: Uint8Array): unknown {
   return JSON.parse(wasmPresetStructure(bytes)) as unknown;
+}
+
+/** Move one processing block inside an `l6-helix` container (raw indices). */
+export function moveChainEntry(
+  bytes: Uint8Array,
+  from: number,
+  to: number,
+): Uint8Array {
+  return wasmMoveChainEntry(bytes, from, to);
 }
 
 /** Setlist entries (JSON) for a reassembled setlist stream. */
@@ -61,10 +71,14 @@ export function subsetBackup(
 
 export {
   BackupBuilder,
+  BypassFlow,
+  ChainWriteFlow,
   ModelWriteFlow,
   ParamWriteFlow,
   PresetFlow,
   ReadFlow,
+  RecallFlow,
+  RemoveEffectFlow,
   RestoreFlow,
   SavePresetFlow,
 } from './wasm/podgo_wasm.js';
