@@ -254,93 +254,84 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
     move_in_place(chain_items, from, to);
 
     // Snapshot enable lists use the same raw indices.
-    if let Some((_, snap_node)) = entries
+    if let Some((
+        _,
+        Value::Map {
+            entries: snap_entries,
+            ..
+        },
+    )) = entries
         .iter_mut()
         .find(|(key, _)| key.as_u64() == Some(BODY_SNAPSHOTS))
     {
-        if let Value::Map {
-            entries: snap_entries,
-            ..
-        } = snap_node
+        if let Some((_, Value::Array { items: snaps, .. })) = snap_entries
+            .iter_mut()
+            .find(|(key, _)| key.as_u64() == Some(SNAPS_LIST))
         {
-            if let Some((_, list)) = snap_entries
-                .iter_mut()
-                .find(|(key, _)| key.as_u64() == Some(SNAPS_LIST))
-            {
-                if let Value::Array { items: snaps, .. } = list {
-                    for snapshot in snaps {
-                        if let Value::Map {
-                            entries: s_entries, ..
-                        } = snapshot
-                        {
-                            if let Some((_, enables)) = s_entries
-                                .iter_mut()
-                                .find(|(key, _)| key.as_u64() == Some(SNAP_ENABLES))
-                            {
-                                if let Value::Array { items, .. } = enables {
-                                    move_in_place(items, from, to);
-                                }
-                            }
-                        }
-                    }
-                }
+            for snapshot in snaps.iter_mut() {
+                let Value::Map {
+                    entries: s_entries, ..
+                } = snapshot
+                else {
+                    continue;
+                };
+                let Some((_, Value::Array { items, .. })) = s_entries
+                    .iter_mut()
+                    .find(|(key, _)| key.as_u64() == Some(SNAP_ENABLES))
+                else {
+                    continue;
+                };
+                move_in_place(items, from, to);
             }
         }
     }
 
     // Footswitch assignments store the target block index; remap, don't reorder.
-    if let Some((_, fs_node)) = entries
+    let footswitch = entries
         .iter_mut()
         .find(|(key, _)| key.as_u64() == Some(BODY_FOOTSWITCH))
+        .map(|(_, node)| node);
+    if let Some(Value::Map {
+        entries: fs_entries,
+        ..
+    }) = footswitch
     {
-        if let Value::Map {
-            entries: fs_entries,
-            ..
-        } = fs_node
-        {
-            if let Some((_, groups)) = fs_entries
-                .iter_mut()
-                .find(|(key, _)| key.as_u64() == Some(FS_GROUPS))
-            {
-                if let Value::Array { items: groups, .. } = groups {
-                    for group in groups.iter_mut() {
-                        let Value::Array {
-                            items: switches, ..
-                        } = group
-                        else {
-                            continue;
-                        };
-                        for assignment in switches.iter_mut() {
-                            let Value::Map {
-                                entries: a_entries, ..
-                            } = assignment
-                            else {
-                                continue;
-                            };
-                            let Some((_, target)) = a_entries
-                                .iter_mut()
-                                .find(|(key, _)| key.as_u64() == Some(FS_TARGET))
-                            else {
-                                continue;
-                            };
-                            let Value::Map {
-                                entries: t_entries, ..
-                            } = target
-                            else {
-                                continue;
-                            };
-                            if let Some((_, block)) = t_entries
-                                .iter_mut()
-                                .find(|(key, _)| key.as_u64() == Some(FST_BLOCK))
-                            {
-                                if let Some(value) = block.as_u64() {
-                                    *block = Value::uint(remap_chain_index(
-                                        value,
-                                        from as u64,
-                                        to as u64,
-                                    ));
-                                }
-                            }
+        let groups = fs_entries
+            .iter_mut()
+            .find(|(key, _)| key.as_u64() == Some(FS_GROUPS))
+            .map(|(_, node)| node);
+        if let Some(Value::Array { items: groups, .. }) = groups {
+            for group in groups.iter_mut() {
+                let Value::Array {
+                    items: switches, ..
+                } = group
+                else {
+                    continue;
+                };
+                for assignment in switches.iter_mut() {
+                    let Value::Map {
+                        entries: a_entries, ..
+                    } = assignment
+                    else {
+                        continue;
+                    };
+                    let target = a_entries
+                        .iter_mut()
+                        .find(|(key, _)| key.as_u64() == Some(FS_TARGET))
+                        .map(|(_, node)| node);
+                    let Some(Value::Map {
+                        entries: t_entries, ..
+                    }) = target
+                    else {
+                        continue;
+                    };
+                    let block = t_entries
+                        .iter_mut()
+                        .find(|(key, _)| key.as_u64() == Some(FST_BLOCK))
+                        .map(|(_, node)| node);
+                    if let Some(node) = block {
+                        if let Some(value) = node.as_u64() {
+                            *node = Value::uint(remap_chain_index(value, from as u64, to as u64));
                         }
                     }
                 }
@@ -350,18 +341,20 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
 
     // `body[6][98]` tracks the selected block; the official editor points it at
     // the moved block's new slot.
-    if let Some((_, selection)) = entries.iter_mut().find(|(key, _)| key.as_u64() == Some(6)) {
-        if let Value::Map {
-            entries: sel_entries,
-            ..
-        } = selection
+    let selection = entries
+        .iter_mut()
+        .find(|(key, _)| key.as_u64() == Some(6))
+        .map(|(_, node)| node);
+    if let Some(Value::Map {
+        entries: sel_entries,
+        ..
+    }) = selection
+    {
+        if let Some((_, slot)) = sel_entries
+            .iter_mut()
+            .find(|(key, _)| key.as_u64() == Some(98))
         {
-            if let Some((_, slot)) = sel_entries
-                .iter_mut()
-                .find(|(key, _)| key.as_u64() == Some(98))
-            {
-                *slot = Value::uint(to as u64);
-            }
+            *slot = Value::uint(to as u64);
         }
     }
 
@@ -1004,7 +997,7 @@ mod tests {
     #[test]
     fn move_chain_entry_refuses_the_input_and_output_stages() {
         let preset = Container::parse_preset(FIXTURE).unwrap();
-        let output = (preset.chain.len() - 1) as usize;
+        let output = preset.chain.len() - 1;
         assert!(move_chain_entry(FIXTURE, 0, 3).is_err());
         assert!(move_chain_entry(FIXTURE, 3, output).is_err());
         assert!(move_chain_entry(FIXTURE, 3, 99).is_err());
