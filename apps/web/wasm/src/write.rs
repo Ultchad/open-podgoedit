@@ -22,8 +22,8 @@
 
 use podgo_protocol::write::{
     build_chain_frame, decode_write_status, encode_chain_upload, encode_recall_preset,
-    encode_remove_effect, encode_save_preset, encode_set_bypass, encode_set_model, encode_set_param,
-    validate_preset_name, write_cursor_advance, CHAIN_CHUNK_BYTES,
+    encode_remove_effect, encode_save_preset, encode_set_bypass, encode_set_model,
+    encode_set_param, validate_preset_name, write_cursor_advance, CHAIN_CHUNK_BYTES,
     CHAIN_CURSOR_ADVANCE, CHAIN_FIRST_BYTES, WRITE_FIRST_COMMAND_SEQ, WRITE_OPEN_2_CURSOR,
     WRITE_SEQUENCE,
 };
@@ -346,7 +346,6 @@ impl WriteDriver {
             self.cursor
         )
     }
-
 }
 
 /// One `set_param` command, driven packet by packet by the page.
@@ -663,7 +662,6 @@ pub(crate) fn push_json_string(out: &mut String, value: &str) {
     out.push('"');
 }
 
-
 /// One recall-preset command (operation 20), driven packet by packet.
 ///
 /// Recalling loads a stored slot into the pedal's edit buffer, exactly like
@@ -683,9 +681,7 @@ impl RecallFlow {
     ///
     /// Returns a message when the parameters cannot be encoded.
     #[wasm_bindgen(constructor)]
-    pub fn new(setlist: u32,
-        slot: u32,
-        transaction: u32,) -> Result<RecallFlow, String> {
+    pub fn new(setlist: u32, slot: u32, transaction: u32) -> Result<RecallFlow, String> {
         if setlist > 1 {
             return Err("recall setlist must be 0 (Factory) or 1 (User)".to_owned());
         }
@@ -782,9 +778,7 @@ impl BypassFlow {
     ///
     /// Returns a message when the parameters cannot be encoded.
     #[wasm_bindgen(constructor)]
-    pub fn new(block: u32,
-        enabled: bool,
-        transaction: u32,) -> Result<BypassFlow, String> {
+    pub fn new(block: u32, enabled: bool, transaction: u32) -> Result<BypassFlow, String> {
         Ok(Self {
             driver: WriteDriver::new(Command::SetBypass {
                 block,
@@ -875,8 +869,7 @@ impl RemoveEffectFlow {
     ///
     /// Returns a message when the parameters cannot be encoded.
     #[wasm_bindgen(constructor)]
-    pub fn new(block: u32,
-        transaction: u32,) -> Result<RemoveEffectFlow, String> {
+    pub fn new(block: u32, transaction: u32) -> Result<RemoveEffectFlow, String> {
         Ok(Self {
             driver: WriteDriver::new(Command::RemoveEffect {
                 block,
@@ -959,7 +952,6 @@ impl RemoveEffectFlow {
     }
 }
 
-
 /// Stage of the op-21 chain upload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChainStage {
@@ -1001,8 +993,8 @@ impl ChainWriteFlow {
     /// wrapped in the MessagePack body.
     #[wasm_bindgen(constructor)]
     pub fn new(blob: &[u8], transaction: u32) -> Result<ChainWriteFlow, String> {
-        let body = encode_chain_upload(blob, u64::from(transaction))
-            .map_err(|err| err.to_string())?;
+        let body =
+            encode_chain_upload(blob, u64::from(transaction)).map_err(|err| err.to_string())?;
         Ok(Self {
             total: body.len(),
             body,
@@ -1130,8 +1122,7 @@ impl ChainWriteFlow {
         match self.stage {
             ChainStage::Handshake(index) => {
                 if index + 1 >= WRITE_SEQUENCE.len() {
-                    self.cursor =
-                        WRITE_OPEN_2_CURSOR.saturating_add(write_cursor_advance(bytes));
+                    self.cursor = WRITE_OPEN_2_CURSOR.saturating_add(write_cursor_advance(bytes));
                     self.seq = WRITE_FIRST_COMMAND_SEQ;
                     self.stage = ChainStage::Stream;
                 } else {

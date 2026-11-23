@@ -964,7 +964,10 @@ mod tests {
         assert_eq!(value.get_u64(102).unwrap().as_u64(), Some(1007));
         assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(21));
         let inner = value.get_u64(101).unwrap();
-        assert_eq!(inner.get_u64(110).unwrap().as_str_bytes(), Some(blob.as_slice()));
+        assert_eq!(
+            inner.get_u64(110).unwrap().as_str_bytes(),
+            Some(blob.as_slice())
+        );
     }
 
     #[test]
@@ -1250,4 +1253,3 @@ mod tests {
         assert!(encode_restore_stream(&[], 6, 0).is_err());
     }
 }
-

@@ -215,7 +215,11 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
         .find(|(key, _)| key.as_u64() == Some(BODY_DSP0))
         .map(|(_, value)| value)
         .ok_or(DomainError::InvalidContainer("preset has no DSP0 node"))?;
-    let Value::Map { entries: dsp_entries, .. } = dsp else {
+    let Value::Map {
+        entries: dsp_entries,
+        ..
+    } = dsp
+    else {
         return Err(DomainError::InvalidContainer("DSP0 is not a map"));
     };
     let chain = dsp_entries
@@ -223,15 +227,17 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
         .find(|(key, _)| key.as_u64() == Some(DSP_CHAIN))
         .map(|(_, value)| value)
         .ok_or(DomainError::InvalidContainer("preset has no chain"))?;
-    let Value::Array { items: chain_items, .. } = chain else {
+    let Value::Array {
+        items: chain_items, ..
+    } = chain
+    else {
         return Err(DomainError::InvalidContainer("chain is not an array"));
     };
     if from >= chain_items.len() || to >= chain_items.len() {
         return Err(DomainError::InvalidContainer("chain index out of range"));
     }
-    let raw_class = |index: usize, items: &[Value]| {
-        items[index].get_u64(ENTRY_CLASS).and_then(Value::as_u64)
-    };
+    let raw_class =
+        |index: usize, items: &[Value]| items[index].get_u64(ENTRY_CLASS).and_then(Value::as_u64);
     for index in [from, to] {
         match raw_class(index, chain_items) {
             Some(CLASS_INPUT | CLASS_OUTPUT) => {
@@ -241,9 +247,7 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
             }
             Some(_) => {}
             None => {
-                return Err(DomainError::InvalidContainer(
-                    "chain entry has no class",
-                ));
+                return Err(DomainError::InvalidContainer("chain entry has no class"));
             }
         }
     }
@@ -265,7 +269,10 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
             {
                 if let Value::Array { items: snaps, .. } = list {
                     for snapshot in snaps {
-                        if let Value::Map { entries: s_entries, .. } = snapshot {
+                        if let Value::Map {
+                            entries: s_entries, ..
+                        } = snapshot
+                        {
                             if let Some((_, enables)) = s_entries
                                 .iter_mut()
                                 .find(|(key, _)| key.as_u64() == Some(SNAP_ENABLES))
@@ -286,18 +293,28 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
         .iter_mut()
         .find(|(key, _)| key.as_u64() == Some(BODY_FOOTSWITCH))
     {
-        if let Value::Map { entries: fs_entries, .. } = fs_node {
+        if let Value::Map {
+            entries: fs_entries,
+            ..
+        } = fs_node
+        {
             if let Some((_, groups)) = fs_entries
                 .iter_mut()
                 .find(|(key, _)| key.as_u64() == Some(FS_GROUPS))
             {
                 if let Value::Array { items: groups, .. } = groups {
                     for group in groups.iter_mut() {
-                        let Value::Array { items: switches, .. } = group else {
+                        let Value::Array {
+                            items: switches, ..
+                        } = group
+                        else {
                             continue;
                         };
                         for assignment in switches.iter_mut() {
-                            let Value::Map { entries: a_entries, .. } = assignment else {
+                            let Value::Map {
+                                entries: a_entries, ..
+                            } = assignment
+                            else {
                                 continue;
                             };
                             let Some((_, target)) = a_entries
@@ -306,7 +323,10 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
                             else {
                                 continue;
                             };
-                            let Value::Map { entries: t_entries, .. } = target else {
+                            let Value::Map {
+                                entries: t_entries, ..
+                            } = target
+                            else {
                                 continue;
                             };
                             if let Some((_, block)) = t_entries
@@ -330,11 +350,12 @@ pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, 
 
     // `body[6][98]` tracks the selected block; the official editor points it at
     // the moved block's new slot.
-    if let Some((_, selection)) = entries
-        .iter_mut()
-        .find(|(key, _)| key.as_u64() == Some(6))
-    {
-        if let Value::Map { entries: sel_entries, .. } = selection {
+    if let Some((_, selection)) = entries.iter_mut().find(|(key, _)| key.as_u64() == Some(6)) {
+        if let Value::Map {
+            entries: sel_entries,
+            ..
+        } = selection
+        {
             if let Some((_, slot)) = sel_entries
                 .iter_mut()
                 .find(|(key, _)| key.as_u64() == Some(98))
@@ -530,7 +551,11 @@ impl Container {
         out.push(0xa9);
         out.extend_from_slice(&self.magic);
         out.push(0xda);
-        out.extend_from_slice(&u16::try_from(table.len()).map_err(|_| DomainError::LengthOverflow)?.to_be_bytes());
+        out.extend_from_slice(
+            &u16::try_from(table.len())
+                .map_err(|_| DomainError::LengthOverflow)?
+                .to_be_bytes(),
+        );
         out.extend_from_slice(&table);
         out.extend_from_slice(&body_bytes);
         Ok(out)
