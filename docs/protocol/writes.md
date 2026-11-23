@@ -64,9 +64,8 @@ armed and the editor shows the pedal's active preset:
 - **Save** only sends op 71. It does not re-send any of the edits, because the
   pedal is already running them.
 
-Nothing is written until **Enable writing** is ticked. While it is off, edits
-are drafts that Save applies before op 71, and opening a slot is a plain read
-that does not change the pedal's sound.
+Nothing is sent while no pedal is connected. With a pedal connected, every
+edit above is live and Save stores it.
 
 Actions that own the channel for several seconds (recall, chain upload,
 removal) set the page's `writing` flag; Save, move and remove refuse to
@@ -570,25 +569,25 @@ block, but nothing here has seen it on hardware. If the pedal rejects it, the
 page reports the status in the log and as a notice. Structural writes that
 reorder the chain use op 21 (§2.5b).
 
-## 3. Runtime gates (ADR-0007)
+## 3. Runtime gates
 
-A write is sent only when **all** of these hold:
+A write is sent only when **both** of these hold:
 
 1. the `device-write` Cargo feature is enabled (the WASM crate enables it; the
    core crates do not);
-2. the page is connected over WebUSB;
-3. the user ticked **Enable device writes** for this session;
-4. the editor shows the preset read from the pedal's **active** preset this
-   session — a file, a fixture or a librarian slot read disarms writes;
-5. the user made one explicit confirmation for the action: a `window.confirm`
-   for the destructive or multi-second ones (`save_preset`, rename, paste,
-   recall from the librarian, chain move, remove effect) or the
-   **Restore N preset(s)** button plus its single `window.confirm`.
+2. the page is connected to a pedal.
 
-Live single-command edits (a parameter, a model swap, a bypass tap) are sent
-as the user makes them; **Enable writing** is their confirmation, and the
-change is visible and audible on the pedal immediately. Nothing is stored
-until Save runs op 71.
+The earlier **Enable device writes** arm and the per-action `window.confirm`
+prompts were removed on request (ADR-0007 is superseded on that point). An
+edit reaches the pedal as soon as it is made, exactly like the official
+editor. Nothing is ever sent while no pedal is connected.
+
+Only two prompts remain in the page:
+
+1. **Save** (button or Ctrl+S) — one confirmation, then op 71;
+2. leaving a preset whose live changes are not stored yet — a
+   save / don't save / cancel choice. "Save" runs op 71 for the current preset
+   before the op-20 recall of the new one.
 
 `save_preset` adds two more gates: the destination is limited to the **User**
 setlist, and the slot must have been read in the same dialog with its SHA-256
@@ -596,7 +595,7 @@ digest displayed and downloaded. That per-slot backup is part of the save
 command's own contract (op 71 defines the destination), not a session-wide
 precondition.
 
-`restore` replaces gate 4 with its own: the file is verified in Rust and the
+`restore` keeps its own checks: the file is verified in Rust and the
 destination diff is shown before the button enables. It does not read the
 active preset and is not limited to the User setlist. It does **not** require a
 fresh session backup, a typed word or an acknowledgement checkbox.

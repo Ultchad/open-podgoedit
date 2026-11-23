@@ -15,9 +15,9 @@ libusb handle is never shared. The POD Go protocol and every write gate stay in
 the shared WASM flows, so desktop behaves exactly like WebUSB and Android.
 
 > **Hardware status.** The desktop transport has **not** been run against a real
-> POD Go yet. Reads and writes keep the same gates as the other shells:
-> `device-write`, one explicit confirmation and one "Enable writing" arm. Mobile
-> and desktop USB traffic still needs a real-device check.
+> POD Go yet. Writes use the same live path as the other shells (no write arm,
+> no per-action prompts). Mobile and desktop USB traffic still needs a
+> real-device check.
 
 ## Prerequisites
 
