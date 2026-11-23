@@ -280,6 +280,237 @@ pub fn encode_save_preset(
     build_write_command(&body_bytes, seq, cursor)
 }
 
+/// Recall a stored preset: make it the pedal's active sound (operation 20).
+///
+/// Captured in `podgo-bypass-and-remove-effect.pcapng` as
+/// `{102: txn, 100: 20, 101: {107: setlist, 108: slot}}`, answered by a framed
+/// status **1** (not 0). Recalling does not store anything: it loads the slot
+/// into the edit buffer, exactly like turning the pedal's own knob.
+pub const OP_RECALL_PRESET: u64 = 20;
+
+/// Set one block's bypass state (operation 41).
+///
+/// Captured in `podgo-bypass-and-remove-effect.pcapng` as
+/// `{102: txn, 100: 41, 101: {98: raw_block, 59: enabled}}`. Key `59` is the
+/// block's enabled flag, not its bypass flag: the pedal's op-49 notification
+/// echoes the same boolean. Status **0**.
+pub const OP_SET_BYPASS: u64 = 41;
+
+/// Remove one effect from the chain (operation 28).
+///
+/// Captured in `podgo-bypass-and-remove-effect.pcapng` as
+/// `{102: txn, 100: 28, 101: {98: raw_block}}`; the official editor sends
+/// [`OP_REMOVE_EFFECT_COMMIT`] a few seconds later. Status **0**.
+pub const OP_REMOVE_EFFECT: u64 = 28;
+
+/// Second half of the remove-effect pair (operation 78).
+///
+/// Same body as [`OP_REMOVE_EFFECT`]. The pedal emits op-33/op-49
+/// notifications once the slot is empty.
+pub const OP_REMOVE_EFFECT_COMMIT: u64 = 78;
+
+/// Upload a whole chain (operation 21).
+///
+/// The body is `{102: txn, 100: 21, 101: {110: <l6-helix blob>}}`, streamed on
+/// the write channel in 512-byte frames. The pedal answers a framed status
+/// **1**, which is what advances the stream cursor. See
+/// `docs/protocol/writes.md`.
+pub const OP_CHAIN_WRITE: u64 = 21;
+
+/// Status meaning "accepted" for a streamed command.
+///
+/// Ordinary writes answer `0`; op 20 and op 21 answer `1`. The flows accept
+/// both where the capture shows both shapes.
+pub const WRITE_STATUS_ACCEPTED: u64 = 1;
+
+/// Build a recall-preset frame (operation 20).
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidFrame`] for an unknown setlist or a slot
+/// above 127, and a MessagePack error when encoding fails.
+pub fn encode_recall_preset(
+    setlist: u8,
+    slot: u8,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    if setlist > 1 {
+        return Err(ProtocolError::InvalidFrame(
+            "recall setlist must be 0 (Factory) or 1 (User)",
+        ));
+    }
+    if slot >= 128 {
+        return Err(ProtocolError::InvalidFrame("recall slot is above 127"));
+    }
+    let body = Value::map(vec![
+        (Value::uint(102), Value::uint(transaction)),
+        (Value::uint(100), Value::uint(OP_RECALL_PRESET)),
+        (
+            Value::uint(101),
+            Value::map(vec![
+                (Value::uint(107), Value::uint(u64::from(setlist))),
+                (Value::uint(108), Value::uint(u64::from(slot))),
+            ]),
+        ),
+    ]);
+    let body_bytes = msgpack::encode(&body)?;
+    build_write_command(&body_bytes, seq, cursor)
+}
+
+/// Build a bypass write frame (operation 41).
+///
+/// `block` is the **raw** chain index (input is 0); `enabled` is the state to
+/// apply (`true` = effect on, `false` = bypassed).
+///
+/// # Errors
+///
+/// Returns a MessagePack error when encoding fails.
+pub fn encode_set_bypass(
+    block: u32,
+    enabled: bool,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    let body = Value::map(vec![
+        (Value::uint(102), Value::uint(transaction)),
+        (Value::uint(100), Value::uint(OP_SET_BYPASS)),
+        (
+            Value::uint(101),
+            Value::map(vec![
+                (Value::uint(98), Value::uint(u64::from(block))),
+                (Value::uint(59), Value::Bool(enabled)),
+            ]),
+        ),
+    ]);
+    let body_bytes = msgpack::encode(&body)?;
+    build_write_command(&body_bytes, seq, cursor)
+}
+
+/// Build one half of the remove-effect pair (operations 28 and 78).
+///
+/// `commit` selects operation 78; `false` selects operation 28.
+///
+/// # Errors
+///
+/// Returns a MessagePack error when encoding fails.
+pub fn encode_remove_effect(
+    block: u32,
+    commit: bool,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    let operation = if commit {
+        OP_REMOVE_EFFECT_COMMIT
+    } else {
+        OP_REMOVE_EFFECT
+    };
+    let body = Value::map(vec![
+        (Value::uint(102), Value::uint(transaction)),
+        (Value::uint(100), Value::uint(operation)),
+        (
+            Value::uint(101),
+            Value::map(vec![(Value::uint(98), Value::uint(u64::from(block)))]),
+        ),
+    ]);
+    let body_bytes = msgpack::encode(&body)?;
+    build_write_command(&body_bytes, seq, cursor)
+}
+
+/// Build the MessagePack body of one op-21 chain upload.
+///
+/// Body: `{102: transaction, 100: 21, 101: {110: <blob>}}`. Key `110` is a
+/// MessagePack `str`, like the restore message, and the bytes are the complete
+/// `l6-helix` container (magic + offset table + body).
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidFrame`] for an empty body or one that
+/// exceeds the 64 KiB stream limit, and a MessagePack error when encoding
+/// fails.
+pub fn encode_chain_upload(blob: &[u8], transaction: u64) -> Result<Vec<u8>, ProtocolError> {
+    if blob.is_empty() {
+        return Err(ProtocolError::InvalidFrame("chain upload body is empty"));
+    }
+    if blob.len() > crate::constants::MAX_STREAM_BYTES {
+        return Err(ProtocolError::InvalidFrame(
+            "chain upload body exceeds the 64 KiB stream limit",
+        ));
+    }
+    let body = Value::map(vec![
+        (Value::uint(102), Value::uint(transaction)),
+        (Value::uint(100), Value::uint(OP_CHAIN_WRITE)),
+        (
+            Value::uint(101),
+            Value::map(vec![(Value::uint(110), Value::str_bytes(blob.to_vec()))]),
+        ),
+    ]);
+    Ok(msgpack::encode(&body)?)
+}
+
+/// Body bytes carried by the first frame of an op-21 upload.
+pub const CHAIN_FIRST_BYTES: usize = 488;
+
+/// Body bytes carried by a continuation frame of an op-21 upload.
+pub const CHAIN_CHUNK_BYTES: usize = 496;
+
+/// Cursor advance after the framed op-21 status.
+///
+/// The two uploads in `podgo-move-effect.pcapng` step the cursor
+/// `0x1f19 → 0x1f2a` and `0x1f2a → 0x1f3b` (+17) when the `{102, 103: 1}`
+/// reply arrives, exactly like a framed write acknowledgement.
+pub const CHAIN_CURSOR_ADVANCE: u32 = 17;
+
+/// Build one frame of an op-21 chain upload.
+///
+/// The first frame carries `01 00 06 00`, the complete MessagePack length as a
+/// `u32`, then up to [`CHAIN_FIRST_BYTES`] bytes. Continuations carry up to
+/// [`CHAIN_CHUNK_BYTES`] raw bytes after the 16-byte header. The header length
+/// field is `frame_length - 8` and the body is zero-padded to four bytes, as in
+/// every captured frame.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidFrame`] when the frame length does not fit
+/// the header fields.
+pub fn build_chain_frame(
+    data: &[u8],
+    total: u32,
+    first: bool,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    let extra = if first { 8 } else { 0 };
+    let length = (HEADER_LEN - 8 + extra)
+        .checked_add(data.len())
+        .ok_or(ProtocolError::InvalidFrame("chain frame length overflow"))?;
+    let length_field = u16::try_from(length)
+        .map_err(|_| ProtocolError::InvalidFrame("chain frame length does not fit the header"))?;
+
+    let mut header = [0u8; HEADER_LEN];
+    header[0..2].copy_from_slice(&length_field.to_le_bytes());
+    header[3] = MAGIC_STANDARD;
+    header[4..6].copy_from_slice(&WRITE_SRC.to_le_bytes());
+    header[6..8].copy_from_slice(&WRITE_DST.to_le_bytes());
+    header[9] = seq;
+    header[11] = CMD_SESSION_OPEN;
+    header[12..16].copy_from_slice(&cursor.to_le_bytes());
+
+    let mut frame_body = Vec::with_capacity(extra + data.len() + 3);
+    if first {
+        frame_body.extend_from_slice(&WRITE_SUBHEADER);
+        frame_body.extend_from_slice(&total.to_le_bytes());
+    }
+    frame_body.extend_from_slice(data);
+    let pad = (4 - frame_body.len() % 4) % 4;
+    frame_body.extend(std::iter::repeat(0u8).take(pad));
+
+    Ok(Frame::from_parts(header, frame_body).to_bytes())
+}
+
 /// Restore operation: stream one preset body to a setlist slot.
 ///
 /// `reverse/exports/podgo-backup-restore.pcapng` contains 157 of these
@@ -667,6 +898,118 @@ mod tests {
             );
         }
         assert!(validate_preset_name("Comandant_Clean1").is_ok());
+    }
+
+    #[test]
+    fn recall_frame_matches_the_captured_editor_frame() {
+        // Exact write-channel frame from POD Go Edit (fw 2.50) in
+        // `podgo-bypass-and-remove-effect.pcapng` (transaction 1006).
+        let frame = encode_recall_preset(1, 36, 1006, 0x3e, 0x1eb2).unwrap();
+        let expected = concat!(
+            "1d 00 00 18 80 10 ed 03 00 3e 00 04 b2 1e 00 00 ",
+            "01 00 06 00 0d 00 00 00 ",
+            "83 66 cd 03 ee 64 14 65 82 6b 01 6c 24 ",
+            "00 00 00"
+        );
+        assert_eq!(hex(&frame), expected);
+    }
+
+    #[test]
+    fn bypass_frame_matches_the_captured_editor_frame() {
+        // Transaction 1010, block 3, enabled = false.
+        let frame = encode_set_bypass(3, false, 1010, 0x5e, 0x2d46).unwrap();
+        let expected = concat!(
+            "1d 00 00 18 80 10 ed 03 00 5e 00 04 46 2d 00 00 ",
+            "01 00 06 00 0d 00 00 00 ",
+            "83 66 cd 03 f2 64 29 65 82 62 03 3b c2 ",
+            "00 00 00"
+        );
+        assert_eq!(hex(&frame), expected);
+
+        let parsed = Frame::parse(&frame).unwrap();
+        let body = crate::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(41));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(inner.get_u64(98).unwrap().as_u64(), Some(3));
+        assert_eq!(inner.get_u64(59).unwrap().as_bool(), Some(false));
+    }
+
+    #[test]
+    fn remove_frames_match_the_captured_editor_frames() {
+        let first = encode_remove_effect(3, false, 1014, 0x71, 0x2d8a).unwrap();
+        let expected_first = concat!(
+            "1b 00 00 18 80 10 ed 03 00 71 00 04 8a 2d 00 00 ",
+            "01 00 06 00 0b 00 00 00 ",
+            "83 66 cd 03 f6 64 1c 65 81 62 03 ",
+            "00"
+        );
+        assert_eq!(hex(&first), expected_first);
+
+        let commit = encode_remove_effect(3, true, 1015, 0x76, 0x2d9b).unwrap();
+        let expected_commit = concat!(
+            "1b 00 00 18 80 10 ed 03 00 76 00 04 9b 2d 00 00 ",
+            "01 00 06 00 0b 00 00 00 ",
+            "83 66 cd 03 f7 64 4e 65 81 62 03 ",
+            "00"
+        );
+        assert_eq!(hex(&commit), expected_commit);
+    }
+
+    #[test]
+    fn chain_upload_body_uses_a_str_blob_under_key_110() {
+        let blob = vec![0xa9, b'l', b'6', b'-', b'h', b'e', b'l', b'i', b'x', 0];
+        let body = encode_chain_upload(&blob, 1007).unwrap();
+        let (value, _) = msgpack::decode_prefix(&body).unwrap();
+        assert_eq!(value.get_u64(102).unwrap().as_u64(), Some(1007));
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(21));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(
+            inner.get_u64(110).unwrap().as_str_bytes(),
+            Some(blob.as_slice())
+        );
+    }
+
+    #[test]
+    fn chain_frames_reassemble_into_the_original_body() {
+        let body: Vec<u8> = (0..1500u32).map(|index| (index % 251) as u8).collect();
+        let total = u32::try_from(body.len()).unwrap();
+        let mut frames = Vec::new();
+        let mut position = 0usize;
+        let mut first = true;
+        let mut seq = 0x2bu8;
+        while position < body.len() {
+            let chunk = if first {
+                CHAIN_FIRST_BYTES.min(body.len() - position)
+            } else {
+                CHAIN_CHUNK_BYTES.min(body.len() - position)
+            };
+            frames.push(
+                build_chain_frame(&body[position..position + chunk], total, first, seq, 0x1f19)
+                    .unwrap(),
+            );
+            position += chunk;
+            first = false;
+            seq = seq.wrapping_add(1);
+        }
+
+        // The first frame carries the 8-byte subheader and the declared total.
+        let parsed = Frame::parse(&frames[0]).unwrap();
+        let payload = parsed.body();
+        assert_eq!(&payload[0..4], &WRITE_SUBHEADER);
+        assert_eq!(&payload[4..8], &total.to_le_bytes());
+        assert_eq!(parsed.header()[4..8], [0x80, 0x10, 0xed, 0x03]);
+        assert_eq!(parsed.header()[0..2], 504u16.to_le_bytes());
+
+        // Every continuation carries raw bytes only.
+        assert_eq!(Frame::parse(&frames[1]).unwrap().body().len(), 496);
+
+        let mut reassembled = payload[8..].to_vec();
+        for frame in &frames[1..] {
+            reassembled.extend_from_slice(Frame::parse(frame).unwrap().body());
+        }
+        reassembled.truncate(body.len());
+        assert_eq!(reassembled, body);
     }
 
     #[test]

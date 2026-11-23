@@ -62,6 +62,8 @@ interface Props {
   ) => void;
   /** Bypass or enable a block in the active snapshot. */
   onSetBlockEnabled?: (block: number, enabled: boolean) => void;
+  /** Remove one effect from the active preset (operations 28 then 78). */
+  onRemoveBlock?: (block: number) => void;
   /**
    * The page turns the first bypass tap on a pedal-read preset into an
    * editable copy, so the toggle stays visible even without a working copy.
@@ -109,6 +111,7 @@ export default function PresetView({
   onToggleSnapshotParam,
   onSetBlockEnabled,
   canSetBlockEnabled = false,
+  onRemoveBlock,
   onPresetMenu,
   onCopyBlock,
   onPasteBlock,
@@ -328,6 +331,19 @@ export default function PresetView({
                 hint: editable ? undefined : 'Offline copy',
                 onSelect: () =>
                   onSetBlockEnabled(blockMenu.index, !menuEntry.enabled),
+              },
+            ] as PresetMenuEntry[])
+          : []),
+        ...(onRemoveBlock && menuCopyable
+          ? ([
+              'separator',
+              {
+                id: 'block-menu-remove',
+                label: menuModel
+                  ? `Remove ${menuModel.display}`
+                  : 'Remove effect',
+                disabled: menuEmpty,
+                onSelect: () => onRemoveBlock(blockMenu.index),
               },
             ] as PresetMenuEntry[])
           : []),
@@ -601,7 +617,11 @@ export default function PresetView({
           onSelect={setSelected}
           onMoveBlock={onMoveBlock}
           onBlockMenu={
-            onCopyBlock || onPasteBlock || onMoveBlock || onSetBlockEnabled
+            onCopyBlock ||
+            onPasteBlock ||
+            onMoveBlock ||
+            onSetBlockEnabled ||
+            onRemoveBlock
               ? openBlockMenu
               : undefined
           }
@@ -636,7 +656,11 @@ export default function PresetView({
         }
         canSetBlockEnabled={canSetBlockEnabled}
         onOpenBlockMenu={
-          onCopyBlock || onPasteBlock || onMoveBlock || onSetBlockEnabled
+          onCopyBlock ||
+            onPasteBlock ||
+            onMoveBlock ||
+            onSetBlockEnabled ||
+            onRemoveBlock
             ? (x, y) => {
                 if (blockIndex !== null) {
                   openBlockMenu(blockIndex, x, y);

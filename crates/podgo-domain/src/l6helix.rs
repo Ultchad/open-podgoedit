@@ -26,6 +26,11 @@ pub const MAGIC: &[u8; 9] = b"l6-helix\0";
 /// Observed offset-table length.
 pub const OFFSET_TABLE_LEN: usize = 48;
 
+/// Top-level keys recorded by the offset table, in table order.
+///
+/// The order is the one POD Go Edit emits, not the wire order of the body.
+pub const BLOB_TABLE_KEYS: [u64; 9] = [0, 1, 3, 4, 2, 5, 6, 7, 10];
+
 /// Top-level body key: DSP0 chain (`{21: index, 22: entries}`).
 pub const BODY_DSP0: u64 = 0;
 /// Top-level body key: footswitch assignments (not decoded).
@@ -123,6 +128,246 @@ pub const CTLD_MAX: u64 = 3;
 
 /// Number of footswitch groups addressable by the expression-pedal toe switch.
 pub const FS_GROUP_EXP_TOE: usize = 8;
+
+/// Byte offsets (body-relative) of the top-level keys in the packed body.
+///
+/// Mirrors the encoder: the map header is one byte for the nine-key bodies the
+/// pedal sends, then each key and value is packed in insertion order with the
+/// same width classes the body already stores.
+fn top_level_key_offsets(body: &Value) -> Result<Vec<(u64, usize)>, DomainError> {
+    let Value::Map { entries, .. } = body else {
+        return Err(DomainError::InvalidContainer(
+            "preset body is not a MessagePack map",
+        ));
+    };
+    let mut pos = match entries.len() {
+        0..=15 => 1,
+        16..=65535 => 3,
+        _ => 5,
+    };
+    let mut offsets = Vec::with_capacity(entries.len());
+    for (key, value) in entries {
+        let numeric = key.as_u64().ok_or(DomainError::InvalidContainer(
+            "preset body has a non-numeric top-level key",
+        ))?;
+        offsets.push((numeric, pos));
+        pos += msgpack::encode(key)?.len();
+        pos += msgpack::encode(value)?.len();
+    }
+    Ok(offsets)
+}
+
+/// Apply a move to one positional list, shifting the entries between the two
+/// indices exactly like the official editor does.
+fn move_in_place<T>(items: &mut Vec<T>, from: usize, to: usize) -> bool {
+    if from == to || from >= items.len() || to >= items.len() {
+        return false;
+    }
+    let item = items.remove(from);
+    items.insert(to, item);
+    true
+}
+
+/// Map one raw chain index through a move `from -> to`.
+#[must_use]
+pub fn remap_chain_index(index: u64, from: u64, to: u64) -> u64 {
+    if index == from {
+        to
+    } else if from < index && index <= to {
+        index - 1
+    } else if to <= index && index < from {
+        index + 1
+    } else {
+        index
+    }
+}
+
+/// Move one processing block in an `l6-helix` body and repack it for op 21.
+///
+/// `from` and `to` are **raw** chain indices: index `0` is the input stage and
+/// the last entry is the output stage, so a ten-slot preset uses `1..=10`.
+///
+/// The official editor uploads the whole chain after a drag. Comparing the two
+/// op-21 bodies in `podgo-move-effect.pcapng` with the object-22 body read
+/// before the drag shows that the move touches exactly these places:
+///
+/// - the chain array (`body[0][22]`) is reordered;
+/// - every snapshot's enable list (`body[10][10][*][3]`) is reordered;
+/// - footswitch targets (`body[3][8][*][*][11][8]`) are remapped;
+/// - `body[6][98]` becomes the destination slot;
+/// - `body[12]` is present as 128 NUL bytes in both op-21 bodies.
+///
+/// Everything else, including unknown fields, keeps its bytes.
+///
+/// # Errors
+///
+/// Returns [`DomainError::InvalidContainer`] when the container has no chain,
+/// the indices are out of range or either index is the input/output stage.
+pub fn move_chain_entry(blob: &[u8], from: usize, to: usize) -> Result<Vec<u8>, DomainError> {
+    let mut container = Container::parse(blob)?;
+    let body = container.body_mut();
+    let Value::Map { entries, .. } = body else {
+        return Err(DomainError::InvalidContainer("preset body is not a map"));
+    };
+
+    let dsp = entries
+        .iter_mut()
+        .find(|(key, _)| key.as_u64() == Some(BODY_DSP0))
+        .map(|(_, value)| value)
+        .ok_or(DomainError::InvalidContainer("preset has no DSP0 node"))?;
+    let Value::Map {
+        entries: dsp_entries,
+        ..
+    } = dsp
+    else {
+        return Err(DomainError::InvalidContainer("DSP0 is not a map"));
+    };
+    let chain = dsp_entries
+        .iter_mut()
+        .find(|(key, _)| key.as_u64() == Some(DSP_CHAIN))
+        .map(|(_, value)| value)
+        .ok_or(DomainError::InvalidContainer("preset has no chain"))?;
+    let Value::Array {
+        items: chain_items, ..
+    } = chain
+    else {
+        return Err(DomainError::InvalidContainer("chain is not an array"));
+    };
+    if from >= chain_items.len() || to >= chain_items.len() {
+        return Err(DomainError::InvalidContainer("chain index out of range"));
+    }
+    let raw_class =
+        |index: usize, items: &[Value]| items[index].get_u64(ENTRY_CLASS).and_then(Value::as_u64);
+    for index in [from, to] {
+        match raw_class(index, chain_items) {
+            Some(CLASS_INPUT | CLASS_OUTPUT) => {
+                return Err(DomainError::InvalidContainer(
+                    "the input and output stages cannot be moved",
+                ));
+            }
+            Some(_) => {}
+            None => {
+                return Err(DomainError::InvalidContainer("chain entry has no class"));
+            }
+        }
+    }
+    move_in_place(chain_items, from, to);
+
+    // Snapshot enable lists use the same raw indices.
+    if let Some((
+        _,
+        Value::Map {
+            entries: snap_entries,
+            ..
+        },
+    )) = entries
+        .iter_mut()
+        .find(|(key, _)| key.as_u64() == Some(BODY_SNAPSHOTS))
+    {
+        if let Some((_, Value::Array { items: snaps, .. })) = snap_entries
+            .iter_mut()
+            .find(|(key, _)| key.as_u64() == Some(SNAPS_LIST))
+        {
+            for snapshot in snaps.iter_mut() {
+                let Value::Map {
+                    entries: s_entries, ..
+                } = snapshot
+                else {
+                    continue;
+                };
+                let Some((_, Value::Array { items, .. })) = s_entries
+                    .iter_mut()
+                    .find(|(key, _)| key.as_u64() == Some(SNAP_ENABLES))
+                else {
+                    continue;
+                };
+                move_in_place(items, from, to);
+            }
+        }
+    }
+
+    // Footswitch assignments store the target block index; remap, don't reorder.
+    let footswitch = entries
+        .iter_mut()
+        .find(|(key, _)| key.as_u64() == Some(BODY_FOOTSWITCH))
+        .map(|(_, node)| node);
+    if let Some(Value::Map {
+        entries: fs_entries,
+        ..
+    }) = footswitch
+    {
+        let groups = fs_entries
+            .iter_mut()
+            .find(|(key, _)| key.as_u64() == Some(FS_GROUPS))
+            .map(|(_, node)| node);
+        if let Some(Value::Array { items: groups, .. }) = groups {
+            for group in groups.iter_mut() {
+                let Value::Array {
+                    items: switches, ..
+                } = group
+                else {
+                    continue;
+                };
+                for assignment in switches.iter_mut() {
+                    let Value::Map {
+                        entries: a_entries, ..
+                    } = assignment
+                    else {
+                        continue;
+                    };
+                    let target = a_entries
+                        .iter_mut()
+                        .find(|(key, _)| key.as_u64() == Some(FS_TARGET))
+                        .map(|(_, node)| node);
+                    let Some(Value::Map {
+                        entries: t_entries, ..
+                    }) = target
+                    else {
+                        continue;
+                    };
+                    let block = t_entries
+                        .iter_mut()
+                        .find(|(key, _)| key.as_u64() == Some(FST_BLOCK))
+                        .map(|(_, node)| node);
+                    if let Some(node) = block {
+                        if let Some(value) = node.as_u64() {
+                            *node = Value::uint(remap_chain_index(value, from as u64, to as u64));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // `body[6][98]` tracks the selected block; the official editor points it at
+    // the moved block's new slot.
+    let selection = entries
+        .iter_mut()
+        .find(|(key, _)| key.as_u64() == Some(6))
+        .map(|(_, node)| node);
+    if let Some(Value::Map {
+        entries: sel_entries,
+        ..
+    }) = selection
+    {
+        if let Some((_, slot)) = sel_entries
+            .iter_mut()
+            .find(|(key, _)| key.as_u64() == Some(98))
+        {
+            *slot = Value::uint(to as u64);
+        }
+    }
+
+    // Both captured op-21 bodies carry a 128-NUL scratch list under key 12.
+    if !entries.iter().any(|(key, _)| key.as_u64() == Some(12)) {
+        let scratch = (0..128)
+            .map(|_| Value::str_bytes(vec![0]))
+            .collect::<Vec<_>>();
+        entries.push((Value::uint(12), Value::array(scratch)));
+    }
+
+    container.to_bytes_recomputed()
+}
 
 /// A parsed `l6-helix` container that preserves every original byte.
 #[derive(Debug, Clone, PartialEq)]
@@ -234,6 +479,79 @@ impl Container {
     /// the table still matches the body.
     pub fn body_mut(&mut self) -> &mut Value {
         &mut self.body
+    }
+
+    /// Re-encode the container with a freshly computed offset table.
+    ///
+    /// [`Container::to_bytes`] keeps the original table, which is only correct
+    /// while the body's byte layout is unchanged. Editing the body changes the
+    /// offsets of later top-level keys, so edited containers must be encoded
+    /// with this method instead.
+    ///
+    /// The table rule is the one observed in every captured container and in
+    /// the two op-21 chain uploads (`podgo-move-effect.pcapng`):
+    ///
+    /// ```text
+    /// [body_start, off(0), off(1), off(3), off(4), off(2), off(5), off(6),
+    ///  off(7), off(10), blob_end, blob_end]
+    /// ```
+    ///
+    /// where each `off(k)` is the absolute byte offset of the top-level key
+    /// entry in the packed body (key byte first), and `body_start` is the byte
+    /// after the 61-byte magic+table prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a MessagePack error if the body cannot be encoded, or
+    /// [`DomainError::LengthOverflow`] if the table length overflows.
+    pub fn to_bytes_recomputed(&self) -> Result<Vec<u8>, DomainError> {
+        let body_bytes = msgpack::encode(&self.body)?;
+        let body_start = 10 + 3 + OFFSET_TABLE_LEN;
+        let blob_end = body_start
+            .checked_add(body_bytes.len())
+            .ok_or(DomainError::LengthOverflow)?;
+        let offsets = top_level_key_offsets(&self.body)?;
+        let mut table = Vec::with_capacity(OFFSET_TABLE_LEN);
+        table.extend_from_slice(
+            &u32::try_from(body_start)
+                .map_err(|_| DomainError::LengthOverflow)?
+                .to_le_bytes(),
+        );
+        for key in BLOB_TABLE_KEYS {
+            let offset = offsets
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, offset)| body_start + offset)
+                .unwrap_or(blob_end);
+            table.extend_from_slice(
+                &u32::try_from(offset)
+                    .map_err(|_| DomainError::LengthOverflow)?
+                    .to_le_bytes(),
+            );
+        }
+        table.extend_from_slice(
+            &u32::try_from(blob_end)
+                .map_err(|_| DomainError::LengthOverflow)?
+                .to_le_bytes(),
+        );
+        table.extend_from_slice(
+            &u32::try_from(blob_end)
+                .map_err(|_| DomainError::LengthOverflow)?
+                .to_le_bytes(),
+        );
+
+        let mut out = Vec::with_capacity(body_start + body_bytes.len());
+        out.push(0xa9);
+        out.extend_from_slice(&self.magic);
+        out.push(0xda);
+        out.extend_from_slice(
+            &u16::try_from(table.len())
+                .map_err(|_| DomainError::LengthOverflow)?
+                .to_be_bytes(),
+        );
+        out.extend_from_slice(&table);
+        out.extend_from_slice(&body_bytes);
+        Ok(out)
     }
 
     /// Raw offset table.
@@ -631,6 +949,58 @@ mod tests {
     fn fixture_round_trips_byte_identically() {
         let container = Container::parse(FIXTURE).expect("fixture parses");
         assert_eq!(container.to_bytes().unwrap(), FIXTURE);
+    }
+
+    #[test]
+    fn recomputed_table_reproduces_the_captured_container() {
+        let container = Container::parse(FIXTURE).expect("fixture parses");
+        assert_eq!(container.to_bytes_recomputed().unwrap(), FIXTURE);
+    }
+
+    #[test]
+    fn move_chain_entry_reorders_the_chain_and_remaps_references() {
+        let preset = Container::parse_preset(FIXTURE).unwrap();
+        let before: Vec<u64> = preset
+            .chain
+            .iter()
+            .map(|entry| match entry {
+                ChainEntry::Block(block) => u64::from(block.model_id),
+                _ => 0,
+            })
+            .collect();
+        // Move raw slot 3 to raw slot 5 (the fixture has a block in 3).
+        let moved = move_chain_entry(FIXTURE, 3, 5).expect("move applies");
+        let after = Container::parse_preset(&moved).unwrap();
+        let models: Vec<u64> = after
+            .chain
+            .iter()
+            .map(|entry| match entry {
+                ChainEntry::Block(block) => u64::from(block.model_id),
+                _ => 0,
+            })
+            .collect();
+        assert_eq!(models[3], before[4]);
+        assert_eq!(models[4], before[5]);
+        assert_eq!(models[5], before[3]);
+        assert_eq!(after.chain.len(), preset.chain.len());
+        // Every footswitch target now points at an existing block and the
+        // remapped values follow the same splice rule.
+        let expected: Vec<u64> = preset
+            .footswitches
+            .iter()
+            .map(|fs| remap_chain_index(fs.block, 3, 5))
+            .collect();
+        let actual: Vec<u64> = after.footswitches.iter().map(|fs| fs.block).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn move_chain_entry_refuses_the_input_and_output_stages() {
+        let preset = Container::parse_preset(FIXTURE).unwrap();
+        let output = preset.chain.len() - 1;
+        assert!(move_chain_entry(FIXTURE, 0, 3).is_err());
+        assert!(move_chain_entry(FIXTURE, 3, output).is_err());
+        assert!(move_chain_entry(FIXTURE, 3, 99).is_err());
     }
 
     #[test]
