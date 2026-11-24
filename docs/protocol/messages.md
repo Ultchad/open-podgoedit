@@ -21,7 +21,10 @@ device) or `D→H`.
 | SET_PARAM | H→D | Parameter edit | op 30 | status `103` | status ≠ 0 | S |
 | SET_MODEL | H→D | Model swap | op 40 | status `103` | status ≠ 0 | S |
 | SAVE_PRESET | H→D | Save | op 71 | status `103` | status ≠ 0 | S |
-| SNAPSHOT | H→D | Snapshot select | op 88 | status `103` | status ≠ 0 | S |
+| SNAPSHOT | H→D | Snapshot select | op 88, `{92: index}` | status `103` | status ≠ 0 | C |
+| SNAPSHOT_RENAME | H→D | Snapshot label | op 89, `{92: index, 109: "<name>\0"}` | status `103` + `105:43` | status ≠ 0 | C |
+| SNAPSHOT_LED | H→D | Snapshot LED colour | op 98, `{92: index, 66: palette}` | status `103` + `105:48` | status ≠ 0 | C |
+| SNAPSHOT_PARAM | H→D | Parameter → Snapshots controller | op 37, `{98: block, 29: true, 26: 0, 28: param, 74: 11, 71: param}` | status `103` + `105:34` | status ≠ 0 | C |
 | CHAIN_BLOB | H→D | Full chain write | op 21 | status `103` ∈ {0,1} | status ∉ {0,1} | S |
 
 ## 2. Body keys
@@ -67,7 +70,9 @@ session, and every change is confirmed. See [writes.md](writes.md).
 
 The following messages remain **encoded and unit-tested but never sent**:
 
-CHANGE_PRESET, SET_MODEL, SAVE_PRESET, SNAPSHOT, CHAIN_BLOB.
+CHANGE_PRESET, SET_MODEL, SAVE_PRESET, SNAPSHOT, SNAPSHOT_RENAME,
+SNAPSHOT_LED, SNAPSHOT_PARAM, CHAIN_BLOB. See writes.md §2.5c for the captured
+frames and their confirmation events.
 
 They are compiled behind `#[cfg(feature = "device-write")]` and are disabled by
 default.

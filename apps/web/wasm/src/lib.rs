@@ -14,7 +14,7 @@ pub use backup::{verify_backup, BackupBuilder, RestoreFlow};
 pub use preset::{preset_structure, PresetFlow};
 pub use write::{
     BypassFlow, ChainWriteFlow, ModelWriteFlow, ParamWriteFlow, RecallFlow, RemoveEffectFlow,
-    SavePresetFlow,
+    SavePresetFlow, SnapshotFlow,
 };
 
 use podgo_domain::preset_list::scan_preset_entries;

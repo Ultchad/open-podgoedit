@@ -81,4 +81,5 @@ export {
   RemoveEffectFlow,
   RestoreFlow,
   SavePresetFlow,
+  SnapshotFlow,
 } from './wasm/podgo_wasm.js';

@@ -389,6 +389,212 @@ pub fn encode_set_bypass(
     build_write_command(&body_bytes, seq, cursor)
 }
 
+/// Recall one of the four snapshots (operation 88).
+///
+/// Captured in `podgo-snapshots.pcapng` (2026-11-24) as
+/// `{102: txn, 100: 88, 101: {92: index}}`, answered by status **0** and the
+/// `105:42`/`105:46` notifications. The index is 0-based.
+pub const OP_SNAPSHOT_RECALL: u64 = 88;
+
+/// Rename one snapshot (operation 89).
+///
+/// Captured as `{102: txn, 100: 89, 101: {92: index, 109: "<name>\0"}}`,
+/// answered by status **0** and the `105:43` notification echoing the name.
+pub const OP_SNAPSHOT_RENAME: u64 = 89;
+
+/// Set one snapshot's footswitch LED palette index (operation 98).
+///
+/// Captured as `{102: txn, 100: 98, 101: {92: index, 66: palette}}`, answered
+/// by status **0** and the `105:48` notification.
+pub const OP_SNAPSHOT_LED_COLOR: u64 = 98;
+
+/// Assign a parameter to the Snapshots controller (operation 37).
+///
+/// Captured as
+/// `{102: txn, 100: 37, 101: {98: block, 29: true, 26: 0, 28: param, 74: 11, 71: param}}`,
+/// answered by status **0**, a `105:34` controller notification and a
+/// parameter readback. Key `74` is the controller number; the captured pedal
+/// reports **11** for Snapshots (the `.pgp` document uses `10`).
+pub const OP_SNAPSHOT_PARAM: u64 = 37;
+
+/// Wire controller number the pedal reports for the Snapshots controller.
+///
+/// `podgo-snapshots.pcapng` answers op 37 with
+/// `{0: 11, 1: <param>, 5: <block>}`, so the on-wire number is `11`. Line 6
+/// `.hlx`/`.pgp` documents use `10` for the same controller; the page keeps
+/// documents at `10` and translates at the device boundary.
+pub const SNAPSHOT_CONTROLLER_WIRE: u64 = 11;
+
+/// Longest snapshot label the pedal's Rename Snapshot screen accepts.
+pub const MAX_SNAPSHOT_NAME_BYTES: usize = 10;
+
+/// Validate a snapshot label: printable ASCII, at most 10 bytes, or empty.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidFrame`] for a control byte, a non-ASCII
+/// byte or a label longer than [`MAX_SNAPSHOT_NAME_BYTES`].
+pub fn validate_snapshot_name(name: &str) -> Result<(), ProtocolError> {
+    if name.len() > MAX_SNAPSHOT_NAME_BYTES {
+        return Err(ProtocolError::InvalidFrame(
+            "snapshot name is longer than 10 bytes",
+        ));
+    }
+    if let Some(byte) = name.bytes().find(|byte| !(0x20..=0x7e).contains(byte)) {
+        return Err(ProtocolError::InvalidFrame(if byte < 0x20 {
+            "snapshot name contains a control byte"
+        } else {
+            "snapshot name contains a non-ASCII byte"
+        }));
+    }
+    Ok(())
+}
+
+fn validate_snapshot_index(index: u32) -> Result<(), ProtocolError> {
+    if index >= 4 {
+        return Err(ProtocolError::InvalidFrame("snapshot index is above 3"));
+    }
+    Ok(())
+}
+
+fn encode_snapshot_body(
+    operation: u64,
+    params: Vec<(Value, Value)>,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    let body = Value::map(vec![
+        (Value::uint(102), Value::uint(transaction)),
+        (Value::uint(100), Value::uint(operation)),
+        (Value::uint(101), Value::map(params)),
+    ]);
+    let body_bytes = msgpack::encode(&body)?;
+    build_write_command(&body_bytes, seq, cursor)
+}
+
+/// Build a snapshot-recall frame (operation 88).
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidFrame`] when `index` is above 3.
+pub fn encode_snapshot_recall(
+    index: u32,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    validate_snapshot_index(index)?;
+    encode_snapshot_body(
+        OP_SNAPSHOT_RECALL,
+        vec![(Value::uint(92), Value::uint(u64::from(index)))],
+        transaction,
+        seq,
+        cursor,
+    )
+}
+
+/// Build a snapshot-rename frame (operation 89).
+///
+/// The encoder appends the NUL the pedal stores, like `save_preset`.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidFrame`] for an index above 3 or an invalid
+/// name, and a MessagePack error when encoding fails.
+pub fn encode_snapshot_rename(
+    index: u32,
+    name: &str,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    validate_snapshot_index(index)?;
+    validate_snapshot_name(name)?;
+    let mut name_bytes = name.as_bytes().to_vec();
+    name_bytes.push(0);
+    encode_snapshot_body(
+        OP_SNAPSHOT_RENAME,
+        vec![
+            (Value::uint(92), Value::uint(u64::from(index))),
+            (Value::uint(109), Value::str_bytes(name_bytes)),
+        ],
+        transaction,
+        seq,
+        cursor,
+    )
+}
+
+/// Build a snapshot LED-colour frame (operation 98).
+///
+/// `palette` is the index documented for the LED menu: `0` Auto, `1` White,
+/// … `11` Off.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidFrame`] for an index above 3 or a palette
+/// index above 11.
+pub fn encode_snapshot_led_color(
+    index: u32,
+    palette: u32,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    validate_snapshot_index(index)?;
+    if palette > 11 {
+        return Err(ProtocolError::InvalidFrame(
+            "snapshot LED palette is above 11",
+        ));
+    }
+    encode_snapshot_body(
+        OP_SNAPSHOT_LED_COLOR,
+        vec![
+            (Value::uint(92), Value::uint(u64::from(index))),
+            (Value::uint(66), Value::uint(u64::from(palette))),
+        ],
+        transaction,
+        seq,
+        cursor,
+    )
+}
+
+/// Build a parameter-to-snapshot assignment frame (operation 37).
+///
+/// `block` is the raw chain index (input is `0`) and `param` the catalog
+/// position. `assigned` maps to key `29`; the captured editor only shows the
+/// assigning direction (`true`), so removal is not sent to the pedal yet.
+///
+/// # Errors
+///
+/// Returns a MessagePack error when encoding fails.
+pub fn encode_snapshot_param(
+    block: u32,
+    param: u32,
+    assigned: bool,
+    transaction: u64,
+    seq: u8,
+    cursor: u32,
+) -> Result<Vec<u8>, ProtocolError> {
+    encode_snapshot_body(
+        OP_SNAPSHOT_PARAM,
+        vec![
+            (Value::uint(98), Value::uint(u64::from(block))),
+            (Value::uint(29), Value::Bool(assigned)),
+            (Value::uint(26), Value::uint(0)),
+            (Value::uint(28), Value::uint(u64::from(param))),
+            (
+                Value::uint(74),
+                Value::uint(SNAPSHOT_CONTROLLER_WIRE),
+            ),
+            (Value::uint(71), Value::uint(u64::from(param))),
+        ],
+        transaction,
+        seq,
+        cursor,
+    )
+}
+
 /// Build one half of the remove-effect pair (operations 28 and 78).
 ///
 /// `commit` selects operation 78; `false` selects operation 28.
@@ -912,6 +1118,67 @@ mod tests {
             "00 00 00"
         );
         assert_eq!(hex(&frame), expected);
+    }
+
+    #[test]
+    fn snapshot_frames_match_the_captured_editor_frames() {
+        // POD Go Edit, fw 2.50, `podgo-snapshots.pcapng` (2026-11-24).
+        let recall = encode_snapshot_recall(0, 1006, 0x1f, 0x1efd).unwrap();
+        assert_eq!(
+            hex(&recall),
+            concat!(
+                "1b 00 00 18 80 10 ed 03 00 1f 00 04 fd 1e 00 00 ",
+                "01 00 06 00 0b 00 00 00 ",
+                "83 66 cd 03 ee 64 58 65 81 5c 00 ",
+                "00"
+            )
+        );
+
+        let rename = encode_snapshot_rename(0, "test1", 1013, 0x51, 0x2df8).unwrap();
+        assert_eq!(
+            hex(&rename),
+            concat!(
+                "23 00 00 18 80 10 ed 03 00 51 00 04 f8 2d 00 00 ",
+                "01 00 06 00 13 00 00 00 ",
+                "83 66 cd 03 f5 64 59 65 82 5c 00 6d a6 74 65 73 74 31 00 ",
+                "00"
+            )
+        );
+
+        let color = encode_snapshot_led_color(0, 3, 1014, 0x56, 0x2e09).unwrap();
+        assert_eq!(
+            hex(&color),
+            concat!(
+                "1d 00 00 18 80 10 ed 03 00 56 00 04 09 2e 00 00 ",
+                "01 00 06 00 0d 00 00 00 ",
+                "83 66 cd 03 f6 64 62 65 82 5c 00 42 03 ",
+                "00 00 00"
+            )
+        );
+
+        let assign = encode_snapshot_param(3, 0, true, 1008, 0x38, 0x2d3d).unwrap();
+        assert_eq!(
+            hex(&assign),
+            concat!(
+                "25 00 00 18 80 10 ed 03 00 38 00 04 3d 2d 00 00 ",
+                "01 00 06 00 15 00 00 00 ",
+                "83 66 cd 03 f0 64 25 65 86 62 03 1d c3 1a 00 1c 00 4a 0b 47 00 ",
+                "00 00 00"
+            )
+        );
+    }
+
+    #[test]
+    fn snapshot_encoders_reject_out_of_range_values() {
+        assert!(encode_snapshot_recall(4, 1, 5, 0).is_err());
+        assert!(encode_snapshot_rename(0, "elevenchars", 1, 5, 0).is_err());
+        assert!(encode_snapshot_rename(0, "line\nbreak", 1, 5, 0).is_err());
+        assert!(encode_snapshot_rename(0, "caf\u{e9}", 1, 5, 0).is_err());
+        assert!(encode_snapshot_led_color(0, 12, 1, 5, 0).is_err());
+        assert!(validate_snapshot_name("").is_ok());
+        assert!(validate_snapshot_name("1234567890").is_ok());
+        assert!(validate_snapshot_name("Snapshot 12").is_err());
+        assert_eq!(SNAPSHOT_CONTROLLER_WIRE, 11);
     }
 
     #[test]

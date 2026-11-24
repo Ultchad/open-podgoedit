@@ -17,6 +17,7 @@ import {
   RecallFlow,
   RemoveEffectFlow,
   SavePresetFlow,
+  SnapshotFlow,
 } from '../wasmClient';
 import { PodgoUsbError, type PodgoConnection } from './podgoUsb';
 
@@ -374,6 +375,123 @@ export async function recallPreset(
       }
     },
     'Rappel du preset',
+    onProgress,
+  );
+}
+
+/**
+ * Recall one snapshot on the pedal (operation 88).
+ *
+ * Captured from POD Go Edit in `podgo-snapshots.pcapng` (2026-11-24): the
+ * pedal answers status `0`, then sends the `105:42` and `105:46` snapshot
+ * notifications. The index is 0-based.
+ */
+export async function recallSnapshot(
+  device: PodgoConnection,
+  index: number,
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () => {
+      try {
+        return SnapshotFlow.recall(index, (transactionCounter += 1));
+      } catch (error) {
+        throw new PodgoUsbError(
+          `rappel de snapshot impossible: ${messageOf(error)}`,
+        );
+      }
+    },
+    `Rappel du snapshot ${index + 1}`,
+    onProgress,
+  );
+}
+
+/**
+ * Rename one snapshot (operation 89).
+ *
+ * `name` is at most 10 printable ASCII bytes; the encoder appends the NUL the
+ * pedal stores. The pedal answers status `0` and the `105:43` notification.
+ * The label is applied live; Save (op 71) is what stores it in the setlist.
+ */
+export async function renameSnapshot(
+  device: PodgoConnection,
+  request: { index: number; name: string },
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () => {
+      try {
+        return SnapshotFlow.rename(
+          request.index,
+          request.name,
+          (transactionCounter += 1),
+        );
+      } catch (error) {
+        throw new PodgoUsbError(
+          `renommage de snapshot impossible: ${messageOf(error)}`,
+        );
+      }
+    },
+    `Renommage du snapshot ${request.index + 1}`,
+    onProgress,
+  );
+}
+
+/**
+ * Set one snapshot's LED palette entry (operation 98).
+ *
+ * `palette` is `0` Auto … `11` Off. The pedal answers status `0` and the
+ * `105:48` notification.
+ */
+export async function setSnapshotLedColor(
+  device: PodgoConnection,
+  request: { index: number; palette: number },
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () => {
+      try {
+        return SnapshotFlow.ledColor(
+          request.index,
+          request.palette,
+          (transactionCounter += 1),
+        );
+      } catch (error) {
+        throw new PodgoUsbError(
+          `couleur de snapshot impossible: ${messageOf(error)}`,
+        );
+      }
+    },
+    `Couleur du snapshot ${request.index + 1}`,
+    onProgress,
+  );
+}
+
+/**
+ * Assign one parameter to the Snapshots controller (operation 37).
+ *
+ * `block` is the raw chain index and `param` the catalog position. The pedal
+ * answers status `0` followed by an op-34 controller notification; only the
+ * assigning direction has a capture.
+ */
+export async function assignSnapshotParam(
+  device: PodgoConnection,
+  request: { block: number; param: number; assigned: boolean },
+  onProgress?: (message: string) => void,
+): Promise<WriteResult> {
+  return driveWriteFlow(
+    device,
+    () =>
+      SnapshotFlow.param(
+        request.block,
+        request.param,
+        request.assigned,
+        (transactionCounter += 1),
+      ),
+    `Contrôle snapshots du block ${request.block}`,
     onProgress,
   );
 }

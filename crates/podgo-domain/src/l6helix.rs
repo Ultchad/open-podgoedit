@@ -529,13 +529,24 @@ impl Container {
                     .to_le_bytes(),
             );
         }
+        // The last two entries point at the end of the *tracked* body. The
+        // official op-21 uploads (`podgo-move-effect.pcapng`, both bodies)
+        // append the synthetic 128-NUL scratch list under key 12 **after**
+        // computing the table, so their end pointers stop where key 12
+        // starts, 260 bytes before the physical end. Pointing past the
+        // scratch list is the one structural difference between this
+        // encoder and the captured editor; match the capture.
+        let table_end = offsets
+            .iter()
+            .find(|(key, _)| *key == 12)
+            .map_or(blob_end, |(_, offset)| body_start + offset);
         table.extend_from_slice(
-            &u32::try_from(blob_end)
+            &u32::try_from(table_end)
                 .map_err(|_| DomainError::LengthOverflow)?
                 .to_le_bytes(),
         );
         table.extend_from_slice(
-            &u32::try_from(blob_end)
+            &u32::try_from(table_end)
                 .map_err(|_| DomainError::LengthOverflow)?
                 .to_le_bytes(),
         );
@@ -955,6 +966,33 @@ mod tests {
     fn recomputed_table_reproduces_the_captured_container() {
         let container = Container::parse(FIXTURE).expect("fixture parses");
         assert_eq!(container.to_bytes_recomputed().unwrap(), FIXTURE);
+    }
+
+    /// One op-21 upload from `podgo-move-effect.pcapng` (official editor,
+    /// fw 2.50). It carries the synthetic 128-NUL scratch list under key 12
+    /// and its offset table stops at that key, not at the physical end.
+    const CAPTURED_OP21: &[u8] = include_bytes!("../../../fixtures/op21_move_capture_fw250.bin");
+
+    #[test]
+    fn recomputed_table_reproduces_the_captured_op21_body() {
+        let container = Container::parse(CAPTURED_OP21).expect("captured body parses");
+        assert_eq!(container.to_bytes_recomputed().unwrap(), CAPTURED_OP21);
+
+        // The last two table entries are the start of key 12, which is 260 B
+        // before the end of the capture (the scratch list itself).
+        let table_len = usize::from(u16::from_be_bytes([CAPTURED_OP21[11], CAPTURED_OP21[12]]));
+        let table_end = 13 + table_len;
+        let last = u32::from_le_bytes(
+            CAPTURED_OP21[table_end - 8..table_end - 4]
+                .try_into()
+                .unwrap(),
+        );
+        assert!(usize::try_from(last).unwrap() < CAPTURED_OP21.len());
+        assert_eq!(
+            usize::try_from(last).unwrap(),
+            CAPTURED_OP21.len() - 260,
+            "the captured table ends where key 12 starts"
+        );
     }
 
     #[test]

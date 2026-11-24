@@ -269,12 +269,16 @@ test('opens effect actions from right-click, long-press and the inspector', asyn
   await page.keyboard.press('Escape');
 
   // The inspector ⋯ button opens it too, focuses the first item, and Escape
-  // returns focus to the button.
+  // returns focus to the button. Arrow keys only reach the enabled items, and
+  // the pedal move is disabled since it crashed the pedal on 2026-11-24.
   await page.locator('.inspector-more').click();
   await expect(menu).toBeVisible();
   await expect(page.locator('#block-menu-copy')).toBeFocused();
   await page.keyboard.press('ArrowDown');
-  await expect(page.locator('#block-menu-move-right')).toBeFocused();
+  await expect(page.locator('#block-menu-move-right')).toBeDisabled();
+  await expect(page.locator('#block-menu-move-right')).toContainText(
+    'crashes the pedal',
+  );
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
   await expect(page.locator('.inspector-more')).toBeFocused();
