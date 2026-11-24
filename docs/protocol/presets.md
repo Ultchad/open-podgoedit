@@ -129,11 +129,19 @@ Confirmed shape (schema `L6Preset`, version 6):
   parameters, like the rest of the JSON export.
 - `@ledcolor` is a palette index, not RGB: `0` Auto, `1` White, `2` Red,
   `3` Dark Orange, `4` Light Orange, `5` Yellow, `6` Green, `7` Turquoise,
-  `8` Blue, `9` Violet, `10` Pink, `11` Off.
+  `8` Blue, `9` Violet, `10` Pink, `11` Off. The pedal takes the same index in
+  operation 98 (`{66: palette}`, captured 2026-11-24).
+- `global.@pedal_snapshot` (written by this editor only) records the snapshot
+  the pedal last reported after an operation-88 recall, so the document keeps
+  "what the editor shows" (`@current_snapshot`) apart from "what the pedal
+  plays". The vendor editor writes `@current_snapshot` alone.
 - The Snapshots controller number (`@controller`) is `10` in Line 6 `.hlx`
-  files. POD Go uses the same controller table, but a POD Go hardware capture
-  is still missing, so `10` is **ITM** here; controllers `1`/`2` are EXP 1/2
-  and are evidenced by the `.pgp` fixtures.
+  files. `podgo-snapshots.pcapng` (2026-11-24) shows the pedal itself using
+  **`11`** on the wire (op 37 `{74: 11}`, op-34 `{0: 11, 5: block}`), so a
+  preset read back from the pedal carries `11`. Both numbers name the same
+  controller (`SNAPSHOT_CONTROLLER` / `SNAPSHOT_CONTROLLER_WIRE` in the page);
+  documents written here keep `10`. Controllers `1`/`2` are EXP 1/2 and are
+  evidenced by the `.pgp` fixtures.
 - `device_version` is packed BCD: `0x02500000` reads as firmware `2.50`.
 
 ## 6. `.pgb` backup
