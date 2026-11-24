@@ -1,5 +1,9 @@
 import init, {
+  build_event_ack_frame,
+  build_event_poll_frame,
   core_version as wasmCoreVersion,
+  decode_event_json,
+  event_frame_advance,
   inspect_preset,
   inspect_setlist,
   move_chain_entry as wasmMoveChainEntry,
@@ -49,6 +53,45 @@ export function setlistEntries(bytes: Uint8Array): unknown {
 
 export function coreVersion(): string {
   return wasmCoreVersion();
+}
+
+/** One decoded event-channel notification. */
+export interface PedalEvent {
+  /** Event opcode (key 105). */
+  opcode: number;
+  /** Unwrapped payload (key 106, envelope removed); `null` for op 21/49. */
+  payload: Record<string, unknown> | null;
+}
+
+/**
+ * Decode one event-channel frame.
+ *
+ * Returns `null` for a malformed frame instead of throwing: a bad burst must
+ * not stop live synchronisation.
+ */
+export function decodeEvent(bytes: Uint8Array): PedalEvent | null {
+  const parsed = JSON.parse(decode_event_json(bytes)) as
+    | PedalEvent
+    | { error: string };
+  if ('error' in parsed) {
+    return null;
+  }
+  return parsed;
+}
+
+/** Build one event-channel poll (`cmd=0x10`). */
+export function eventPollFrame(seq: number, cursor: number): Uint8Array {
+  return build_event_poll_frame(seq, cursor);
+}
+
+/** Build one event-channel acknowledgement (`cmd=0x08`). */
+export function eventAckFrame(seq: number, cursor: number): Uint8Array {
+  return build_event_ack_frame(seq, cursor);
+}
+
+/** Cursor advance for one event data frame, or 0 when malformed. */
+export function eventFrameAdvance(bytes: Uint8Array): number {
+  return event_frame_advance(bytes);
 }
 
 /** Verify a `.pgbak` file in Rust and return its metadata and digest. */

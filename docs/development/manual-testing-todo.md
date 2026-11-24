@@ -906,6 +906,37 @@ setlists puis le preset actif), ouvrir **Developer tools** pour voir le journal.
       copie hors ligne peut le faire (aucune capture du retrait).
 - [ ] Sur le **pédalier**, changer de snapshot : l'éditeur doit suivre.
 
+9. Synchronisation pédalier → éditeur (canal d'événements)
+> Le journal doit afficher `Live sync: event channel open` juste après la
+> connexion (`docs/protocol/notifications.md` §5). Si le handshake ou la
+> première requête de sondage échoue, le message
+> `WARNING live sync unavailable` s'affiche et **Read active preset** reste la
+> solution de secours.
+
+- [ ] Tourner un potentiomètre **sur le pédalier** : la valeur bouge dans
+      l'inspecteur en moins d'une seconde, journal
+      `Pedal: block N parameter M = …`.
+- [ ] Activer/désactiver un effet au pied : l'inspecteur suit,
+      journal `Pedal: block N enabled/bypassed`.
+- [ ] Changer de snapshot **sur le pédalier** : la puce active suit et le
+      journal note `Pedal: snapshot N is active`, puis relit le preset actif.
+- [ ] Changer de preset **sur le pédalier** : nom et chaîne suivent.
+- [ ] Renommer un snapshot **sur le pédalier** : le libellé de la puce suit.
+- [ ] Débrancher : le polling s'arrête, aucune erreur en boucle.
+
+10. Renommage direct (sans copie hors ligne)
+- [ ] Preset actif, menu ⋯ → **Rename…** : un seul champ de nom, journal
+      `Rename verified: User …`, et le nom reste après avoir rappelé un autre
+      preset puis être revenu (op 71).
+- [ ] Slot User **non actif**, clic droit → **Rename…** : journal
+      `Renaming User … (recall, operation 71, then restore …)`, puis
+      `Rename verified`. Le pédalier doit revenir sur le preset qu'il jouait.
+- [ ] Avec des modifications non enregistrées, le même renommage d'un slot non
+      actif doit d'abord proposer `save / no / Cancel` ; `Cancel` ne doit
+      envoyer **aucune** trame.
+- [ ] Renommer une **copie hors ligne** : le nom ne part pas au pédalier et le
+      slot reste marqué comme brouillon.
+
 **Résultat :** à compléter (date, firmware, opérations, écarts, statuts refusés).
 
 ### 3.15 Édition hors ligne (rappel)

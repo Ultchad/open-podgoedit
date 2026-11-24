@@ -133,19 +133,53 @@ Bursts observed, in capture order:
 Confidence: C for the opcode↔action mapping on fw 2.50; the semantics of `1`,
 `20`, `40`, `41` and the field ids inside `34` remain H.
 
-## 5. Sync semantics
+## 5. Page behaviour (live sync)
 
-- `set_param`, `bypass_state`, `snapshot`, `tempo` update the active preset view.
-- `preset_loaded` invalidates the cached active preset and triggers a re-read.
-- Unknown opcodes are surfaced as `Unknown { op, data }` and never dropped.
+The web editor opens the event channel after the connect-time reads and polls
+it in the background (`apps/web/src/usb/events.ts`,
+`App.startLiveSync`). Every data frame is acknowledged before the next poll,
+so a burst is drained without loss and the cursor stays in step.
+
+| Op | Page action |
+|---|---|
+| `30` | write the parameter value into the active preset view |
+| `49` | write the block's enabled flag into the active preset view |
+| `42`, `46` | select the snapshot, then re-read the active preset |
+| `4`, `8` | detect a preset change, then re-read the active preset |
+| `6` | update the preset name in the view and the User setlist |
+| `22` | update tempo when field `16` is present |
+| `43`, `48` | update the snapshot name / LED colour |
+
+Snapshot changes replace several parameter values at once, and the device
+structure does not carry per-snapshot values (only name/valid/tempo), so
+`42`/`46` and preset changes schedule a debounced re-read of object 22. The
+same re-read is scheduled after the page itself recalls a snapshot with
+operation 88. The re-read is skipped while an offline copy is open, because
+replacing its structure would discard the draft.
+
+One burst produces one re-read: a 300 ms debounce coalesces the `8`, `22`,
+`39`, `4` sequence that follows a preset change.
 
 ## 6. Conflict handling
 
-If a local edit targets the same block/param as an incoming event, the UI must
-prompt the user. Incoming events never silently overwrite local edits.
+The pedal is the authority while live sync is on: an incoming event for a
+block/parameter replaces the page value, including a value the page was
+editing. There is no confirmation pop-up (user request: only Save and the
+leaving-preset prompt are dialogs). The page marks the preset as having
+unsaved changes when *it* writes live, and the pedal's own edits do not dirty
+the page because they are already active on the pedal.
 
 ## 7. Failure behaviour
 
-- Malformed event: log, increment a counter, continue polling.
-- Three consecutive poll timeouts: mark the link degraded and notify the UI.
-- Disconnect: stop polling and transition to `Disconnected`.
+- Malformed frame: decoded event is `null`, the frame is acknowledged and the
+  poll continues.
+- Probe failure: the page polls once right after the handshake (400 ms). A
+  pedal that does not answer that poll logs
+  `WARNING live sync unavailable`, live sync stays off, and **Read active
+  preset** remains the manual fallback. This is what the Android/Tauri bridges
+  do in the browser tests (they carry one reply per request), so their
+  behaviour is unchanged by live sync.
+- Poll failure after a working start: logged once, retried after one second.
+- Handshake failure: same warning, and no polling starts.
+- Poll or read error: logged, then retried after one second until disconnect.
+- Disconnect: the poll loop stops before the device handle is closed.

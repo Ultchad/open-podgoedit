@@ -1021,6 +1021,17 @@ function fakeWebUsb({
   }
 
   function responseFor(request: Uint8Array): Uint8Array | null {
+    // Event channel (0x1002 -> 0x03F0): mirror the handshake, poll and ack.
+    // A poll echo (`cmd=0x10`) ends a burst; pushed data frames are queued
+    // separately by `__podgoPushEvent`.
+    if (
+      request[4] === 0x02 &&
+      request[5] === 0x10 &&
+      request[6] === 0xf0 &&
+      request[7] === 0x03
+    ) {
+      return eventMirror(request);
+    }
     if (
       (request[4] === 0x80 && request[5] === 0x10) ||
       isChainContinuation(request)
@@ -1170,6 +1181,20 @@ function fakeWebUsb({
     return packet.length >= 8 && packet[4] === 0xf0 && packet[5] === 0x03;
   }
 
+  /** Mirror an event-channel request, keeping its command byte. */
+  function eventMirror(request: Uint8Array): Uint8Array {
+    const response = new Uint8Array(16);
+    response[0] = 0x08;
+    response[3] = 0x18;
+    response[4] = request[6];
+    response[5] = request[7];
+    response[6] = request[4];
+    response[7] = request[5];
+    response[9] = request[9];
+    response[11] = request[11];
+    return response;
+  }
+
   const device = {
     opened: false,
     vendorId: 0x0e41,
@@ -1271,6 +1296,14 @@ function fakeWebUsb({
     configurable: true,
   });
 
+  // Push one event-channel data frame as if the pedal emitted it. The live
+  // sync poll picks it up on its next read and acknowledges it.
+  (window as unknown as {
+    __podgoPushEvent?: (frame: number[]) => void;
+  }).__podgoPushEvent = (frame: number[]) => {
+    deliver(Uint8Array.from(frame));
+  };
+
   // Let another test drive the same pedal state through a different
   // transport (the Android USB bridge): one request in, the reply or `null`
   // out, both base64.
@@ -1290,6 +1323,45 @@ function fakeWebUsb({
     }
     return btoa(binary);
   };
+}
+
+/**
+ * Build one event-channel data frame carrying `{105: opcode, 106: payload}`.
+ *
+ * The fake pedal only moves bytes, so this small MessagePack encoder is enough
+ * for the live-sync tests: integer keys, fixint/number and boolean values.
+ */
+function notificationFrame(
+  opcode: number,
+  payload: Array<[number, number | boolean]>,
+): number[] {
+  const encode = (value: number | boolean): number[] => {
+    if (typeof value === 'boolean') {
+      return [value ? 0xc3 : 0xc2];
+    }
+    if (Number.isInteger(value) && value >= 0 && value < 128) {
+      return [value];
+    }
+    const buffer = new ArrayBuffer(8);
+    new DataView(buffer).setFloat64(0, value);
+    return [0xcb, ...new Uint8Array(buffer)];
+  };
+  const map = (entries: Array<[number, number | boolean]>): number[] => [
+    0x80 | entries.length,
+    ...entries.flatMap(([key, value]) => [key, ...encode(value)]),
+  ];
+  // Outer notification map `{105: opcode, 106: payload}`. The inner map is
+  // spliced in directly because its values are not plain numbers.
+  const body = [0x82, 105, ...encode(opcode), 106, ...map(payload)];
+  // Raw-window body: the decoder falls back to MessagePack at offset 16.
+  const frame = new Array<number>(16).fill(0);
+  frame[3] = 0x18;
+  frame[4] = 0xf0;
+  frame[5] = 0x03;
+  frame[6] = 0x02;
+  frame[7] = 0x10;
+  frame[11] = 0x04;
+  return frame.concat(body);
 }
 
 /**
@@ -2585,11 +2657,24 @@ test('reads a pedal through the Android USB bridge', async ({ page }) => {
   await expect(report).toContainText('setlist:   128 entries');
   await expect(report).toContainText('slot 127');
 
-  // A second read proves the transport keeps working request after request.
+  // A second read proves that manual reads still work after live sync was
+  // refused, and that they report cleanly.
   await page.locator('#read-user').click();
-  await expect(report).toContainText('slot 127');
   await expect(page.locator('.device-card .badge')).toHaveText(
     /POD Go \(fake\)/,
+  );
+  await expect(page.locator('.report.log')).toContainText(
+    'Read User setlist: 128 entries',
+  );
+  await expect(page.locator('.report.error')).toHaveCount(0);
+
+  // Live sync is not left on by mistake here: this bridge reports a single
+  // reply per request and cannot carry the pedal's event channel.
+  await expect(page.locator('.report.log')).not.toContainText(
+    'Live sync: event channel open',
+  );
+  await expect(page.locator('.report.log')).toContainText(
+    'changes made on the pedal need Read active preset',
   );
 });
 
@@ -3395,6 +3480,148 @@ test.describe('editing a connected preset on a phone viewport', () => {
  * colour (op 98) and parameter assignment (op 37). All four frames come from
  * `podgo-snapshots.pcapng` (2026-11-24, official editor, fw 2.50).
  */
+test('renames the active preset directly on the pedal', async ({ page }) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
+
+  // Rename from the header menu: no copy, no advanced dialog. The name prompt
+  // is the only dialog.
+  page.once('dialog', (dialog) => void dialog.accept('Direct Lead'));
+  await page.locator('#preset-more').click();
+  await page.locator('#menu-rename').click();
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Rename verified: User',
+  );
+  await expect(page.locator('.preset-title')).toContainText('Direct Lead');
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writes).toHaveLength(1);
+  const stored = readMsgpack(new Uint8Array(writes[0]), 24).value as {
+    [key: number]: MsgValue;
+  };
+  expect(stored[100]).toBe(71);
+  const destination = stored[101] as { [key: number]: MsgValue };
+  expect(destination[107]).toBe(1);
+  expect(destination[109]).toBe('Direct Lead\0');
+});
+
+test('renames a non-active User slot by recalling it, then restores the previous preset', async ({
+  page,
+}) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+
+  page.once('dialog', (dialog) => void dialog.accept('Lead Z'));
+  await page
+    .locator('.preset-item[data-slot="0"]')
+    .click({ button: 'right' });
+  await page.locator('#menu-rename').click();
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Rename verified: User 01A now reads "Lead Z"',
+  );
+  await expect(
+    page.locator('.preset-item[data-slot="0"] .preset-name'),
+  ).toHaveText('Lead Z');
+
+  // The pedal was recalled to slot 0, renamed there, then recalled back to
+  // the preset it was playing (slot 2 in the fake pedal's state object).
+  const recalls = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoRecall?: number[] }).__podgoRecall ?? [],
+  );
+  expect(recalls).toEqual([0, 2]);
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  const renames = writes
+    .map(
+      (frame) =>
+        readMsgpack(new Uint8Array(frame), 24).value as {
+          [key: number]: MsgValue;
+        },
+    )
+    .filter((body) => body[100] === 71);
+  expect(renames).toHaveLength(1);
+  const destination = renames[0][101] as { [key: number]: MsgValue };
+  expect(destination[108]).toBe(0);
+  expect(destination[109]).toBe('Lead Z\0');
+});
+
+test('applies pedal events to the page without re-reading', async ({ page }) => {
+  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await expect(page.locator('.report.log')).toContainText(
+    'Live sync: event channel open',
+  );
+
+  // A knob turn on the pedal (op 30): block 3, parameter 1 (Drive) = 0.5.
+  await page.locator('.block-tile').nth(2).click();
+  await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
+  await page.evaluate((frame) => {
+    (
+      window as unknown as { __podgoPushEvent?: (bytes: number[]) => void }
+    ).__podgoPushEvent?.(frame);
+  }, notificationFrame(30, [[98, 3], [28, 0], [119, 0.5]]));
+
+  await expect(page.locator('.report.log')).toContainText(
+    'Pedal: block 3 parameter 1 = 0.5',
+  );
+  const drive = page.locator('.inspector .param-row').first();
+  await expect(drive.locator('.param-name')).toHaveText('Drive');
+  await expect(drive.locator('.param-value')).toHaveText('5.0');
+
+  // A snapshot switch on the pedal (op 42): the page follows immediately.
+  await page.evaluate((frame) => {
+    (
+      window as unknown as { __podgoPushEvent?: (bytes: number[]) => void }
+    ).__podgoPushEvent?.(frame);
+  }, notificationFrame(42, [[92, 2]]));
+  await expect(page.locator('.report.log')).toContainText(
+    'Pedal: snapshot 3 is active',
+  );
+});
+
 test('recalls, renames and colours snapshots on the pedal', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
