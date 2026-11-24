@@ -2924,10 +2924,12 @@ test('sends op 41 when bypass is tapped on a connected preset', async ({
   page.once('dialog', (dialog) => void dialog.accept());
   await page.locator('#save-preset').click();
   await expect(page.locator('.report.log')).toContainText('Save: stored');
-  // Save re-reads the setlist afterwards; wait for that burst to settle.
-  await expect(page.locator('.device-report h2')).toHaveText('Setlist 1', {
-    timeout: 20_000,
-  });
+  // Save re-reads the User setlist and ends with its own verification; wait
+  // for that so a read session cannot interleave with the write count.
+  await expect(page.locator('.report.log')).toContainText(
+    /Save verified: User 01C reads "US Deluxe Nrm"|save verification/,
+    { timeout: 20_000 },
+  );
   const after = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
