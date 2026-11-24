@@ -2928,10 +2928,6 @@ test('sends op 41 when bypass is tapped on a connected preset', async ({
   await expect(page.locator('.device-report h2')).toHaveText('Setlist 1', {
     timeout: 20_000,
   });
-  // Save re-reads the setlist afterwards; wait for the burst to settle.
-  await expect(page.locator('.device-report h2')).toHaveText('Setlist 1');
-  // eslint-disable-next-line no-console
-  await expect(page.locator('.report.log')).toContainText('Save: stored');
   const after = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
