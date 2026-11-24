@@ -7,6 +7,21 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Live sync from the pedal (`0x03F0 → 0x1002`).** The editor opens the
+  captured event channel after connecting and polls it in the background, so
+  knob turns, bypass changes, snapshot switches, preset changes and snapshot
+  renames made **on the pedal** appear in the page without pressing
+  **Read active preset**. Parameter and bypass events update the inspector
+  directly; snapshot and preset events schedule one debounced re-read of the
+  active preset (the device structure has no per-snapshot values). A pedal
+  that refuses the handshake logs a warning and falls back to manual reads.
+  Not validated on hardware yet.
+- **Direct preset rename on the pedal.** The header ⋯ menu and the librarian's
+  **Rename…** now store the name with operation 71 instead of leaving a
+  page-only marker. A non-active User slot is recalled, renamed and the
+  previous preset is recalled back; this is the only rename that moves the
+  pedal's active preset and it asks the usual `save`/`no`/`Cancel` question
+  first. See `docs/protocol/writes.md` §2.8.
 - **Android app with a USB host transport.** The Android build wraps the same
   editor in a WebView that serves the bundle from the APK, so it works with no
   network, and connects the pedal through Android's USB host instead of WebUSB.
