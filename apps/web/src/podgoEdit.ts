@@ -862,7 +862,10 @@ export function structureToEditPreset(
       unknown
     >;
     block[param.n] = {
-      '@controller': assignment.controller,
+      // Documents name Snapshots `10`; a pedal read carries the wire `11`.
+      '@controller': isSnapshotController(assignment.controller)
+        ? SNAPSHOT_CONTROLLER
+        : assignment.controller,
       '@min': assignment.min,
       '@max': assignment.max,
     };
@@ -1023,15 +1026,23 @@ export function setImportedName(preset: EditPreset, name: string): void {
 }
 
 /**
- * `@controller` number used for the Snapshots controller.
+ * `@controller` number used for the Snapshots controller in documents.
  *
- * The POD Go reference implementation only has evidence for `1` (EXP 1) and
- * `2` (EXP 2); `.hlx` files use `10` for Snapshots, and the same Line 6
- * controller table is used here. This value is **ITM** for POD Go until a
- * capture from the pedal (or a POD Go Edit export with a snapshot assignment)
- * confirms it.
+ * `.hlx`/`.pgp` files use `10` for Snapshots. `podgo-snapshots.pcapng`
+ * (2026-11-24) shows the pedal itself reporting **11** on the wire when a
+ * parameter is assigned (op 37 `{74: 11}` and the op-34 notification), so a
+ * preset read back from the pedal carries `11`; both numbers name the same
+ * controller here (`isSnapshotController`).
  */
 export const SNAPSHOT_CONTROLLER = 10;
+
+/** On-wire controller number the pedal reports for Snapshots (op 37). */
+export const SNAPSHOT_CONTROLLER_WIRE = 11;
+
+/** True for either number that names the Snapshots controller. */
+export function isSnapshotController(controller: number | null | undefined): boolean {
+  return controller === SNAPSHOT_CONTROLLER || controller === SNAPSHOT_CONTROLLER_WIRE;
+}
 
 function ensureObject(
   parent: Record<string, unknown>,
@@ -1245,9 +1256,10 @@ export function setImportedSnapshotLedColor(
 /**
  * Set the loaded snapshot (`@current_snapshot`, 0-based).
  *
- * This is a JSON edit: selecting a snapshot only changes the document that
- * the next export writes. The pedal's own snapshot select (op 88) is a live
- * device command and is not used here.
+ * This only changes the document. While a pedal is connected the page recalls
+ * the snapshot with operation 88 and records the pedal's answer in
+ * `@pedal_snapshot`, so a document keeps both what the editor shows and what
+ * the pedal last reported.
  */
 export function setImportedSnapshot(preset: EditPreset, index: number): void {
   if (!Number.isInteger(index) || index < 0 || index > 3) {
@@ -1256,6 +1268,34 @@ export function setImportedSnapshot(preset: EditPreset, index: number): void {
   const global = asObject(preset.tone.global);
   if (global) {
     global['@current_snapshot'] = index;
+  }
+}
+
+/**
+ * Snapshot the **pedal** last reported, or `null`.
+ *
+ * Written when the pedal acknowledges a snapshot recall (op 88) or sends a
+ * snapshot notification. It is what the next Save (op 71) makes permanent:
+ * the pedal stores that snapshot as the one a fresh recall starts on.
+ */
+export function pedalSnapshotIndex(preset: EditPreset): number | null {
+  const value = asNumber(asObject(preset.tone.global)?.['@pedal_snapshot']);
+  return value !== null && Number.isInteger(value) && value >= 0 && value <= 3
+    ? value
+    : null;
+}
+
+/** Record the snapshot the pedal reported (see {@link pedalSnapshotIndex}). */
+export function setPedalSnapshotIndex(
+  preset: EditPreset,
+  index: number,
+): void {
+  if (!Number.isInteger(index) || index < 0 || index > 3) {
+    return;
+  }
+  const global = asObject(preset.tone.global);
+  if (global) {
+    global['@pedal_snapshot'] = index;
   }
 }
 

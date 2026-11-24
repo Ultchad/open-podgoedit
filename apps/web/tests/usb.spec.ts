@@ -85,6 +85,101 @@ function readPgbak(buffer: Buffer): {
   return { product, firmware, entries };
 }
 
+// Minimal MessagePack reader shared by the fake pedal and the assertions.
+type MsgValue =
+  | number
+  | boolean
+  | null
+  | string
+  | MsgValue[]
+  | { [key: number]: MsgValue };
+
+/** One snapshot command decoded by the fake pedal. */
+interface LooseCommand {
+  op: number | null;
+  tx: number | null;
+  fields: Record<number, MsgValue>;
+  /** Header length byte, for diagnostics only. */
+  length: number;
+}
+
+function readMsgpack(
+  data: Uint8Array,
+  start: number,
+): { value: MsgValue; next: number } {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const tag = data[start];
+  if (tag <= 0x7f) {
+    return { value: tag, next: start + 1 };
+  }
+  if (tag >= 0xe0) {
+    return { value: tag - 0x100, next: start + 1 };
+  }
+  if ((tag & 0xf0) === 0x80) {
+    const entries: { [key: number]: MsgValue } = {};
+    let pos = start + 1;
+    for (let index = 0; index < (tag & 0x0f); index += 1) {
+      const key = readMsgpack(data, pos);
+      const value = readMsgpack(data, key.next);
+      entries[Number(key.value)] = value.value;
+      pos = value.next;
+    }
+    return { value: entries, next: pos };
+  }
+  if ((tag & 0xf0) === 0x90) {
+    const items: MsgValue[] = [];
+    let pos = start + 1;
+    for (let index = 0; index < (tag & 0x0f); index += 1) {
+      const item = readMsgpack(data, pos);
+      items.push(item.value);
+      pos = item.next;
+    }
+    return { value: items, next: pos };
+  }
+  if ((tag & 0xe0) === 0xa0) {
+    const length = tag & 0x1f;
+    const text = new TextDecoder().decode(
+      data.slice(start + 1, start + 1 + length),
+    );
+    return { value: text, next: start + 1 + length };
+  }
+  switch (tag) {
+    case 0xc0:
+      return { value: null, next: start + 1 };
+    case 0xc2:
+      return { value: false, next: start + 1 };
+    case 0xc3:
+      return { value: true, next: start + 1 };
+    case 0xca:
+      return { value: view.getFloat32(start + 1), next: start + 5 };
+    case 0xcb:
+      return { value: view.getFloat64(start + 1), next: start + 9 };
+    case 0xcc:
+      return { value: data[start + 1], next: start + 2 };
+    case 0xcd:
+      return { value: view.getUint16(start + 1), next: start + 3 };
+    case 0xce:
+      return { value: view.getUint32(start + 1), next: start + 5 };
+    case 0xcf:
+      return { value: Number(view.getBigUint64(start + 1)), next: start + 9 };
+    case 0xd0:
+      return { value: view.getInt8(start + 1), next: start + 2 };
+    case 0xd1:
+      return { value: view.getInt16(start + 1), next: start + 3 };
+    case 0xd2:
+      return { value: view.getInt32(start + 1), next: start + 5 };
+    case 0xd9: {
+      const length = data[start + 1];
+      const text = new TextDecoder().decode(
+        data.slice(start + 2, start + 2 + length),
+      );
+      return { value: text, next: start + 2 + length };
+    }
+    default:
+      throw new Error(`unsupported MessagePack tag 0x${tag.toString(16)}`);
+  }
+}
+
 /**
  * In-page fake WebUSB device.
  *
@@ -166,7 +261,7 @@ function fakeWebUsb({
         0xc2,
         0x7c,
         0xc2,
-        0x7d,
+        0x7d, // key 125: one NUL byte
         0x00,
       );
     });
@@ -174,8 +269,12 @@ function fakeWebUsb({
   }
 
   const setlistNames = scanSetlistNames(bytes);
-  let setlistBytes =
-    setlistNames.length === 128 ? buildSetlist(setlistNames) : bytes;
+  // A test may pass a short list (`smallSetlist`) instead of the 128-entry
+  // fixture; pad it to 128 so an op-71 save to a later slot is visible.
+  while (setlistNames.length < 128) {
+    setlistNames.push('');
+  }
+  let setlistBytes = buildSetlist(setlistNames);
   // The slot the fake pedal reports as active. Object 23 (state) carries the
   // slot and object 22 (the blob) answers with the preset body, so a recall
   // picks the slot it recalled.
@@ -449,7 +548,17 @@ function fakeWebUsb({
       __podgoWrites?: number[][];
       __podgoRecall?: number[];
       __podgoChain?: number;
+      __podgoSnapshots?: Array<LooseCommand>;
     };
+    // Snapshot commands (op 88/89/98/37) answer status 0 and are recorded for
+    // the assertions. They are decoded on their own because their inner keys
+    // (92, 66, 74, 29) are not the ones the generic reader follows.
+    const loose = looseCommand(request);
+    if (loose && loose.op !== null && [88, 89, 98, 37].includes(loose.op)) {
+      (store.__podgoSnapshots ??= []).push(loose);
+      return framedWriteAck(request, statusBody(loose.tx ?? 0));
+    }
+
     store.__podgoWrites = store.__podgoWrites ?? [];
     store.__podgoWrites.push(Array.from(request));
     if (!chainOpen) {
@@ -458,6 +567,9 @@ function fakeWebUsb({
     }
     if (isChainStart(request)) {
       chainOpen = true;
+      (store as unknown as { __podgoChainOpened?: number }).__podgoChainOpened =
+        ((store as unknown as { __podgoChainOpened?: number })
+          .__podgoChainOpened ?? 0) + 1;
       chainStream = { total: 0, body: new Uint8Array(0), received: 0, statusSent: false };
       return chainResponseFor(request);
     }
@@ -645,6 +757,122 @@ function fakeWebUsb({
       ];
     }
     return [tag & 0x7f, start + 1];
+  }
+
+  /**
+   * Loose read of a write command: `{102: tx, 100: op, 101: {…}}` with every
+   * inner key decoded into `fields`. Used for the snapshot commands, whose
+   * keys (92, 66, 74, 29, 28) do not overlap the generic reader's.
+   */
+  function looseCommand(request: Uint8Array): LooseCommand | null {
+    // A short command frame is length byte + 15 header bytes + the 8-byte
+    // subheader + body, so the body starts at 24 and the frame may be only 36
+    // bytes long (op 88).
+    if (request.length < 28 || request[16] !== 0x01 || request[19] !== 0x00) {
+      return null;
+    }
+    // This runs inside the page, where the Node-side reader is unavailable,
+    // so decode the few tags a snapshot command uses here.
+    try {
+      let pos = 24;
+      const tag = request[pos++];
+      if ((tag & 0xf0) !== 0x80) {
+        return null;
+      }
+      const readValue = (): MsgValue => {
+        const head = request[pos++];
+        if (head <= 0x7f) {
+          return head;
+        }
+        if (head === 0xc2) {
+          return false;
+        }
+        if (head === 0xc3) {
+          return true;
+        }
+        if (head === 0xc0) {
+          return null;
+        }
+        if (head === 0xca) {
+          const view = new DataView(
+            request.buffer,
+            request.byteOffset + pos,
+            4,
+          );
+          pos += 4;
+          return view.getFloat32(0);
+        }
+        if (head === 0xcc) {
+          return request[pos++];
+        }
+        if (head === 0xcd) {
+          const value = (request[pos] << 8) | request[pos + 1];
+          pos += 2;
+          return value;
+        }
+        if (head === 0xce) {
+          const value =
+            (request[pos] << 24) |
+            (request[pos + 1] << 16) |
+            (request[pos + 2] << 8) |
+            request[pos + 3];
+          pos += 4;
+          return value >>> 0;
+        }
+        if ((head & 0xf0) === 0x80) {
+          const entries: { [key: number]: MsgValue } = {};
+          for (let index = 0; index < (head & 0x0f); index += 1) {
+            const key = readValue();
+            entries[Number(key)] = readValue();
+          }
+          return entries;
+        }
+        if ((head & 0xf0) === 0x90) {
+          const items: MsgValue[] = [];
+          for (let index = 0; index < (head & 0x0f); index += 1) {
+            items.push(readValue());
+          }
+          return items;
+        }
+        if (head === 0xd9) {
+          const length = request[pos++];
+          const text = new TextDecoder().decode(
+            request.slice(pos, pos + length),
+          );
+          pos += length;
+          return text;
+        }
+        if ((head & 0xe0) === 0xa0) {
+          const length = head & 0x1f;
+          const text = new TextDecoder().decode(
+            request.slice(pos, pos + length),
+          );
+          pos += length;
+          return text;
+        }
+        throw new Error(`unsupported tag 0x${head.toString(16)}`);
+      };
+      const outer: { [key: number]: MsgValue } = {};
+      for (let index = 0; index < (tag & 0x0f); index += 1) {
+        const key = readValue();
+        outer[Number(key)] = readValue();
+      }
+      const fields: Record<number, MsgValue> = {};
+      const inner = outer[101];
+      if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+        for (const [key, value] of Object.entries(inner)) {
+          fields[Number(key)] = value;
+        }
+      }
+      return {
+        op: typeof outer[100] === 'number' ? outer[100] : null,
+        tx: typeof outer[102] === 'number' ? outer[102] : null,
+        fields,
+        length: request[0],
+      };
+    } catch {
+      return null;
+    }
   }
 
   /** Parse an op-5 first frame, or `null` for any other read frame. */
@@ -1069,91 +1297,6 @@ function fakeWebUsb({
  * keys), fixints, uint/int, float32/64, bool and nil are enough for the
  * `set_param` body.
  */
-type MsgValue =
-  | number
-  | boolean
-  | null
-  | string
-  | MsgValue[]
-  | { [key: number]: MsgValue };
-
-function readMsgpack(
-  data: Uint8Array,
-  start: number,
-): { value: MsgValue; next: number } {
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const tag = data[start];
-  if (tag <= 0x7f) {
-    return { value: tag, next: start + 1 };
-  }
-  if (tag >= 0xe0) {
-    return { value: tag - 0x100, next: start + 1 };
-  }
-  if ((tag & 0xf0) === 0x80) {
-    const entries: { [key: number]: MsgValue } = {};
-    let pos = start + 1;
-    for (let index = 0; index < (tag & 0x0f); index += 1) {
-      const key = readMsgpack(data, pos);
-      const value = readMsgpack(data, key.next);
-      entries[Number(key.value)] = value.value;
-      pos = value.next;
-    }
-    return { value: entries, next: pos };
-  }
-  if ((tag & 0xf0) === 0x90) {
-    const items: MsgValue[] = [];
-    let pos = start + 1;
-    for (let index = 0; index < (tag & 0x0f); index += 1) {
-      const item = readMsgpack(data, pos);
-      items.push(item.value);
-      pos = item.next;
-    }
-    return { value: items, next: pos };
-  }
-  if ((tag & 0xe0) === 0xa0) {
-    const length = tag & 0x1f;
-    const text = new TextDecoder().decode(
-      data.slice(start + 1, start + 1 + length),
-    );
-    return { value: text, next: start + 1 + length };
-  }
-  switch (tag) {
-    case 0xc0:
-      return { value: null, next: start + 1 };
-    case 0xc2:
-      return { value: false, next: start + 1 };
-    case 0xc3:
-      return { value: true, next: start + 1 };
-    case 0xca:
-      return { value: view.getFloat32(start + 1), next: start + 5 };
-    case 0xcb:
-      return { value: view.getFloat64(start + 1), next: start + 9 };
-    case 0xcc:
-      return { value: data[start + 1], next: start + 2 };
-    case 0xcd:
-      return { value: view.getUint16(start + 1), next: start + 3 };
-    case 0xce:
-      return { value: view.getUint32(start + 1), next: start + 5 };
-    case 0xcf:
-      return { value: Number(view.getBigUint64(start + 1)), next: start + 9 };
-    case 0xd0:
-      return { value: view.getInt8(start + 1), next: start + 2 };
-    case 0xd1:
-      return { value: view.getInt16(start + 1), next: start + 3 };
-    case 0xd2:
-      return { value: view.getInt32(start + 1), next: start + 5 };
-    case 0xd9: {
-      const length = data[start + 1];
-      const text = new TextDecoder().decode(
-        data.slice(start + 2, start + 2 + length),
-      );
-      return { value: text, next: start + 2 + length };
-    }
-    default:
-      throw new Error(`unsupported MessagePack tag 0x${tag.toString(16)}`);
-  }
-}
-
 test('reads the User setlist over a fake WebUSB device', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (message) => {
@@ -1873,16 +2016,17 @@ test('copies, pastes, moves and renames presets in the local library', async ({
     'cleared locally (not written)',
   );
 
-  // No write was attempted: the fake records no restore stream.
-  const messages = await page.evaluate(
+  // No write was attempted: the fake records no restore stream and no
+  // operation 71.
+  const pedal = await page.evaluate(
     () =>
-      (
-        window as unknown as {
-          __podgoRestore?: unknown[];
-        }
-      ).__podgoRestore ?? [],
+      (window as unknown as {
+        __podgoRestore?: unknown[];
+        __podgoWrites?: number[][];
+      }) ?? {},
   );
-  expect(messages).toHaveLength(0);
+  expect(pedal.__podgoRestore ?? []).toHaveLength(0);
+  expect(pedal.__podgoWrites ?? []).toHaveLength(0);
 
   await page.locator('.preset-actions .modal-close').click();
 
@@ -1899,7 +2043,11 @@ test('copies, pastes, moves and renames presets in the local library', async ({
 test('writes a paste and a rename without confirmation dialogs', async ({
   page,
 }) => {
-  const fixture = smallSetlist(['Lead A', 'Lead B']);
+  // A save to 02D must be visible in the re-read setlist: use the real
+  // 128-entry fixture, whose names the fake scanner rebuilds after op 71.
+  const fixture = readFileSync(
+    new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+  ).toString('base64');
   const preset = readFileSync(
     new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
   ).toString('base64');
@@ -1909,6 +2057,9 @@ test('writes a paste and a rename without confirmation dialogs', async ({
   await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
   await openDevTools(page);
   await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
   await page.locator('#read-user').click();
   await page.locator('#read-preset').click();
   await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
@@ -1919,15 +2070,20 @@ test('writes a paste and a rename without confirmation dialogs', async ({
   await expect(page.locator('#actions-blockers')).toHaveCount(0);
 
   await page.locator('#copy-preset').click();
+  // The write channel shares the read session; a slow fake handshake must not
+  // be mistaken for a failure.
+  await expect(page.locator('#clipboard-info')).toContainText('US Deluxe Nrm', {
+    timeout: 20_000,
+  });
   await page.locator('#paste-slot').selectOption('7');
   await page.locator('#paste-name').fill('Pasted Lead');
   await expect(page.locator('#paste-write')).toBeEnabled();
 
   // No confirmation pop-up for a paste any more.
   await page.locator('#paste-write').click();
-  await expect(page.locator('.report.log')).toContainText('Preset write:');
 
-  // The paste wrote a one-entry op-5 stream.
+  // Copying the pedal's active preset and pasting it uses the captured
+  // operation 71 path, which carries the name; no op-5 body stream is sent.
   const messages = await page.evaluate(
     () =>
       (
@@ -1936,18 +2092,39 @@ test('writes a paste and a rename without confirmation dialogs', async ({
         }
       ).__podgoRestore ?? [],
   );
-  expect(messages).toHaveLength(1);
-  expect(`${messages[0].setlist}:${messages[0].slot}`).toBe('1:7');
+  expect(messages).toHaveLength(0);
+  // The store ends with its own verification; wait for that instead of the
+  // first log line, so the fake has finished recording the command. The
+  // pasted copy is the last op 71; the earlier ones are the two copies.
+  await expect(page.locator('.report.log')).toContainText(
+    'Copy verified: User 02D reads "Pasted Lead"',
+  );
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  const readCommand = (row: number[]) => {
+    const frame = new Uint8Array(row);
+    expect(Array.from(frame.slice(16, 20))).toEqual([0x01, 0x00, 0x06, 0x00]);
+    return readMsgpack(frame, 24).value as { [key: number]: MsgValue };
+  };
+  const ops = writes.map((row) => readCommand(row)[100]);
+  expect(ops.every((op) => op === 71)).toBe(true);
+  const decoded = readCommand(writes[writes.length - 1]);
+  const inner = decoded[101] as { [key: number]: MsgValue };
+  expect(inner[108]).toBe(7);
+  expect(inner[109]).toBe('Pasted Lead\0');
 
   // Rename the active User preset: still one confirmation, no backup.
   await page.locator('#rename-name').fill('Renamed Lead');
   await expect(page.locator('#rename-write')).toBeEnabled();
   await page.locator('#rename-write').click();
   await expect(page.locator('.report.log')).toContainText('Rename accepted');
-  // The fake setlist is static, so the verification re-read warns; what this
-  // test proves is that one confirmation was enough to send the write.
+  // The fake rebuilds the setlist after op 71, so the verification re-read
+  // confirms the new name.
   await expect(page.locator('.report.log')).toContainText(
-    'rename verification',
+    'Rename verified: User 01C now reads "Renamed Lead"',
+    { timeout: 20_000 },
   );
 });
 
@@ -2237,7 +2414,7 @@ test('removes an effect with operations 28 and 78 from the block menu', async ({
  * edit buffer, splices the chain with the Rust domain layer and streams the
  * whole container back. The stream is driven frame by frame.
  */
-test('moves a block on the pedal with operation 21', async ({ page }) => {
+test('keeps the pedal move disabled after the 2026-11-24 crash', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -2260,87 +2437,27 @@ test('moves a block on the pedal with operation 21', async ({ page }) => {
     /POD Go \(fake\)/,
   );
 
+  // Reordering the chain with op 21 crashed the pedal on 2026-11-24. The menu
+  // items stay visible but disabled, and nothing is sent.
   await page.locator('.block-tile').nth(2).click({ button: 'right' });
-  await expect(page.locator('#block-menu-move-left')).toBeEnabled();
-  page.once('dialog', (dialog) => void dialog.accept());
-  await page.locator('#block-menu-move-left').click();
-
-  await expect(page.locator('.report.log')).toContainText(
-    'Live: moved block 3 to 2 with operation 21',
+  await expect(page.locator('#block-menu-move-left')).toBeDisabled();
+  await expect(page.locator('#block-menu-move-right')).toBeDisabled();
+  await expect(page.locator('#block-menu-move-left')).toContainText(
+    'crashes the pedal',
   );
-  await expect(page.locator('#save-notice')).toContainText(
-    'Block moved from 3 to 2 on the pedal',
-  );
+  await page.keyboard.press('Escape');
 
   const writes = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
   );
-  // The chain frames are 512-byte packets with the 8-byte subheader, so a
-  // first frame carries the complete body length at bytes 20..24.
-  const sent = writes.filter(
-    (row) =>
-      row.length === 512 &&
-      row[4] === 0x80 &&
-      row[5] === 0x10 &&
-      row[6] === 0xed &&
-      row[7] === 0x03 &&
-      row[16] === 0x01 &&
-      row[17] === 0x00 &&
-      row[18] === 0x06 &&
-      row[19] === 0x00,
+  expect(writes).toHaveLength(0);
+  const opened = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoChainOpened?: number })
+        .__podgoChainOpened ?? 0,
   );
-  expect(sent.length).toBeGreaterThanOrEqual(1);
-  // Every frame is a 512-byte write-channel packet, and only the first one
-  // carries the subheader.
-  const upload = writes.filter((row) => row.length === 512);
-  expect(upload.length).toBeGreaterThan(1);
-  for (const row of upload) {
-    expect(row[4]).toBe(0x80);
-    expect(row[5]).toBe(0x10);
-    expect(row[6]).toBe(0xed);
-    expect(row[7]).toBe(0x03);
-  }
-  const continuations = upload.filter((row) => !sent.includes(row));
-  expect(continuations.length).toBeGreaterThanOrEqual(1);
-  for (const row of continuations) {
-    expect(Array.from(row.slice(16, 20))).not.toEqual([0x01, 0x00, 0x06, 0x00]);
-  }
-  // The first frame carries the subheader and the complete body length; the
-  // rest are raw continuations on the same cursor until the status arrives.
-  const first = new Uint8Array(upload[0]);
-  expect(Array.from(first.slice(16, 20))).toEqual([0x01, 0x00, 0x06, 0x00]);
-  const total =
-    first[20] | (first[21] << 8) | (first[22] << 16) | (first[23] << 24);
-  const uploaded = await page.evaluate(
-    () => (window as unknown as { __podgoChain?: number }).__podgoChain ?? 0,
-  );
-  expect(uploaded).toBe(total);
-  const raw = await page.evaluate(
-    () => (window as unknown as { __podgoChainRaw?: number[] }).__podgoChainRaw,
-  );
-  expect(raw).toBeTruthy();
-  // The body is {102: tx, 100: 21, 101: {110: <l6-helix>}}. Keys are encoded
-  // as positive fixints here, so 83 66 <tx> 64 15 65 81 6e da <len> is the
-  // exact prefix; key 110 uses str16 (0xda) for the container.
-  const body = new Uint8Array(raw as number[]);
-  expect(Array.from(body.slice(0, 3))).toEqual([0x83, 0x66, 0xcd]);
-  const opIndex = body.slice(3).findIndex((byte) => byte === 0x64);
-  expect(opIndex).toBeGreaterThanOrEqual(0);
-  expect(body[3 + opIndex + 1]).toBe(21);
-  const opEnd = 3 + opIndex + 1;
-  expect(body[opEnd + 1]).toBe(0x65);
-  const blobAt = body.indexOf(0x6e, opEnd);
-  expect(blobAt).toBeGreaterThan(opEnd);
-  expect(body[blobAt + 1]).toBe(0xda);
-  const declared = (body[blobAt + 2] << 8) | body[blobAt + 3];
-  const blob = body.slice(blobAt + 4, blobAt + 4 + declared);
-  expect(blob.length).toBe(declared);
-  expect(blob[0]).toBe(0xa9);
-  expect(new TextDecoder().decode(blob.slice(1, 9))).toBe('l6-helix');
-  // Moving one effect rewrites the chain, so unknown bytes must survive: the
-  // uploaded container is exactly the size the pedal reported.
-  expect(declared).toBeGreaterThan(1000);
+  expect(opened).toBe(0);
   expect(errors).toEqual([]);
 });
 
@@ -2542,6 +2659,7 @@ test('copies a pedal slot to another slot from the right-click menu', async ({
   await expect(page.locator('.report.log')).toContainText('Preset write:');
   await expect(page.locator('.report.log')).toContainText(
     'body verified: User 02D matches the source byte for byte',
+    { timeout: 20_000 },
   );
   expect(dialogs).toEqual(['prompt']);
 
@@ -2806,7 +2924,12 @@ test('sends op 41 when bypass is tapped on a connected preset', async ({
   page.once('dialog', (dialog) => void dialog.accept());
   await page.locator('#save-preset').click();
   await expect(page.locator('.report.log')).toContainText('Save: stored');
-  await expect(page.locator('.report.log')).toContainText('Save: stored');
+  // Save re-reads the User setlist and ends with its own verification; wait
+  // for that so a read session cannot interleave with the write count.
+  await expect(page.locator('.report.log')).toContainText(
+    /Save verified: User 01C reads "US Deluxe Nrm"|save verification/,
+    { timeout: 20_000 },
+  );
   const after = await page.evaluate(
     () =>
       (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
@@ -3265,4 +3388,105 @@ test.describe('editing a connected preset on a phone viewport', () => {
     expect(inner[98]).toBe(index + 1);
     expect(errors).toEqual([]);
   });
+});
+
+/**
+ * Snapshot editing on a connected pedal: recall (op 88), rename (op 89), LED
+ * colour (op 98) and parameter assignment (op 37). All four frames come from
+ * `podgo-snapshots.pcapng` (2026-11-24, official editor, fw 2.50).
+ */
+test('recalls, renames and colours snapshots on the pedal', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  const fixture = readFileSync(
+    new URL('../public/fixtures/user_setlist.bin', import.meta.url),
+  ).toString('base64');
+  const preset = readFileSync(
+    new URL('../public/fixtures/spec02_obj22_blob.bin', import.meta.url),
+  ).toString('base64');
+  await page.addInitScript(fakeWebUsb, { fixture, preset });
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  await openDevTools(page);
+  await page.locator('#connect').click();
+  await expect(page.locator('.device-card .badge')).toHaveText(
+    /POD Go \(fake\)/,
+  );
+  await expect(page.locator('.preset-title')).toContainText('US Deluxe Nrm');
+
+  const chips = page.locator('.snapshot');
+  await expect(chips).toHaveCount(4);
+
+  // Recall snapshot 2: the pedal gets op 88 with index 1.
+  await chips.nth(1).click();
+  await expect(page.locator('.report.log')).toContainText(
+    'Live: recalled snapshot 2',
+  );
+  await expect(chips.nth(1)).toHaveClass(/is-active/);
+  await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
+
+  // Rename snapshot 1 through its context menu: op 89 with the NUL-terminated
+  // name, applied immediately.
+  await chips.nth(0).click({ button: 'right' });
+  await page.locator('#snapshot-menu-rename').click();
+  const editor = page.locator('.snapshot-input').first();
+  await editor.fill('test1');
+  await editor.press('Enter');
+  await expect(page.locator('.report.log')).toContainText(
+    'Live: snapshot 1 renamed to "test1"',
+  );
+  await expect(chips.nth(0)).toContainText('test1');
+
+  // LED colour from the same menu: op 98 with palette 8 (Blue).
+  await chips.nth(0).click({ button: 'right' });
+  await page
+    .locator('.snapshot-menu')
+    .getByRole('menuitemradio', { name: 'Blue' })
+    .click();
+  await expect(page.locator('.report.log')).toContainText(
+    'LED colour set to palette 8',
+  );
+
+  // Select the first processing block, then assign its first parameter to the
+  // Snapshots controller: op 37.
+  await page.locator('.block-tile').first().click();
+  const camera = page.locator('.snapshot-assign').first();
+  await expect(camera).toBeVisible();
+  await camera.click();
+  await expect(page.locator('.report.log')).toContainText(
+    'now stores a value per snapshot (operation 37)',
+  );
+
+  // Save (op 71) stores all of it in the setlist.
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.locator('#save-preset').click();
+  await expect(page.locator('.report.log')).toContainText('Save: stored');
+
+  const commands = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoSnapshots?: LooseCommand[] })
+        .__podgoSnapshots ?? [],
+  );
+  const ops = commands.map((command) => command.op);
+  expect(ops).toEqual([88, 89, 98, 37]);
+  expect(commands[0].fields[92]).toBe(1);
+  expect(commands[1].fields[92]).toBe(0);
+  expect(commands[1].fields[109]).toBe('test1\0');
+  expect(commands[2].fields[66]).toBe(8);
+  expect(commands[3].fields[98]).toBe(1);
+  expect(commands[3].fields[74]).toBe(11);
+  expect(commands[3].fields[29]).toBe(true);
+
+  const writes = await page.evaluate(
+    () =>
+      (window as unknown as { __podgoWrites?: number[][] }).__podgoWrites ?? [],
+  );
+  expect(writes).toHaveLength(1);
+  const stored = readMsgpack(new Uint8Array(writes[0]), 24).value as {
+    [key: number]: MsgValue;
+  };
+  expect(stored[100]).toBe(71);
+  expect(errors).toEqual([]);
 });

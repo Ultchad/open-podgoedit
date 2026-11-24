@@ -41,7 +41,7 @@ import type {
   ChainEntry,
   ChainParamValue,
 } from '../types';
-import { SNAPSHOT_CONTROLLER } from '../podgoEdit';
+import { isSnapshotController } from '../podgoEdit';
 
 type Mode = 'params' | 'models';
 
@@ -373,9 +373,8 @@ function ParamRow({
     setDraft(formatDraft(currentDisplay, param));
   }
 
-  const snapshotControlled = controller === SNAPSHOT_CONTROLLER;
-  const otherController =
-    controller !== undefined && controller !== SNAPSHOT_CONTROLLER;
+  const snapshotControlled = isSnapshotController(controller);
+  const otherController = controller !== undefined && !snapshotControlled;
   const otherControllerLabel =
     controller === 1
       ? 'EXP 1'
@@ -387,8 +386,8 @@ function ParamRow({
     : snapshotControlled
       ? `Snapshots control this parameter${
           snapshotStored ? ' and this snapshot stores a value' : ''
-        } — click to remove it from all snapshots (draft)`
-      : 'Store a different value for this parameter in each snapshot (draft, exported with .pgp)';
+        } — click to remove it from all snapshots`
+      : 'Store a different value for this parameter in each snapshot';
 
   return (
     <div className="param-row">

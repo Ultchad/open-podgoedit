@@ -14,6 +14,8 @@ export interface PresetMenuItem {
   hint?: string;
   disabled?: boolean;
   danger?: boolean;
+  /** Tooltip explaining a disabled or destructive item. */
+  title?: string;
   onSelect: () => void;
 }
 
@@ -131,7 +133,7 @@ export default function PresetMenu({ x, y, items, onClose, label }: Props) {
             role="menuitem"
             className={item.danger ? 'is-danger' : ''}
             disabled={item.disabled}
-            title={item.hint}
+            title={item.title ?? item.hint}
             onClick={() => {
               onClose();
               item.onSelect();

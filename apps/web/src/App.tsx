@@ -30,9 +30,13 @@ import { createFullBackup, createSelectedBackup } from './usb/backup';
 import type { BackupTarget } from './usb/backup';
 import { restoreFullBackup } from './usb/restore';
 import {
+  assignSnapshotParam,
   recallPreset,
+  recallSnapshot,
   removeEffect,
+  renameSnapshot as renameSnapshotOnPedal,
   savePreset,
+  setSnapshotLedColor as setSnapshotLedColorOnPedal,
   writeBypass,
   writeChain,
   writeModel,
@@ -86,7 +90,8 @@ import {
   setImportedSnapshotLedColor,
   setImportedSnapshotName,
   setImportedSnapshotParam,
-  SNAPSHOT_CONTROLLER,
+  SNAPSHOT_CONTROLLER_WIRE,
+  isSnapshotController,
   structureToEditPreset,
   toneToStructure,
   type EditBackup,
@@ -2900,14 +2905,46 @@ export default function App() {
     appendLog(message);
   }
 
-  /** Load one snapshot in an offline draft. */
+  /**
+   * Select one snapshot.
+   *
+   * Connected, the pedal is recalled with operation 88 (captured from POD Go
+   * Edit in `podgo-snapshots.pcapng`): the sound changes at once, the page
+   * shows the values that snapshot recalls, and Save (op 71) stores the pedal
+   * state that now includes that snapshot as the active one. Offline, the
+   * draft document records the selection.
+   */
   function selectSnapshot(index: number): void {
     if (structure?.currentSnapshot === index) {
       return;
     }
+    const connection = connectionRef.current;
+    if (
+      !workingDoc &&
+      connected &&
+      activePresetLoaded &&
+      connection &&
+      structure
+    ) {
+      const label = structure.snapshots[index]?.name || `SNAPSHOT ${index + 1}`;
+      if (structure.currentSnapshot !== null) {
+        pushHistory('the snapshot change');
+      }
+      setStructure((current) =>
+        current ? { ...current, currentSnapshot: index } : current,
+      );
+      setDirty(true);
+      setSaveNotice(null);
+      queueLiveWrite(`snapshot:select`, `snapshot ${index + 1} (${label})`, () =>
+        recallSnapshot(connection, index, reportProgress),
+      );
+      appendLog(
+        `Live: recalled snapshot ${index + 1} (${label}) with operation 88; ` +
+          'the pedal now plays it, press Save to store it.',
+      );
+      return;
+    }
     if (!workingDoc) {
-      // The pedal's snapshot is chosen on the pedal. No capture shows how the
-      // editor recalls one, so the page only follows it.
       setSaveNotice({
         kind: 'info',
         text:
@@ -2927,8 +2964,53 @@ export default function App() {
     );
   }
 
-  /** Rename one snapshot in an offline draft (10 printable ASCII chars). */
+  /**
+   * Rename one snapshot (10 printable ASCII chars).
+   *
+   * Connected, the label is applied on the pedal immediately with operation
+   * 89 (captured: status 0, then the `105:43` notification echoing the name),
+   * and the preset is marked dirty so Save (op 71) stores it in the setlist.
+   * Offline, only the draft document changes.
+   */
   function renameSnapshot(index: number, name: string): void {
+    const connection = connectionRef.current;
+    if (
+      !workingDoc &&
+      connected &&
+      activePresetLoaded &&
+      connection &&
+      structure
+    ) {
+      const error = validateSnapshotName(name);
+      if (error) {
+        setSaveNotice({ kind: 'error', text: error });
+        return;
+      }
+      pushHistory('the snapshot rename');
+      setStructure((current) =>
+        current
+          ? {
+              ...current,
+              snapshots: current.snapshots.map((snapshot, snapshotIndex) =>
+                snapshotIndex === index ? { ...snapshot, name } : snapshot,
+              ),
+            }
+          : current,
+      );
+      setDirty(true);
+      setSaveNotice(null);
+      queueLiveWrite(`snapshot:name`, `snapshot ${index + 1} name`, () =>
+        renameSnapshotOnPedal(connection, { index, name }, reportProgress),
+      );
+      appendLog(
+        name
+          ? `Live: snapshot ${index + 1} renamed to "${name}" with operation 89; ` +
+            'press Save to store it.'
+          : `Live: snapshot ${index + 1} custom label cleared with operation 89; ` +
+            'press Save to store it.',
+      );
+      return;
+    }
     if (!workingDoc) {
       setSaveNotice({
         kind: 'info',
@@ -2964,7 +3046,7 @@ export default function App() {
     paramIndex: number,
     assigned: boolean,
   ): void {
-    if (!workingDoc || !structure) {
+    if (!structure) {
       return;
     }
     const entry = structure.chain.find((item) => item.slot === block + 1);
@@ -2980,11 +3062,7 @@ export default function App() {
       (controller) =>
         controller.block === block && controller.paramIndex === paramIndex,
     );
-    if (
-      assigned &&
-      existing &&
-      existing.controller !== SNAPSHOT_CONTROLLER
-    ) {
+    if (assigned && existing && !isSnapshotController(existing.controller)) {
       setSaveNotice({
         kind: 'error',
         text:
@@ -2995,6 +3073,80 @@ export default function App() {
     }
     const current = entry.params[paramIndex];
     const value = typeof current === 'boolean' ? current : (current ?? 0);
+
+    // Connected: op 37 makes the pedal store one value per snapshot from now
+    // on (captured: status 0 then an op-34 controller notification). Save
+    // (op 71) stores the assignment with the preset.
+    const connection = connectionRef.current;
+    if (
+      !workingDoc &&
+      connected &&
+      activePresetLoaded &&
+      connection
+    ) {
+      if (!assigned) {
+        setSaveNotice({
+          kind: 'info',
+          text:
+            `${param.n} keeps its Snapshots controller on the pedal. ` +
+            'Removing a controller has no capture yet, so only the offline ' +
+            'copy can do it; use Export .pgp for that.',
+        });
+        return;
+      }
+      pushHistory('the snapshot assignment');
+      const controller = SNAPSHOT_CONTROLLER_WIRE;
+      setStructure((currentStructure) => {
+        if (!currentStructure) {
+          return currentStructure;
+        }
+        const controllers = [
+          ...(currentStructure.controllers ?? []).filter(
+            (item) =>
+              !(item.block === block && item.paramIndex === paramIndex),
+          ),
+          { block, controller, paramIndex, min: 0, max: 1 },
+        ];
+        const snapshots = currentStructure.snapshots.map((snapshot) => {
+          const stored = (snapshot.controllers ?? []).filter(
+            (item) =>
+              !(item.block === block && item.paramIndex === paramIndex),
+          );
+          return {
+            ...snapshot,
+            controllers: [
+              ...stored,
+              { block, paramIndex, value, fsEnabled: false },
+            ],
+          };
+        });
+        return { ...currentStructure, controllers, snapshots };
+      });
+      setDirty(true);
+      setSaveNotice(null);
+      queueLiveWrite(`snapshot:param:${block + 1}:${paramIndex}`, `${param.n} → Snapshots`, () =>
+        assignSnapshotParam(
+          connection,
+          { block: block + 1, param: paramIndex, assigned: true },
+          reportProgress,
+        ),
+      );
+      appendLog(
+        `Live: ${param.n} on block ${block + 1} now stores a value per ` +
+          'snapshot (operation 37); press Save to store it.',
+      );
+      return;
+    }
+
+    if (!workingDoc) {
+      setSaveNotice({
+        kind: 'info',
+        text:
+          'Read the pedal\'s active preset first, then assign the Snapshots ' +
+          'controller: the pedal needs the assignment to recall the values.',
+      });
+      return;
+    }
     commitSnapshotDraft(
       (doc) =>
         setImportedSnapshotAssignment(
@@ -3094,6 +3246,42 @@ export default function App() {
 
   /** Change the LED colour of one snapshot. */
   function setSnapshotLedColor(index: number, color: number): void {
+    const connection = connectionRef.current;
+    if (
+      !workingDoc &&
+      connected &&
+      activePresetLoaded &&
+      connection
+    ) {
+      if (!Number.isInteger(color) || color < 0 || color > 11) {
+        return;
+      }
+      pushHistory('the LED colour change');
+      setStructure((current) =>
+        current
+          ? {
+              ...current,
+              snapshots: current.snapshots.map((snapshot, snapshotIndex) =>
+                snapshotIndex === index ? { ...snapshot, ledColor: color } : snapshot,
+              ),
+            }
+          : current,
+      );
+      setDirty(true);
+      setSaveNotice(null);
+      queueLiveWrite(`snapshot:led`, `snapshot ${index + 1} LED colour`, () =>
+        setSnapshotLedColorOnPedal(
+          connection,
+          { index, palette: color },
+          reportProgress,
+        ),
+      );
+      appendLog(
+        `Live: snapshot ${index + 1} LED colour set to palette ${color} with ` +
+          'operation 98; press Save to store it.',
+      );
+      return;
+    }
     if (!workingDoc) {
       setSaveNotice({
         kind: 'info',
@@ -3409,6 +3597,7 @@ export default function App() {
    * write-armed, confirmed path as Paste.
    */
   async function copyToSlot(kind: SetlistKind, slot: number): Promise<void> {
+
     const isWorking =
       workingSlot?.setlist === kind && workingSlot.slot === slot;
     const preset =
@@ -3417,6 +3606,7 @@ export default function App() {
       structure?.preset.setlist === kind && structure.preset.slot === slot;
     /** The source is the pedal's current edit buffer, so op 71 can copy it. */
     const activeHere = loadedHere && activePresetLoaded && workingDoc === null;
+
     const sourceName =
       slotName(kind, slot) ||
       preset?.name ||
@@ -3574,6 +3764,34 @@ export default function App() {
       // dialog, and it is the only way a connected paste can work.
       if (!clipboardBlob) {
         setSaveNotice({ kind: 'error', text: 'The clipboard is empty.' });
+        return;
+      }
+      // Copying the pedal's own active preset and pasting it: the source is
+      // the edit buffer, so operation 71 stores it in the destination with
+      // its name (the captured path that "Copy to…" already uses). The op-5
+      // body stream carries no setlist name, which is why such a paste used
+      // to land without a name.
+      const clipIsActive =
+        clipboard.setlist === structure?.preset.setlist &&
+        clipboard.slot === structure?.preset.slot &&
+        activePresetLoaded &&
+        activePresetAt !== null;
+      if (clipIsActive && connected) {
+        if (mode === 'move') {
+          setSaveNotice({
+            kind: 'info',
+            text:
+              'Moving the active preset is not available yet: there is no ' +
+              'evidenced clear operation. Copy it instead, then clear the ' +
+              'source on the pedal.',
+          });
+          return;
+        }
+        const activeName =
+          clipboard.name ||
+          structure?.preset.name ||
+          DEFAULT_PRESET_NAME;
+        void writeActivePresetToSlot(slot, activeName);
         return;
       }
       if (!connected) {
@@ -4166,7 +4384,7 @@ export default function App() {
     name: string,
   ): Promise<void> {
     const connection = connectionRef.current;
-    if (!connection || actionBusy) {
+    if (!connection) {
       return;
     }
     if (!activePresetLoaded) {
@@ -4179,6 +4397,9 @@ export default function App() {
       return;
     }
 
+    if (actionBusy) {
+      return;
+    }
     setActionError(null);
     setActionBusy(true);
     setUsbBusy('Copying the active preset…');
@@ -4464,16 +4685,64 @@ export default function App() {
   }
 
   /** Write the clipboard body to a User slot (Paste / Move paths). */
+  /**
+   * Write the clipboard to a User slot from the advanced dialog.
+   *
+   * The dialog stays open after the write, so it would describe the slot the
+   * page showed when it opened. A block-level write guard is therefore started
+   * *before* the first `await`: the op-71 store and the op-5 stream also use
+   * `actionBusy`, and starting it afterwards let their simulated feedback
+   * land in the middle of the operation (seen as stray writes in the fake
+   * pedal).
+   */
   async function writePaste(destSlot: number, name: string, mode: PasteMode) {
     if (!clipboard || !clipboardBlob) {
       setActionError('The clipboard is empty.');
       return;
     }
-    await writeBodyToSlot(destSlot, name, clipboardBlob, mode, {
-      setlist: clipboard.setlist,
-      slot: clipboard.slot,
-      name: clipboard.name,
-    });
+
+    if (actionBusy) {
+      return;
+    }
+    const activeLocation = activePresetLocation();
+    setActionBusy(true);
+    try {
+      // The pedal's own edit buffer is a better source than a body read: op 71
+      // stores it with its name (captured), while the op-5 stream carries no
+      // setlist name. The slot is the one the pedal reported, because the
+      // advanced dialog can be open on another slot.
+      if (
+        mode === 'paste' &&
+        connected &&
+        activePresetLoaded &&
+        activeLocation &&
+        clipboard.setlist === activeLocation.setlist &&
+        clipboard.slot === activeLocation.slot
+      ) {
+        await writeActivePresetToSlot(destSlot, name);
+        return;
+      }
+      await writeBodyToSlot(destSlot, name, clipboardBlob, mode, {
+        setlist: clipboard.setlist,
+        slot: clipboard.slot,
+        name: clipboard.name,
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  /**
+   * Which slot the pedal last reported as active, or `null`.
+   *
+   * The report is set by `loadActivePreset`, so it stays valid while the
+   * librarian or the advanced actions show another slot.
+   */
+  function activePresetLocation(): {
+    setlist: SetlistKind;
+    slot: number;
+  } | null {
+    return activePresetAt;
   }
 
   /** Open the backup/restore dialog; reads stay available, restore is gated. */
@@ -4963,7 +5232,9 @@ export default function App() {
               onRenameSnapshot={renameSnapshot}
               onSetSnapshotLedColor={setSnapshotLedColor}
               onToggleSnapshotParam={
-                workingDoc ? toggleSnapshotParam : undefined
+                workingDoc || (connected && activePresetLoaded)
+                  ? toggleSnapshotParam
+                  : undefined
               }
               onSetBlockEnabled={setBlockEnabled}
               canSetBlockEnabled={connected}

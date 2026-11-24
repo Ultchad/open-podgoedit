@@ -10,6 +10,7 @@ Legally obtained, redistributable sample data used by tests.
 | `user_setlist.bin` | `openpodgo` MIT test fixtures | 128-entry user setlist stream | Present in the MIT reference project |
 | `factory_setlist_fw250.bin` | WebUSB capture, POD Go Wireless, firmware 2.50 (this project) | Factory setlist stream, 128 entries, 3668 B; includes the 8-byte data header | Contains only Line 6 factory preset names; no personal data |
 | `events_fw250.bin` | Derived from `reverse/exports/podgo-connect.pcapng` (official editor, fw 2.50) | 14 notification frames as `u16 LE length` + frame | Numeric MessagePack payloads only; no presets or personal data |
+| `op21_move_capture_fw250.bin` | Body of the first op-21 upload in `reverse/exports/podgo-move-effect.pcapng` (official editor, fw 2.50, 2026-11-24) | 3883-byte `l6-helix` container with the synthetic 128-NUL `body[12]` and the captured offset table | Contains only numeric fields and the factory snapshot labels `SNAPSHOT 1`…`SNAPSHOT 4`; the preset names in the capture are not part of the body |
 | `events_actions_fw250.bin` | Derived from `reverse/exports/podgo-events.pcapng` (official editor, fw 2.50, guided actions) | 18 frames, one per opcode and payload shape (1, 4, 8, 20, 21, 22×2, 30, 31, 33, 34, 39, 40, 41, 42, 46, 49×2) | Numeric MessagePack payloads only. Opcode 6 is excluded because its only frame carries a personal preset name |
 
 ## Rules

@@ -13,6 +13,9 @@ This page documents the writes this build performs:
 - **`set_model` (operation 40)** — load a catalog model into one chain slot;
   the pedal creates the block with its own defaults. Implemented from the MIT
   reference's annotated capture, **not hardware-validated**, see §2.9.
+- **Snapshots (operations 88, 89, 98, 37)** — recall one of the four
+  snapshots, rename it, set its LED colour and assign a parameter to the
+  Snapshots controller. Captured from POD Go Edit on 2026-11-24, see §2.5c.
 - **Full backup and restore (`.pgbak` + operation 5)** — read both setlists
   and every non-empty slot into a self-checking container, then stream the raw
   bodies back. The restore frame layout comes from
@@ -38,7 +41,11 @@ not independently reproduced).
 | `set_bypass` (41) | Implemented, gated | `{98: raw block, 59: enabled}`, status **0**, echoed by op 49 |
 | `remove_effect` (28, then 78) | Implemented, gated | The official editor sends the pair a few seconds apart; the page chains them |
 | Whole-chain write (op 21) | Implemented, gated | Streams the complete `l6-helix` container; status **1**, **not hardware-validated** |
-| Preset move (chain reorder) | Implemented, gated | op 21 with the chain, snapshot enables and footswitch targets spliced |
+| Preset move (chain reorder) | **Disabled in the UI** | The 2026-11-24 op-21 upload crashed the pedal; the encoder now matches the captured offset table, but nothing is sent until a dedicated validation |
+| Snapshot recall (88) | Implemented, gated | `{92: index}`, status **0**, confirmed by `105:42`/`105:46` |
+| Snapshot rename (89) | Implemented, gated | `{92: index, 109: name}`, status **0**, `105:43` |
+| Snapshot LED colour (98) | Implemented, gated | `{92: index, 66: palette}`, status **0**, `105:48` |
+| Parameter → Snapshots (37) | Implemented, gated | `{98, 29: true, 26: 0, 28, 74: 11, 71}`, status **0**, `105:34` ×2; removal is offline only |
 | Preset copy/move between slots | Not implemented | When the active preset is the source, op 71 stores it under the destination; a stored body is not re-targeted |
 | Preset restore (op 5, streamed) | Implemented, gated | Op 5 only; **not hardware-validated** |
 | Restore op 9 / 86 / 113 and the final op 254 | **Not implemented** | Semantics unresolved; not needed for a replay of the captured op-5 stream |
@@ -300,7 +307,56 @@ one flow, so the cursor advance (+17) follows the first status.
 loads the slot into the edit buffer, exactly like turning the pedal's own knob.
 Factory slots recall the same way.
 
-### 2.5b Chain upload (operation 21)
+### 2.5c Snapshots: recall (88), rename (89), LED colour (98), assignment (37)
+
+Captured from POD Go Edit in `reverse/exports/podgo-snapshots.pcapng`
+(2026-11-24): switch from snapshot 2 to 1, assign a distortion parameter to the
+Snapshots controller, rename snapshot 1, change its LED colour, then save. All
+four commands share the usual write channel and answer status **0**:
+
+```text
+recall:  {102: tx, 100: 88, 101: {92: index}}                    -> status 0
+rename:  {102: tx, 100: 89, 101: {92: index, 109: "<name>\0"}}    -> status 0
+colour:  {102: tx, 100: 98, 101: {92: index, 66: palette}}        -> status 0
+assign:  {102: tx, 100: 37, 101: {98: block, 29: true, 26: 0,
+                                  28: param, 74: 11, 71: param}}  -> status 0
+```
+
+The pedal confirms each one on the event channel:
+
+| Command | Event | Payload |
+|---|---|---|
+| 88 | `105:42` then `105:46` | `{92: index}` (a `105:22` tempo reply may come in between) |
+| 89 | `105:43` | `{92: index, 109: "<name>\0"}` |
+| 98 | `105:48` | `{92: index, 66: palette}` |
+| 37 | `105:34` ×2 | `{74: 11, 71: param, 65: 0, 98: block, 26: 0, 28: param, 29: true, 72: 0, 73: 1, 59: true}` |
+
+Notes:
+
+- `92` is the snapshot index, `0`…`3`.
+- `66` is the same palette index the `.pgp` document stores as `@ledcolor`
+  (`0` Auto … `11` Off).
+- The name is a printable string plus one NUL, like a preset name, but the
+  pedal's screen accepts at most **10** characters; the encoder enforces that.
+- **Controller number:** key `74` is `11` when the editor assigns the
+  Snapshots controller, and the pedal echoes `{0: 11, 5: <block>}`. Line 6
+  `.hlx`/`.pgp` documents use `10` for the same controller, so the document
+  layer keeps `10` and the device layer sends `11`.
+- Assignment is a parameter edit on the active preset: op 37 stores the
+  current value as snapshot 1's value and the parameter then follows snapshots.
+  No capture shows the *removal* direction (`29: false`), so the page keeps
+  removal offline only.
+- The recall is confirmed by a `105:42`/`105:46` burst; the page echoes the new
+  index locally and leaves the state to the pedal, which is the only source of
+  truth for per-snapshot bypass and values.
+- Rename, colour and assignment change the edit buffer only. They reach the
+  setlist when the page saves with op 71: the pedal writes its edit buffer,
+  and the saved snapshot state includes the new label, palette and assignment.
+  Recalling does **not** need a save; the selected snapshot is part of that
+  edit buffer, so a later op 71 stores it as the state a fresh recall starts
+  from.
+
+### 2.5d Chain upload (operation 21)
 
 Captured in `reverse/exports/podgo-move-effect.pcapng`. The body is
 `{102: tx, 100: 21, 101: {110: <l6-helix blob>}}` and is **streamed** on the
@@ -524,7 +580,7 @@ Limits, stated in the dialog:
   reported as warnings, never as success.
 - No write path here is hardware-validated in this build; all are `ITM`.
 - Recall (op 20), bypass (op 41), the remove pair (28/78) and the chain upload
-  (op 21) come from captures of the official editor (§2.5a, §2.5b) but have
+  (op 21) come from captures of the official editor (§2.5a, §2.5d) but have
   not been replayed from this build on hardware.
 
 ### 2.9 `set_model` (operation 40)
@@ -567,7 +623,7 @@ defaults. The page therefore:
 An **empty slot** is the least proven case: op 40 is expected to create the
 block, but nothing here has seen it on hardware. If the pedal rejects it, the
 page reports the status in the log and as a notice. Structural writes that
-reorder the chain use op 21 (§2.5b).
+reorder the chain use op 21 (§2.5d).
 
 ## 3. Runtime gates
 
@@ -647,9 +703,9 @@ pedal.
 
 | Layer | Test |
 |---|---|
-| Frame builders | `cargo test -p podgo-protocol --features device-write` (`set_param`, captured op-20/op-28/op-41/op-71 golden frames, the op-21 stream, op-254 and op-5 golden/stream vectors, name validation, op-40 structure) |
+| Frame builders | `cargo test -p podgo-protocol --features device-write` (`set_param`, captured op-20/op-28/op-41/op-71 golden frames, the captured op-88/op-89/op-98/op-37 golden frames, the op-21 stream, op-254 and op-5 golden/stream vectors, name validation, op-40 structure) |
 | Container | `cargo test -p podgo-domain` (`backup::tests`: round trip, digests, duplicates, tamper, out-of-range entries) |
-| Flow state machine | `apps/web/wasm` `write::tests` (handshake, bare acks, status, rejection, save body, model body, recall status 1, bypass body, the op-28→78 chain with its status advance, and the op-21 stream with its single status) and `backup::tests` (builder round trip, tamper rejection, preamble, window status, cursor advance, timeout) |
-| Chain reorder | `cargo test -p podgo-domain` (`l6helix::tests`: `move_chain_entry` splices the chain, snapshot enables and footswitch targets, keeps unknown bytes, and re-encodes with the captured offset table) |
-| Browser | `apps/web/tests/usb.spec.ts` → "batch-saves parameter drafts with Ctrl+S after arming" (op 30 live, then op 71), "keeps the write arm when switching presets" and "reads a stored slot without recalling when writing is off" (op 20), "sends op 41 when bypass is tapped on a connected preset", "removes an effect with operations 28 and 78 from the block menu", "moves a block on the pedal with operation 21", "saves the active preset after backing up the destination slot", the phone-viewport "drafts a model change and saves it with op 40" / "adds an effect to an empty slot and sends op 40 there", and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-40/op-71 frames, serves both setlists, acknowledges every restore frame and records the completed op-5 messages) |
+| Flow state machine | `apps/web/wasm` `write::tests` (handshake, bare acks, status, rejection, save body, model body, recall status 1, bypass body, the op-28→78 chain with its status advance, the four snapshot commands with their captured fields, and the op-21 stream with its single status) and `backup::tests` (builder round trip, tamper rejection, preamble, window status, cursor advance, timeout) |
+| Chain reorder | `cargo test -p podgo-domain` (`l6helix::tests`: `move_chain_entry` splices the chain, snapshot enables and footswitch targets, keeps unknown bytes, re-encodes with the captured offset table, and reproduces the captured op-21 body byte for byte — the first op-21 upload from `podgo-move-effect.pcapng`, `fixtures/op21_move_capture_fw250.bin`) |
+| Browser | `apps/web/tests/usb.spec.ts` → "batch-saves parameter drafts with Ctrl+S after arming" (op 30 live, then op 71), "keeps the write arm when switching presets" and "reads a stored slot without recalling when writing is off" (op 20), "sends op 41 when bypass is tapped on a connected preset", "removes an effect with operations 28 and 78 from the block menu", "keeps the pedal move disabled after the 2026-11-24 crash" (op 21 sends nothing), "saves the active preset after backing up the destination slot", the phone-viewport "drafts a model change and saves it with op 40" / "adds an effect to an empty slot and sends op 40 there", and "backs up every slot and restores the streamed file" (fake WebUSB device records the op-30/op-40/op-71 frames, serves both setlists, acknowledges every restore frame and records the completed op-5 messages). Snapshot commands are recorded on `window.__podgoSnapshots` by the fake pedal and exercised by the manual checklist until a browser spec covers them |
 | Hardware | Manual checklist in `docs/development/manual-testing-todo.md` (all writes; restore is still unvalidated) |

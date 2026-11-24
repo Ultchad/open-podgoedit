@@ -831,23 +831,37 @@ setlists puis le preset actif), ouvrir **Developer tools** pour voir le journal.
       journal `Live: removed block N with operations 28+78`.
 - [ ] Save puis rappeler : le slot reste vide.
 
-5. Réorganisation (op 21) — plus de pop-up
-- [ ] Clic droit → **Move left / Move right** : journal
-      `Live: moved block A to B with operation 21`, l'éditeur relit le preset.
-- [ ] **Le pédalier joue-t-il vraiment le nouvel ordre ?** Noter oui/non.
-      Si non, copier les 40 dernières lignes du journal.
-- [ ] Contrôler footswitch et snapshots du bloc déplacé.
-- [ ] Save puis rappeler : l'ordre est conservé.
+4. Réorganisation (op 21) — **DÉSACTIVÉE dans cette version**
+> Le test du 2026-11-24 a fait **planter le pédalier** (redémarrage
+> nécessaire) : l'op 21 de ce build est encore refusée par le pédalier. Le
+> menu **Move left / Move right** est masqué et un message l'explique ; ne pas
+> le réactiver sans une nouvelle capture de l'éditeur officiel.
+>
+> Écart trouvé dans les deux trames capturées de l'éditeur officiel
+> (`podgo-move-effect.pcapng`) : la table d'offsets se termine sur le **début**
+> de la liste `body[12]` (128 NUL), pas sur la fin du corps. Le réencodage
+> Rust suit maintenant la capture (test
+> `recomputed_table_reproduces_the_captured_op21_body`), mais aucune trame de
+> ce build n'a encore été renvoyée au pédalier.
+- [x] Ancien test : plantage. L'onglet doit être rechargé, le pédalier
+      redémarré, puis **Read active preset**.
+- [ ] Après la prochaine version : tester sur un slot User dédié, noter
+      journal + 40 dernières lignes.
 
-6. Copier un preset — à ré-essayer maintenant
+5. Copier / coller un preset
 - [ ] Ouvrir dans la bibliothèque le preset **actif**, menu ⋯ → **Copy to…**,
       taper `02D`. Attendu : journal `Copy: storing the active preset …` puis
       `Copy verified`, un **seul** pop-up (le slot cible).
 - [ ] Sur le **pédalier**, rappeler 02D : le son doit être celui du preset.
-- [ ] Refaire avec un slot **non actif** : journal `Preset write:` puis
+- [ ] Refaire avec un preset **non actif** : journal `Preset write:` puis
       `body verified`.
-- [ ] Si « copy preset » ne fait toujours rien : noter ce qui s'affiche
-      (bandeau, journal, pop-up) et à quel moment.
+- [ ] **Copy puis Paste ici** sur le preset **actif** (clic droit, **Copy**,
+      puis **Paste here** sur un autre slot) : le journal doit afficher
+      `Copy: storing the active preset …` (op 71) et **non** `Preset write:`
+      (op 5). Rappeler la destination : le son **et le nom** du preset.
+- [ ] Refaire Copy → Paste avec un preset **non actif** : journal
+      `Preset write:` puis `body verified` ; si le nom reste vide, le noter
+      (l'op 5 ne transporte pas le nom, l'op 9 reste inconnue).
 
 7. Changer de preset (op 20)
 - [ ] Cliquer un autre slot : le pédalier **joue ce preset**, journal
@@ -861,10 +875,35 @@ setlists puis le preset actif), ouvrir **Developer tools** pour voir le journal.
         enregistré garde la modification.
   - [ ] `no` : le son change, la modification est perdue.
 
-8. Snapshots — à ré-essayer maintenant
-- [ ] Alors que le pédalier est connecté, cliquer une autre puce snapshot :
-      le message doit dire que le pédalier garde son snapshot (aucune trame).
-- [ ] Clic droit sur une puce snapshot : le menu doit s'ouvrir.
+8. Snapshots (op 88 / 89 / 98 / 37) — à ré-essayer maintenant
+> Trames capturées de POD Go Edit le 2026-11-24
+> (`podgo-snapshots.pcapng`, voir `docs/protocol/writes.md` §2.5c).
+
+- [ ] Cliquer une autre puce snapshot : le son change **tout de suite** sur
+      le pédalier, journal `Live: recalled snapshot N … with operation 88`,
+      bandeau `unsaved changes`.
+- [ ] Save puis rappeler un autre preset et revenir : le snapshot
+      **sélectionné** au dernier Save doit être celui qui sonne.
+- [ ] Double-clic sur une puce (ou menu → **Rename snapshot…**) : saisir
+      `test1` puis Entrée. Journal `Live: snapshot N renamed to "test1" …
+      with operation 89`, et le libellé change **tout de suite** sur l'écran
+      du pédalier.
+- [ ] Save : le bandeau doit passer de `no change` à un Save réel ; rappeler
+      un autre preset puis revenir : `test1` est toujours là.
+- [ ] Menu → palette **Vert** (ou autre) : la LED du footswitch change sur le
+      pédalier, journal `operation 98` ; Save puis rappeler : la couleur est
+      conservée.
+- [ ] Assigner un paramètre (ex. `Drive` d'une disto) : cliquer l'icône
+      appareil photo à gauche du nom du paramètre. Journal
+      `Live: Drive on block N now stores a value per snapshot (operation 37)`,
+      l'icône reste allumée.
+- [ ] Mettre `Drive` à `2.0` dans le snapshot 1, aller au snapshot 2, y mettre
+      `7.0` : revenir au 1 et au 2, le pédalier doit rappeler **les deux
+      valeurs** — c'est la preuve que l'op 37 a été accepté.
+- [ ] Save puis rappeler un autre preset et revenir : les deux valeurs sont
+      conservées.
+- [ ] Retirer l'assignation (re-cliquer l'icône) : message disant que seule la
+      copie hors ligne peut le faire (aucune capture du retrait).
 - [ ] Sur le **pédalier**, changer de snapshot : l'éditeur doit suivre.
 
 **Résultat :** à compléter (date, firmware, opérations, écarts, statuts refusés).
@@ -912,9 +951,10 @@ personnelles dans les fixtures du dépôt.
 
 ## 4. À ne pas tester encore
 
-- Écriture de chaîne (op 21) : **implémentée** (§3.14, point 5) mais jamais
-  rejouée depuis ce build ; la première tentative doit se faire sur un preset
-  dont vous avez une sauvegarde `.pgb`, une opération à la fois.
+- Écriture de chaîne (op 21) : **désactivée** dans l'interface depuis le
+  plantage du 2026-11-24 (§3.14, point 4). Le réencodage suit maintenant la
+  table d'offsets des deux trames capturées, mais rien ne sera renvoyé au
+  pédalier avant une validation dédiée sur un preset sauvegardé en `.pgb`.
 - Restauration op 9/86/113 et op-254 final : non rejoués par ce build ; leur
   sémantique est inconnue. Seul le flux op-5 est envoyé (§3.12).
 - Effacement ou purge d'un slot : aucune opération n'est prouvée ; un

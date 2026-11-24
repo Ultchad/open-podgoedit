@@ -23,9 +23,10 @@
 use podgo_protocol::write::{
     build_chain_frame, decode_write_status, encode_chain_upload, encode_recall_preset,
     encode_remove_effect, encode_save_preset, encode_set_bypass, encode_set_model,
-    encode_set_param, validate_preset_name, write_cursor_advance, CHAIN_CHUNK_BYTES,
-    CHAIN_CURSOR_ADVANCE, CHAIN_FIRST_BYTES, WRITE_FIRST_COMMAND_SEQ, WRITE_OPEN_2_CURSOR,
-    WRITE_SEQUENCE,
+    encode_set_param, encode_snapshot_led_color, encode_snapshot_param, encode_snapshot_recall,
+    encode_snapshot_rename, validate_preset_name, validate_snapshot_name, write_cursor_advance,
+    CHAIN_CHUNK_BYTES, CHAIN_CURSOR_ADVANCE, CHAIN_FIRST_BYTES, WRITE_FIRST_COMMAND_SEQ,
+    WRITE_OPEN_2_CURSOR, WRITE_SEQUENCE,
 };
 use wasm_bindgen::prelude::*;
 
@@ -78,6 +79,26 @@ enum Command {
     RemoveEffect {
         block: u32,
         commit: bool,
+        transaction: u32,
+    },
+    SnapshotRecall {
+        index: u32,
+        transaction: u32,
+    },
+    SnapshotRename {
+        index: u32,
+        name: String,
+        transaction: u32,
+    },
+    SnapshotLedColor {
+        index: u32,
+        palette: u32,
+        transaction: u32,
+    },
+    SnapshotParam {
+        block: u32,
+        param: u32,
+        assigned: bool,
         transaction: u32,
     },
 }
@@ -137,6 +158,36 @@ impl Command {
                 transaction,
             } => encode_remove_effect(*block, *commit, u64::from(*transaction), seq, cursor)
                 .map_err(|err| err.to_string()),
+            Self::SnapshotRecall { index, transaction } => {
+                encode_snapshot_recall(*index, u64::from(*transaction), seq, cursor)
+                    .map_err(|err| err.to_string())
+            }
+            Self::SnapshotRename {
+                index,
+                name,
+                transaction,
+            } => encode_snapshot_rename(*index, name, u64::from(*transaction), seq, cursor)
+                .map_err(|err| err.to_string()),
+            Self::SnapshotLedColor {
+                index,
+                palette,
+                transaction,
+            } => encode_snapshot_led_color(*index, *palette, u64::from(*transaction), seq, cursor)
+                .map_err(|err| err.to_string()),
+            Self::SnapshotParam {
+                block,
+                param,
+                assigned,
+                transaction,
+            } => encode_snapshot_param(
+                *block,
+                *param,
+                *assigned,
+                u64::from(*transaction),
+                seq,
+                cursor,
+            )
+            .map_err(|err| err.to_string()),
         }
     }
 
@@ -205,6 +256,27 @@ impl Command {
                 commit,
                 transaction,
             } => format!("remove block={block} commit={commit} transaction={transaction}"),
+            Self::SnapshotRecall { index, transaction } => {
+                format!("snapshot recall index={index} transaction={transaction}")
+            }
+            Self::SnapshotRename {
+                index,
+                name,
+                transaction,
+            } => format!("snapshot rename index={index} name={name:?} transaction={transaction}"),
+            Self::SnapshotLedColor {
+                index,
+                palette,
+                transaction,
+            } => format!("snapshot color index={index} palette={palette} transaction={transaction}"),
+            Self::SnapshotParam {
+                block,
+                param,
+                assigned,
+                transaction,
+            } => format!(
+                "snapshot param block={block} param={param} assigned={assigned} transaction={transaction}"
+            ),
         }
     }
 }
@@ -952,6 +1024,172 @@ impl RemoveEffectFlow {
     }
 }
 
+/// One snapshot command, driven packet by packet.
+///
+/// The four operations share the same write-channel driver, so they also share
+/// one JS class with static factories:
+///
+/// - {@link SnapshotFlow.recall} (op 88);
+/// - {@link SnapshotFlow.rename} (op 89);
+/// - {@link SnapshotFlow.ledColor} (op 98);
+/// - {@link SnapshotFlow.param} (op 37).
+///
+/// All four were captured from POD Go Edit in `podgo-snapshots.pcapng`
+/// (2026-11-24) and answer status `0`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct SnapshotFlow {
+    driver: WriteDriver,
+}
+
+#[wasm_bindgen]
+impl SnapshotFlow {
+    /// Recall snapshot `index` (0-based) on the pedal (operation 88).
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the index is above 3.
+    #[wasm_bindgen(js_name = recall)]
+    pub fn recall(index: u32, transaction: u32) -> Result<SnapshotFlow, String> {
+        if index >= 4 {
+            return Err("snapshot index is above 3".to_owned());
+        }
+        Ok(Self {
+            driver: WriteDriver::new(Command::SnapshotRecall { index, transaction }),
+        })
+    }
+
+    /// Rename snapshot `index` (operation 89); `name` is at most 10 printable
+    /// ASCII bytes, and an empty name clears the custom label.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the index or name is invalid.
+    #[wasm_bindgen(js_name = rename)]
+    pub fn rename(index: u32, name: String, transaction: u32) -> Result<SnapshotFlow, String> {
+        if index >= 4 {
+            return Err("snapshot index is above 3".to_owned());
+        }
+        validate_snapshot_name(&name).map_err(|err| err.to_string())?;
+        Ok(Self {
+            driver: WriteDriver::new(Command::SnapshotRename {
+                index,
+                name,
+                transaction,
+            }),
+        })
+    }
+
+    /// Set snapshot `index`'s LED palette entry (operation 98).
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the index is above 3 or the palette above 11.
+    #[wasm_bindgen(js_name = ledColor)]
+    pub fn led_color(index: u32, palette: u32, transaction: u32) -> Result<SnapshotFlow, String> {
+        if index >= 4 {
+            return Err("snapshot index is above 3".to_owned());
+        }
+        if palette > 11 {
+            return Err("snapshot LED palette is above 11".to_owned());
+        }
+        Ok(Self {
+            driver: WriteDriver::new(Command::SnapshotLedColor {
+                index,
+                palette,
+                transaction,
+            }),
+        })
+    }
+
+    /// Assign (`assigned = true`) one parameter to the Snapshots controller
+    /// (operation 37).
+    ///
+    /// `block` is the raw chain index (input is 0) and `param` the catalog
+    /// position. Removal has no capture yet; the page keeps it offline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the parameters cannot be encoded.
+    #[wasm_bindgen(js_name = param)]
+    pub fn param(
+        block: u32,
+        param: u32,
+        assigned: bool,
+        transaction: u32,
+    ) -> Result<SnapshotFlow, String> {
+        Ok(Self {
+            driver: WriteDriver::new(Command::SnapshotParam {
+                block,
+                param,
+                assigned,
+                transaction,
+            }),
+        })
+    }
+
+    /// Replay the handshake from its first packet after a timeout.
+    #[wasm_bindgen]
+    pub fn restart_handshake(&mut self) {
+        self.driver.restart_handshake();
+    }
+
+    /// Current phase: `handshake`, `command` or `done`.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn phase(&self) -> String {
+        self.driver.phase().to_owned()
+    }
+
+    /// Timeout the page should apply to the next read.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn timeout_ms(&self) -> u32 {
+        self.driver.timeout_ms()
+    }
+
+    /// Next frame to send, or `undefined` when the flow is finished.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn next_request(&self) -> Option<Vec<u8>> {
+        self.driver.next_request()
+    }
+
+    /// Consume one response for the last request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the flow is already finished or the pedal
+    /// rejected the command.
+    #[wasm_bindgen]
+    pub fn accept_response(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.driver.accept_response(bytes)
+    }
+
+    /// True once the device answered with a status (or the flow failed).
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.driver.is_finished()
+    }
+
+    /// JSON result: `{"ok":true}` or `{"ok":false,"message":"…"}`.
+    ///
+    /// `undefined` until the flow is finished.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn result_json(&self) -> Option<String> {
+        self.driver.result_json()
+    }
+
+    /// Configuration used for diagnostics.
+    #[wasm_bindgen]
+    #[must_use]
+    pub fn describe(&self) -> String {
+        self.driver.describe()
+    }
+}
+
 /// Stage of the op-21 chain upload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChainStage {
@@ -1323,6 +1561,79 @@ mod tests {
     #[test]
     fn recall_rejects_an_unknown_setlist() {
         assert!(RecallFlow::new(2, 0, 1).is_err());
+    }
+
+    #[test]
+    fn snapshot_flows_carry_the_captured_fields() {
+        let mut recall = SnapshotFlow::recall(2, 1006).unwrap();
+        drive_handshake(&mut recall.driver);
+        let command = recall.next_request().unwrap();
+        let parsed = podgo_protocol::frame::Frame::parse(&command).unwrap();
+        let body = podgo_protocol::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(88));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(inner.get_u64(92).unwrap().as_u64(), Some(2));
+        recall
+            .accept_response(&framed_status(1006, 0, None))
+            .unwrap();
+        assert!(recall.is_finished());
+
+        let mut rename = SnapshotFlow::rename(1, "test1".to_owned(), 1013).unwrap();
+        drive_handshake(&mut rename.driver);
+        let command = rename.next_request().unwrap();
+        let parsed = podgo_protocol::frame::Frame::parse(&command).unwrap();
+        let body = podgo_protocol::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(89));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(inner.get_u64(92).unwrap().as_u64(), Some(1));
+        assert_eq!(
+            inner.get_u64(109).unwrap().as_str_bytes(),
+            Some(&b"test1\0"[..])
+        );
+        rename
+            .accept_response(&framed_status(1013, 0, None))
+            .unwrap();
+
+        let mut color = SnapshotFlow::led_color(3, 7, 1014).unwrap();
+        drive_handshake(&mut color.driver);
+        let command = color.next_request().unwrap();
+        let parsed = podgo_protocol::frame::Frame::parse(&command).unwrap();
+        let body = podgo_protocol::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(98));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(inner.get_u64(92).unwrap().as_u64(), Some(3));
+        assert_eq!(inner.get_u64(66).unwrap().as_u64(), Some(7));
+        color
+            .accept_response(&framed_status(1014, 0, None))
+            .unwrap();
+
+        let mut assign = SnapshotFlow::param(3, 2, true, 1008).unwrap();
+        drive_handshake(&mut assign.driver);
+        let command = assign.next_request().unwrap();
+        let parsed = podgo_protocol::frame::Frame::parse(&command).unwrap();
+        let body = podgo_protocol::open::payload(&parsed).unwrap();
+        let (value, _) = msgpack::decode_prefix(body).unwrap();
+        assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(37));
+        let inner = value.get_u64(101).unwrap();
+        assert_eq!(inner.get_u64(98).unwrap().as_u64(), Some(3));
+        assert_eq!(inner.get_u64(28).unwrap().as_u64(), Some(2));
+        assert_eq!(inner.get_u64(71).unwrap().as_u64(), Some(2));
+        assert_eq!(inner.get_u64(74).unwrap().as_u64(), Some(11));
+        assert_eq!(inner.get_u64(29).unwrap().as_bool(), Some(true));
+        assign
+            .accept_response(&framed_status(1008, 0, None))
+            .unwrap();
+        assert!(assign.is_finished());
+    }
+
+    #[test]
+    fn snapshot_flows_reject_out_of_range_values() {
+        assert!(SnapshotFlow::recall(4, 1).is_err());
+        assert!(SnapshotFlow::rename(0, "elevenchars".to_owned(), 1).is_err());
+        assert!(SnapshotFlow::led_color(0, 12, 1).is_err());
     }
 
     #[test]

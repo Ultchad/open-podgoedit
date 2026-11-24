@@ -304,20 +304,30 @@ export default function PresetView({
           disabled: !onPasteBlock || !canPasteBlock || !menuPasteable,
           onSelect: () => onPasteBlock?.(blockMenu.index),
         },
+        // Reordering on the pedal (operation 21) crashed the pedal on
+        // 2026-11-24 and is disabled until a new official-editor capture
+        // validates the upload; see docs/development/manual-testing-todo.md
+        // §3.14. The entries stay disabled instead of disappearing so the
+        // reason is visible.
         'separator',
         {
           id: 'block-menu-move-left',
           label: 'Move left',
-          disabled: !onMoveBlock || menuEmpty || blockMenu.index <= 0,
+          hint: 'Disabled: crashes the pedal',
+          disabled: true,
+          title:
+            'Reordering the chain on the pedal (op 21) is disabled: the ' +
+            '2026-11-24 upload crashed the pedal. Waiting for a new capture.',
           onSelect: () => onMoveBlock?.(blockMenu.index, blockMenu.index - 1),
         },
         {
           id: 'block-menu-move-right',
           label: 'Move right',
-          disabled:
-            !onMoveBlock ||
-            menuEmpty ||
-            blockMenu.index >= processing.length - 1,
+          hint: 'Disabled: crashes the pedal',
+          disabled: true,
+          title:
+            'Reordering the chain on the pedal (op 21) is disabled: the ' +
+            '2026-11-24 upload crashed the pedal. Waiting for a new capture.',
           onSelect: () => onMoveBlock?.(blockMenu.index, blockMenu.index + 1),
         },
         ...(onSetBlockEnabled && menuEntry?.kind === 'block'

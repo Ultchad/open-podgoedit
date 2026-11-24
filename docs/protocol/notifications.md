@@ -85,12 +85,14 @@ above 49 was observed.
 | `30` | set parameter | `{98: block, 119: value, 26, 28, 29}` | knob turns; one frame per step |
 | `31` | footswitch assign | `{98: block, 70: footswitch, 79}` | editor bypass assign |
 | `33` | footswitch unassign | `{98: block, 70: footswitch}` | editor unassign |
-| `34` | controller assign | `{74: controller, 71: param, 98, 72, 73}` | editor controller assign |
+| `34` | controller assign | `{74: controller, 71: param, 98, 72, 73}` | editor controller assign; `74: 11` is the Snapshots controller (2026-11-24 assignment capture) |
 | `39` | bypass (legacy) | `{98: block, 26: 0}` | once per preset change |
 | `40` | model changed | `{91: model id}` | footswitch transition |
 | `41` | footswitch state | `{70: footswitch, 63: bool, 66: value}` | same burst as `40` |
-| `42` | snapshot | `{92: index}` | snapshot change |
-| `46` | snapshot state | `{92: index}` | follows `42` |
+| `42` | snapshot | `{92: index}` | snapshot change; also the ack of op 88 |
+| `43` | snapshot name | `{92: index, 109: "<name>\0"}` | editor snapshot rename (op 89) |
+| `46` | snapshot state | `{92: index}` | follows `42`, both after op 88 and on a pedal snapshot change |
+| `48` | snapshot LED colour | `{92: index, 66: palette}` | editor snapshot colour (op 98) |
 | `49` | absolute bypass | `{98: block, 59: enabled}` | footswitch; also `null` during snapshots |
 
 `49` is the pedal's echo of the block's enabled flag: `false` means the effect
