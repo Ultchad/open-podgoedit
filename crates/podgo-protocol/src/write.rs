@@ -583,10 +583,7 @@ pub fn encode_snapshot_param(
             (Value::uint(29), Value::Bool(assigned)),
             (Value::uint(26), Value::uint(0)),
             (Value::uint(28), Value::uint(u64::from(param))),
-            (
-                Value::uint(74),
-                Value::uint(SNAPSHOT_CONTROLLER_WIRE),
-            ),
+            (Value::uint(74), Value::uint(SNAPSHOT_CONTROLLER_WIRE)),
             (Value::uint(71), Value::uint(u64::from(param))),
         ],
         transaction,

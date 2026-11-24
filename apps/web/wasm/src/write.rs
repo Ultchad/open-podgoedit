@@ -1574,7 +1574,9 @@ mod tests {
         assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(88));
         let inner = value.get_u64(101).unwrap();
         assert_eq!(inner.get_u64(92).unwrap().as_u64(), Some(2));
-        recall.accept_response(&framed_status(1006, 0, None)).unwrap();
+        recall
+            .accept_response(&framed_status(1006, 0, None))
+            .unwrap();
         assert!(recall.is_finished());
 
         let mut rename = SnapshotFlow::rename(1, "test1".to_owned(), 1013).unwrap();
@@ -1586,8 +1588,13 @@ mod tests {
         assert_eq!(value.get_u64(100).unwrap().as_u64(), Some(89));
         let inner = value.get_u64(101).unwrap();
         assert_eq!(inner.get_u64(92).unwrap().as_u64(), Some(1));
-        assert_eq!(inner.get_u64(109).unwrap().as_str_bytes(), Some(&b"test1\0"[..]));
-        rename.accept_response(&framed_status(1013, 0, None)).unwrap();
+        assert_eq!(
+            inner.get_u64(109).unwrap().as_str_bytes(),
+            Some(&b"test1\0"[..])
+        );
+        rename
+            .accept_response(&framed_status(1013, 0, None))
+            .unwrap();
 
         let mut color = SnapshotFlow::led_color(3, 7, 1014).unwrap();
         drive_handshake(&mut color.driver);
@@ -1599,7 +1606,9 @@ mod tests {
         let inner = value.get_u64(101).unwrap();
         assert_eq!(inner.get_u64(92).unwrap().as_u64(), Some(3));
         assert_eq!(inner.get_u64(66).unwrap().as_u64(), Some(7));
-        color.accept_response(&framed_status(1014, 0, None)).unwrap();
+        color
+            .accept_response(&framed_status(1014, 0, None))
+            .unwrap();
 
         let mut assign = SnapshotFlow::param(3, 2, true, 1008).unwrap();
         drive_handshake(&mut assign.driver);
@@ -1614,7 +1623,9 @@ mod tests {
         assert_eq!(inner.get_u64(71).unwrap().as_u64(), Some(2));
         assert_eq!(inner.get_u64(74).unwrap().as_u64(), Some(11));
         assert_eq!(inner.get_u64(29).unwrap().as_bool(), Some(true));
-        assign.accept_response(&framed_status(1008, 0, None)).unwrap();
+        assign
+            .accept_response(&framed_status(1008, 0, None))
+            .unwrap();
         assert!(assign.is_finished());
     }
 
