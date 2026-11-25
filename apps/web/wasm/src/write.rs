@@ -1393,6 +1393,14 @@ impl ChainWriteFlow {
 
     /// Signal that the pending read timed out.
     ///
+    /// The pedal acknowledges the stream in 512-byte windows, so a single
+    /// frame may legitimately go unanswered. A timeout while the stream still
+    /// has bytes to send is therefore not an error: the next frame is sent and
+    /// the status can still arrive later. Only a silent handshake, or a stream
+    /// that was fully sent without ever producing a status, aborts the flow.
+    /// This also keeps a missing acknowledgement from triggering the outer
+    /// retry (a fresh handshake) while the pedal is still mid-stream.
+    ///
     /// # Errors
     ///
     /// A silent handshake, or a stream that ended without a status, aborts the
@@ -1405,6 +1413,9 @@ impl ChainWriteFlow {
         self.waiting = false;
         self.needs_response = false;
         if self.status_seen {
+            return Ok(());
+        }
+        if self.stage == ChainStage::Stream && self.position < self.total {
             return Ok(());
         }
         let message = match self.stage {
@@ -1732,6 +1743,34 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert_eq!(cursors[0], WRITE_OPEN_2_CURSOR + 17);
         assert_eq!(cursors[1], WRITE_OPEN_2_CURSOR + 17);
+    }
+
+    #[test]
+    fn chain_flow_keeps_streaming_after_a_missing_ack() {
+        let mut flow = ChainWriteFlow::new(&[0x5au8; 1200], 7).unwrap();
+        for _ in 0..4 {
+            assert!(flow.next_request().is_some());
+            flow.accept_response(&open2_response()).unwrap();
+        }
+
+        // The pedal grants one window at a time; a frame can go unanswered
+        // without ending the stream. The flow must send the next frame.
+        let mut sent = 0;
+        while flow.position < flow.total {
+            assert!(flow.next_request().is_some());
+            sent += 1;
+            if flow.position < flow.total {
+                flow.accept_timeout().unwrap();
+            }
+            assert!(!flow.is_finished());
+        }
+        assert!(sent > 1);
+        assert!(flow.expects_response());
+
+        // Only the status is missing now; a final timeout would still fail.
+        flow.accept_response(&framed_status(7, 1, None)).unwrap();
+        assert!(flow.is_finished());
+        assert_eq!(flow.result_json().as_deref(), Some("{\"ok\":true}"));
     }
 
     #[test]

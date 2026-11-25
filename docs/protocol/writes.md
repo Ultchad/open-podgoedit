@@ -371,6 +371,12 @@ write channel:
 The header length field is `frame length - 8` on every frame, and outgoing
 packets are padded to 512 bytes. The pedal may answer the status while the
 stream is still being written; bare per-frame acknowledgements are ignored.
+The official editor actually flushes 512-byte windows (a 496-byte frame plus
+a 16-byte continuation), but the device reassembles by the declared length,
+so the 488/496 split above is equivalent. A missing per-frame acknowledgement
+does **not** abort the upload: the flow keeps sending and only requires the
+final `{102, 103}` status. That matters because an early abort used to trigger
+a fresh handshake while the pedal was still mid-stream.
 
 Reordering is the only way to change the chain order. The editor re-reads
 object 22 first (a stale copy would undo live parameter edits), then the Rust
@@ -384,11 +390,25 @@ official editor performs:
 4. set `body[6][98]` to the destination raw index;
 5. re-encode with the captured offset table
    `[body_start, off(0), off(1), off(3), off(4), off(2), off(5), off(6),
-   off(7), off(10), blob_end, blob_end]`.
+   off(7), off(10), table_end, table_end]`.
 
-Every other member is copied verbatim, so unknown fields survive. Send status
-`1` only advances the cursor; the page re-reads the preset afterwards, so a
-pedal that rejects the chain is reported instead of assumed.
+Every other member is copied verbatim, so unknown fields survive. The two
+captured uploads are the same preset before and after one move (raw slot 4 to
+raw slot 10); replaying that move on the first body reproduces the second byte
+for byte, and the inverse move returns to the first
+(`fixtures/op21_move_capture_fw250.bin` and
+`fixtures/op21_move_capture_fw250_second.bin`). The captured editor appends a
+synthetic 128-NUL scratch list under key 12 **after** computing the table, so
+the last two table entries point at the start of key 12, 260 bytes before the
+physical end; the encoder matches that (`table_end`), which was the one
+structural difference that preceded the 2026-11-24 crash. Send status `1` only
+advances the cursor; the page re-reads the preset afterwards, so a pedal that
+rejects the chain is reported instead of assumed.
+
+The UI still keeps **Move left / Move right** disabled: the encoder now
+matches both captures, but no frame from this build has been sent to a pedal.
+Re-enable only after a dedicated hardware test on a User slot backed up as
+`.pgb` (see `docs/development/manual-testing-todo.md` §3.14).
 
 ### 2.6 Backup (`.pgbak`)
 
