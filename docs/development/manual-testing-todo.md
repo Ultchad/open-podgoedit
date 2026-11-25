@@ -833,20 +833,29 @@ setlists puis le preset actif), ouvrir **Developer tools** pour voir le journal.
 
 4. Réorganisation (op 21) — **DÉSACTIVÉE dans cette version**
 > Le test du 2026-11-24 a fait **planter le pédalier** (redémarrage
-> nécessaire) : l'op 21 de ce build est encore refusée par le pédalier. Le
-> menu **Move left / Move right** est masqué et un message l'explique ; ne pas
-> le réactiver sans une nouvelle capture de l'éditeur officiel.
+> nécessaire). La capture de l'éditeur officiel (`podgo-move-effect.pcapng`)
+> a depuis été décodée : les deux uploads sont le même preset avant/après un
+> déplacement (slot brut 4 → 10). Notre réencodage reproduit les deux corps
+> **octet pour octet** (tests
+> `recomputed_table_reproduces_the_captured_op21_body` et
+> `move_chain_entry_reproduces_both_captured_op21_uploads`), y compris la
+> table d'offsets qui se termine sur le **début** de la liste `body[12]`
+> (128 NUL) et non sur la fin du corps. Le flux tolère aussi une absence
+> d'acquittement entre deux trames : seul le statut final est requis.
 >
-> Écart trouvé dans les deux trames capturées de l'éditeur officiel
-> (`podgo-move-effect.pcapng`) : la table d'offsets se termine sur le **début**
-> de la liste `body[12]` (128 NUL), pas sur la fin du corps. Le réencodage
-> Rust suit maintenant la capture (test
-> `recomputed_table_reproduces_the_captured_op21_body`), mais aucune trame de
-> ce build n'a encore été renvoyée au pédalier.
+> Le menu **Move left / Move right** reste visible mais désactivé tant
+> qu'aucune trame de ce build n'a été renvoyée à un pédalier. Le réactiver
+> seulement après le test ci-dessous, sur un slot User dédié sauvegardé en
+> `.pgb`.
 - [x] Ancien test : plantage. L'onglet doit être rechargé, le pédalier
       redémarré, puis **Read active preset**.
-- [ ] Après la prochaine version : tester sur un slot User dédié, noter
-      journal + 40 dernières lignes.
+- [ ] **Avant le test** : exporter le slot User dédié en `.pgb` (menu de la
+      bibliothèque) et noter son nom. Brancher, lire le preset actif.
+- [ ] **Prochain test** : activer temporairement le menu, déplacer un effet
+      d'un slot vers un autre, vérifier le journal (`Live: moved block … with
+      operation 21`), l'ordre à l'écran du pédalier, puis **Save**. Rappeler
+      le slot et vérifier que l'ordre est conservé. En cas d'échec, noter le
+      journal + les 40 dernières lignes et restaurer le `.pgb`.
 
 5. Copier / coller un preset
 - [ ] Ouvrir dans la bibliothèque le preset **actif**, menu ⋯ → **Copy to…**,
@@ -983,9 +992,10 @@ personnelles dans les fixtures du dépôt.
 ## 4. À ne pas tester encore
 
 - Écriture de chaîne (op 21) : **désactivée** dans l'interface depuis le
-  plantage du 2026-11-24 (§3.14, point 4). Le réencodage suit maintenant la
-  table d'offsets des deux trames capturées, mais rien ne sera renvoyé au
-  pédalier avant une validation dédiée sur un preset sauvegardé en `.pgb`.
+  plantage du 2026-11-24 (§3.14, point 4). Le réencodage reproduit maintenant
+  les deux uploads capturés octet pour octet et le flux ne s'arrête plus sur
+  un acquittement manquant, mais rien ne sera renvoyé au pédalier avant la
+  validation dédiée sur un preset sauvegardé en `.pgb`.
 - Restauration op 9/86/113 et op-254 final : non rejoués par ce build ; leur
   sémantique est inconnue. Seul le flux op-5 est envoyé (§3.12).
 - Effacement ou purge d'un slot : aucune opération n'est prouvée ; un
