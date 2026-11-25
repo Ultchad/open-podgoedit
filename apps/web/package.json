@@ -11,10 +11,12 @@
     "dev": "vite",
     "prebuild": "npm run wasm && npm run fixtures",
     "build": "tsc --noEmit && vite build",
+    "postbuild": "node scripts/check-pwa.mjs",
     "preview": "vite preview",
     "test:wasm": "cargo test --manifest-path wasm/Cargo.toml",
     "test:smoke": "node scripts/smoke-wasm.mjs",
     "test:browser": "playwright test",
+    "test:pwa": "playwright test -c pw.pwa.config.ts",
     "audit:runtime": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {

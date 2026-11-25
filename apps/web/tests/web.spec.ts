@@ -787,3 +787,43 @@ test('rejects a malformed preset in the browser', async ({ page }) => {
     'invalid container',
   );
 });
+
+test('shows the install button only when the browser offers the PWA prompt', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // Headless Chromium does not meet the install criteria, so no prompt event
+  // is fired and the button stays hidden.
+  await expect(page.locator('#install-app')).toHaveCount(0);
+
+  interface InstallEvent extends Event {
+    prompt: () => Promise<void>;
+    userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+  }
+  await page.evaluate(() => {
+    const event = new Event('beforeinstallprompt') as unknown as InstallEvent;
+    event.prompt = async () => {
+      (window as unknown as { __podgoPrompted?: boolean }).__podgoPrompted =
+        true;
+    };
+    event.userChoice = Promise.resolve({ outcome: 'accepted' });
+    window.dispatchEvent(event);
+  });
+
+  const install = page.locator('#install-app');
+  await expect(install).toBeVisible();
+  await install.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { __podgoPrompted?: boolean })
+          .__podgoPrompted ?? false,
+      ),
+    )
+    .toBe(true);
+
+  // An accepted install hides the button: the app is now installed.
+  await expect(page.locator('#install-app')).toHaveCount(0);
+});

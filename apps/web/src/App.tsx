@@ -77,6 +77,7 @@ import PresetMenu, {
   type PresetMenuEntry,
 } from './components/PresetMenu';
 import { validatePresetName, validateSnapshotName } from './presetName';
+import { useInstallPrompt } from './useInstallPrompt';
 import {
   applyBackupEdits,
   backupFileName,
@@ -364,6 +365,7 @@ export default function App() {
   const [usbSupported] = useState(() => usbLinkSupported());
   const [androidShell] = useState(() => runningOnAndroidShell());
   const [desktopShell] = useState(() => isDesktopShell());
+  const { canInstall, install } = useInstallPrompt();
   const [deviceInfo, setDeviceInfo] = useState<PodgoDeviceInfo | null>(null);
   const [usbBusy, setUsbBusy] = useState<string | null>(null);
   const [usbError, setUsbError] = useState<string | null>(null);
@@ -5782,7 +5784,18 @@ export default function App() {
           >
             Import…
           </button>
-          
+          {canInstall && (
+            <button
+              id="install-app"
+              type="button"
+              className="toolbar-button"
+              onClick={() => void install()}
+              title="Install this editor so it opens offline from your home screen or app menu"
+            >
+              Install
+            </button>
+          )}
+
           <a
             className="github-link"
             href="https://github.com/Ultchad/open-podgoedit"

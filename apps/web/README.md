@@ -38,9 +38,12 @@ setlist depuis un POD Go branché en **WebUSB**.
   tactiles font au moins 44 px (champs à 16 px pour éviter le zoom). Les
   boîtes de dialogue se ferment avec Échap ou par le fond et piègent le focus ;
   les menus se parcourent aux flèches. Le build de production fournit un
-  manifeste, des icônes et un service worker hors ligne, et prévient avant de
-  quitter avec des modifications non enregistrées. Les écritures vers le
-  pédalier sont inchangées et restent non validées sur matériel.
+  manifeste, des icônes et un service worker hors ligne qui précache **tout** le
+  bundle (JS, WASM, CSS, catalogue, fixtures) dès la première visite : après un
+  seul chargement en ligne, l'éditeur s'ouvre entièrement sans réseau, et un
+  bouton **Install** (Chromium) / la commande d'installation du navigateur en
+  fait une appli installable. Les écritures vers le pédalier sont inchangées
+  et restent non validées sur matériel.
 - **Changement de modèle et ordre de la chaîne** : sur un preset hors ligne,
   l'onglet **Models** charge le modèle cliqué dans le bloc sélectionné (ou dans
   un emplacement vide) avec les valeurs par défaut du catalogue, puis exporte
