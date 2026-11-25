@@ -968,10 +968,15 @@ mod tests {
         assert_eq!(container.to_bytes_recomputed().unwrap(), FIXTURE);
     }
 
-    /// One op-21 upload from `podgo-move-effect.pcapng` (official editor,
-    /// fw 2.50). It carries the synthetic 128-NUL scratch list under key 12
-    /// and its offset table stops at that key, not at the physical end.
+    /// First of two op-21 uploads from `podgo-move-effect.pcapng` (official
+    /// editor, fw 2.50). It carries the synthetic 128-NUL scratch list under
+    /// key 12 and its offset table stops at that key, not at the physical end.
     const CAPTURED_OP21: &[u8] = include_bytes!("../../../fixtures/op21_move_capture_fw250.bin");
+
+    /// Second op-21 upload from the same capture: the same preset after the
+    /// editor moved raw slot 4 to raw slot 10.
+    const CAPTURED_OP21_SECOND: &[u8] =
+        include_bytes!("../../../fixtures/op21_move_capture_fw250_second.bin");
 
     #[test]
     fn recomputed_table_reproduces_the_captured_op21_body() {
@@ -992,6 +997,24 @@ mod tests {
             usize::try_from(last).unwrap(),
             CAPTURED_OP21.len() - 260,
             "the captured table ends where key 12 starts"
+        );
+    }
+
+    /// The two captured op-21 uploads are the same preset before and after one
+    /// move: the official editor moved raw slot 4 to raw slot 10. Replaying
+    /// that move on the first body must reproduce the second byte for byte,
+    /// and the inverse move must return to the first. This covers the whole
+    /// container, not only the chain array: the offset table, the per-snapshot
+    /// enables, the footswitch targets and `body[6][98]` all have to match.
+    #[test]
+    fn move_chain_entry_reproduces_both_captured_op21_uploads() {
+        assert_eq!(
+            move_chain_entry(CAPTURED_OP21, 4, 10).unwrap(),
+            CAPTURED_OP21_SECOND
+        );
+        assert_eq!(
+            move_chain_entry(CAPTURED_OP21_SECOND, 10, 4).unwrap(),
+            CAPTURED_OP21
         );
     }
 

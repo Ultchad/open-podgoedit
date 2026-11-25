@@ -2486,7 +2486,7 @@ test('removes an effect with operations 28 and 78 from the block menu', async ({
  * edit buffer, splices the chain with the Rust domain layer and streams the
  * whole container back. The stream is driven frame by frame.
  */
-test('keeps the pedal move disabled after the 2026-11-24 crash', async ({ page }) => {
+test('keeps the pedal move disabled until a hardware test', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -2509,13 +2509,14 @@ test('keeps the pedal move disabled after the 2026-11-24 crash', async ({ page }
     /POD Go \(fake\)/,
   );
 
-  // Reordering the chain with op 21 crashed the pedal on 2026-11-24. The menu
-  // items stay visible but disabled, and nothing is sent.
+  // Reordering the chain with op 21 crashed the pedal on 2026-11-24. The
+  // encoder now reproduces both captured official-editor uploads, but the
+  // menu stays visible and disabled until a hardware test.
   await page.locator('.block-tile').nth(2).click({ button: 'right' });
   await expect(page.locator('#block-menu-move-left')).toBeDisabled();
   await expect(page.locator('#block-menu-move-right')).toBeDisabled();
   await expect(page.locator('#block-menu-move-left')).toContainText(
-    'crashes the pedal',
+    'awaiting pedal test',
   );
   await page.keyboard.press('Escape');
 

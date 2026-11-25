@@ -100,6 +100,16 @@ semantic versioning once it reaches 1.0.
   confirmation.
 
 ### Fixed
+- **The op-21 chain upload now matches the official editor.** Decoding
+  `podgo-move-effect.pcapng` showed that the captured offset table ends at the
+  start of the synthetic 128-NUL `body[12]` scratch list, not at the physical
+  end of the body. The encoder now reproduces both captured uploads byte for
+  byte, and replaying the captured move (raw slot 4 → 10) on the first body
+  produces the second exactly. The stream also keeps sending when a single
+  frame goes unanswered instead of aborting into a fresh handshake while the
+  pedal is still receiving; only the final status is required. **Move left /
+  Move right stay disabled** until a hardware test on a User slot backed up as
+  `.pgb`; see `docs/development/manual-testing-todo.md` §3.14.
 - **Android Save, paste and rename no longer look like no-ops.** The Android
   shell now installs a `WebChromeClient` that turns `window.alert`,
   `window.confirm` and `window.prompt` into native dialogs, and implements the

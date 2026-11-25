@@ -305,29 +305,33 @@ export default function PresetView({
           onSelect: () => onPasteBlock?.(blockMenu.index),
         },
         // Reordering on the pedal (operation 21) crashed the pedal on
-        // 2026-11-24 and is disabled until a new official-editor capture
-        // validates the upload; see docs/development/manual-testing-todo.md
-        // §3.14. The entries stay disabled instead of disappearing so the
-        // reason is visible.
+        // 2026-11-24. The official-editor capture now shows the offset-table
+        // difference and the encoder reproduces both captured uploads byte
+        // for byte, but nothing is sent until a dedicated hardware test on a
+        // User slot backed up as .pgb; see
+        // docs/development/manual-testing-todo.md §3.14. The entries stay
+        // disabled instead of disappearing so the reason is visible.
         'separator',
         {
           id: 'block-menu-move-left',
           label: 'Move left',
-          hint: 'Disabled: crashes the pedal',
+          hint: 'Disabled: awaiting pedal test',
           disabled: true,
           title:
-            'Reordering the chain on the pedal (op 21) is disabled: the ' +
-            '2026-11-24 upload crashed the pedal. Waiting for a new capture.',
+            'Reordering the chain on the pedal (op 21) is disabled until a ' +
+            'hardware test on a backed-up User slot. The encoder now matches ' +
+            'both captured official-editor uploads.',
           onSelect: () => onMoveBlock?.(blockMenu.index, blockMenu.index - 1),
         },
         {
           id: 'block-menu-move-right',
           label: 'Move right',
-          hint: 'Disabled: crashes the pedal',
+          hint: 'Disabled: awaiting pedal test',
           disabled: true,
           title:
-            'Reordering the chain on the pedal (op 21) is disabled: the ' +
-            '2026-11-24 upload crashed the pedal. Waiting for a new capture.',
+            'Reordering the chain on the pedal (op 21) is disabled until a ' +
+            'hardware test on a backed-up User slot. The encoder now matches ' +
+            'both captured official-editor uploads.',
           onSelect: () => onMoveBlock?.(blockMenu.index, blockMenu.index + 1),
         },
         ...(onSetBlockEnabled && menuEntry?.kind === 'block'
