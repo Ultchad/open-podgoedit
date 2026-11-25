@@ -95,6 +95,10 @@ jobs:
         working-directory: apps/web
         run: npx playwright test
 
+      - name: Offline PWA test (built bundle)
+        working-directory: apps/web
+        run: npm run test:pwa
+
       - name: Upload test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v7
