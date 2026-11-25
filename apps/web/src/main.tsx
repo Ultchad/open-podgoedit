@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { installDesktopFiles, isDesktopShell } from './desktop';
+import { runningOnAndroidShell } from './usb';
 import './styles.css';
 
 // The desktop shell cannot save a `blob:` link, so exports go through a native
@@ -20,9 +21,14 @@ createRoot(root).render(
 );
 
 // Register the offline shell only in a production build: the dev server and
-// the Playwright suite must never serve a stale cached page, and the desktop
-// shell already ships the bundle inside the executable.
-if (import.meta.env.PROD && !isDesktopShell() && 'serviceWorker' in navigator) {
+// the Playwright suite must never serve a stale cached page, and the native
+// shells already ship the bundle inside their package.
+if (
+  import.meta.env.PROD &&
+  !isDesktopShell() &&
+  !runningOnAndroidShell() &&
+  'serviceWorker' in navigator
+) {
   window.addEventListener('load', () => {
     navigator.serviceWorker
       .register(`${import.meta.env.BASE_URL}sw.js`)
