@@ -2,6 +2,10 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
+  // The offline PWA spec needs the built bundle (dist/ has the generated
+  // sw.js and precache); the dev server cannot run it. It is collected by
+  // pw.pwa.config.ts instead.
+  testIgnore: /pwa\.spec\.ts/,
   fullyParallel: true,
   reporter: 'list',
   use: {
