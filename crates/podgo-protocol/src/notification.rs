@@ -100,6 +100,34 @@ pub struct Notification {
     pub body: Value,
 }
 
+impl Notification {
+    /// Unwrap the payload carried by key 106.
+    ///
+    /// Ops 4, 8, 22, 30, 39 and 49 wrap their fields once more in key 106
+    /// (`{82, 68, 121, 106: {…}}`); every other opcode carries the map
+    /// directly. This returns the inner map when that envelope is present and
+    /// the payload itself otherwise.
+    #[must_use]
+    pub fn payload(&self) -> Value {
+        let data = self.data.clone().unwrap_or(Value::Nil);
+        data.get_u64(KEY_EVENT_DATA).cloned().unwrap_or(data)
+    }
+}
+
+/// Cursor advance after one event data frame: `8 + declared body length`.
+///
+/// `None` when the frame is too short to carry the subheader. The captured
+/// acknowledgements use exactly this amount (see
+/// `docs/protocol/notifications.md` §1).
+#[must_use]
+pub fn event_cursor_advance(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() < 24 {
+        return None;
+    }
+    let declared = u32::from_le_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    Some(8u32.saturating_add(declared))
+}
+
 /// Decode a notification frame.
 ///
 /// # Errors
@@ -334,6 +362,35 @@ mod tests {
         let frame = Frame::parse(&bytes).unwrap();
         let notification = decode_notification(&frame).unwrap();
         assert_eq!(notification.opcode, OP_SET_PARAM);
+    }
+
+    #[test]
+    fn payload_unwraps_the_controller_envelope() {
+        let frames = action_frames();
+        // Op 30 is wrapped as {82, 68, 121, 106: {98, 28, 119, …}}.
+        let knob = decode_at(&frames, 7);
+        let payload = knob.payload();
+        assert_eq!(payload.get_u64(98).and_then(Value::as_u64), Some(2));
+        assert_eq!(payload.get_u64(28).and_then(Value::as_u64), Some(0));
+        assert_eq!(payload.get_u64(119).and_then(Value::as_u64), Some(23));
+
+        // Op 42 carries its map directly.
+        let snapshot = decode_at(&frames, 14);
+        assert_eq!(
+            snapshot.payload().get_u64(92).and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn cursor_advance_matches_the_captured_acknowledgements() {
+        // Every captured event is framed, so the declared body length sits at
+        // offset 20 and the host advances by 8 + that length.
+        let captured = captured_frames();
+        let first = captured[0];
+        let declared = u32::from_le_bytes([first[20], first[21], first[22], first[23]]);
+        assert_eq!(event_cursor_advance(first), Some(8 + declared));
+        assert_eq!(event_cursor_advance(&[0u8; 16]), None);
     }
 
     #[test]

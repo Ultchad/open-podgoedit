@@ -551,21 +551,37 @@ The toolbar's **Actions…** dialog separates the in-page model from the pedal:
 - **Copy** keeps the loaded raw `l6-helix` body and its setlist/slot/name in an
   in-memory clipboard. Nothing is sent.
 - **Paste** and **Move** update the in-memory setlist model, and a pending
-  marker records the edit. **Rename** updates the model name the same way.
-  Pending edits exist only in the page: a later setlist read, reload or written
-  operation replaces them.
+  marker records the edit. **Rename** in this dialog updates the model name the
+  same way. Pending edits exist only in the page: a later setlist read, reload
+  or written operation replaces them.
 - **Write paste to pedal** builds a **one-entry `.pgbak`** with `BackupBuilder`
   (product/firmware from the loaded preset) and replays it with `RestoreFlow`,
   i.e. the same operation-5 stream as a full restore. Only the User setlist is
-  accepted. It needs armed writes and one `window.confirm` naming the
-  destination and its current name; a full backup is optional.
+  accepted; a destination backup is optional.
 - **Write rename to pedal** uses operation 71, which stores the **active
-  preset's** metadata. It is therefore offered only when the editor shows the
-  active preset and the slot is in the User setlist. One `window.confirm` is
-  the only gate. Renaming a different slot is local-only.
+  preset's** metadata. It is offered only when the editor shows the active
+  preset and the slot is in the User setlist.
 - **Copy to…** writes one User slot: the active preset goes through operation
   71 (after pending drafts), any other slot is streamed with operation 5 and
   read back for a byte comparison. The source slot is always kept.
+
+#### Direct rename (header menu and librarian)
+
+The header menu's **Rename…** and a User slot's **Rename…** write to the pedal
+when it is connected and no offline copy is open. There is no confirmation
+dialog; the only prompt is the name itself.
+
+- **Active User preset**: operation 71 runs immediately. This stores the edit
+  buffer, so it also makes the visible name survive a preset switch without
+  pressing Save.
+- **Any other User slot**: the page first offers the leave-preset
+  `save`/`no`/`Cancel` prompt if the pedal has unsaved edits, then recalls the
+  target (op 20), stores the name with op 71 (the target is active now), recalls
+  the previous preset back (op 20) and re-reads the active preset. Finally it
+  reads the User setlist and logs whether the slot shows the new name. This is
+  the only rename path that moves the pedal's active preset; it is disabled
+  while an offline document is open.
+- **Offline copy**: the rename stays in the page and marks the slot dirty.
 
 Limits, stated in the dialog:
 

@@ -59,6 +59,29 @@ export interface PodgoConnection {
   send(packet: Uint8Array): Promise<void>;
   readWrite(timeoutMs: number): Promise<Uint8Array | null>;
   readRead(timeoutMs: number): Promise<Uint8Array | null>;
+  /**
+   * Send one event-channel poll and drain the burst.
+   *
+   * Every `cmd=0x04` data frame is passed to `ack`, which returns the
+   * acknowledgement to send (or `null`). The whole poll holds the transport
+   * lock so a command cannot interleave with the burst. A control frame or a
+   * timeout ends the burst.
+   */
+  pollEvents(
+    poll: Uint8Array,
+    timeoutMs: number,
+    ack: (frame: Uint8Array) => Uint8Array | null,
+  ): Promise<void>;
+  /**
+   * Send one event poll and report whether the pedal answered within
+   * `timeoutMs`. Used once, before live sync starts, so a device that never
+   * answers does not leave a silent loop running.
+   */
+  probeEvents(
+    poll: Uint8Array,
+    timeoutMs: number,
+    ack: (frame: Uint8Array) => Uint8Array | null,
+  ): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -131,6 +154,14 @@ export function isEventChannel(packet: Uint8Array): boolean {
     packet[7] === EVENT_DST[1]
   );
 }
+
+/** True for an event-channel **data** frame (`cmd=0x04`), not a poll echo/ack. */
+export function isEventData(packet: Uint8Array): boolean {
+  return isEventChannel(packet) && packet.length > 11 && packet[11] === 0x04;
+}
+
+/** Mirror used while reading the event channel (`0x03F0 → 0x1002`). */
+const EVENT_PEER = [...EVENT_SRC, ...EVENT_DST] as const;
 
 function findBulkPair(configuration: USBConfiguration): BulkPair | null {
   const candidates: BulkPair[] = [];
@@ -367,6 +398,94 @@ export class PodgoUsbConnection implements PodgoConnection {
       }
       throw error;
     }
+  }
+
+  /**
+   * Poll the event channel once and acknowledge every data frame.
+   *
+   * The poll echo (or any control frame) ends the burst. Data frames queued
+   * by the reader are drained before the echo, so a burst is never lost.
+   */
+  pollEvents(
+    poll: Uint8Array,
+    timeoutMs: number,
+    ack: (frame: Uint8Array) => Uint8Array | null,
+  ): Promise<void> {
+    return this.withLock(async () => {
+      if (!this.reading) {
+        throw this.closedReason ?? new PodgoUsbError('connexion USB fermée');
+      }
+      const send = async (packet: Uint8Array): Promise<void> => {
+        const result = await this.device.transferOut(
+          this.info.endpointOut,
+          new Uint8Array(packet),
+        );
+        if (result.status !== 'ok') {
+          throw new PodgoUsbError(`écriture USB refusée (${result.status})`);
+        }
+      };
+
+      await send(poll);
+      for (;;) {
+        let frame: Uint8Array;
+        try {
+          frame = await this.waitFor([...EVENT_PEER], timeoutMs);
+        } catch (error) {
+          if (error instanceof UsbTimeoutError) {
+            return;
+          }
+          throw error;
+        }
+        if (!isEventData(frame)) {
+          return;
+        }
+        const acknowledgement = ack(frame);
+        if (acknowledgement) {
+          await send(acknowledgement);
+        }
+      }
+    });
+  }
+
+  /**
+   * Run one poll and report whether the device answered it.
+   *
+   * A device that acknowledges a poll but sends no reply for `POLL_PROBE_MS`
+   * cannot be watched live; closing the stale pending read with a rejection
+   * would print a console error, so the probe uses its own short wait.
+   */
+  probeEvents(
+    poll: Uint8Array,
+    timeoutMs: number,
+    ack: (frame: Uint8Array) => Uint8Array | null,
+  ): Promise<boolean> {
+    return this.withLock(async () => {
+      if (!this.reading) {
+        throw this.closedReason ?? new PodgoUsbError('connexion USB fermée');
+      }
+      await this.device.transferOut(
+        this.info.endpointOut,
+        new Uint8Array(poll),
+      );
+      try {
+        const frame = await this.waitFor([...EVENT_PEER], timeoutMs);
+        if (isEventData(frame)) {
+          const acknowledgement = ack(frame);
+          if (acknowledgement) {
+            await this.device.transferOut(
+              this.info.endpointOut,
+              new Uint8Array(acknowledgement),
+            );
+          }
+        }
+        return true;
+      } catch (error) {
+        if (error instanceof UsbTimeoutError) {
+          return false;
+        }
+        throw error;
+      }
+    });
   }
 
   async close(): Promise<void> {

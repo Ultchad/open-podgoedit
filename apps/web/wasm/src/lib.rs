@@ -7,6 +7,7 @@
 //! WebUSB. It performs no device I/O and no network access itself.
 
 mod backup;
+mod events;
 mod preset;
 mod write;
 
