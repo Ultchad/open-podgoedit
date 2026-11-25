@@ -79,13 +79,9 @@ for (const [attribute, quote, marker] of [
   const pattern = new RegExp(`${marker}${quote}([^${quote}#?]+)${quote}`, 'g');
   for (const reference of html.matchAll(pattern)) {
     let url = reference[1];
-    if (
-      url.startsWith('http') ||
-      url.startsWith('//') ||
-      url.startsWith('data:') ||
-      url.startsWith('mailto:') ||
-      url.startsWith('javascript:')
-    ) {
+    // Anything carrying a URL scheme (http:, data:, javascript:, vbscript:,
+    // mailto: …) is external to the offline bundle and skipped.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('//')) {
       continue; // external or inline, not part of the offline bundle
     }
     // The base is either `/` (root deploy) or `./` (Pages project site).
