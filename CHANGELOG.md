@@ -7,6 +7,16 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Installable PWA with a complete offline precache.** A Vite build plugin
+  (`apps/web/vite.config.ts`) generates `dist/sw.js` with a versioned, full
+  precache list (JS, WASM, CSS, icons and fixtures), so one online visit is
+  enough to open the editor with no network. The worker caches the shell and
+  serves assets cache-first (`ignoreVary`), so a reload while offline works.
+  A header **Install** button appears when Chromium offers the prompt
+  (`useInstallPrompt.ts`), and `postbuild` runs `scripts/check-pwa.mjs` to
+  fail the build if the manifest, icons or a referenced asset is missing from
+  `dist`. Covered by `tests/pwa.spec.ts` (`npm run test:pwa`), which loads the
+  built bundle, drops the network and asserts the editor still runs offline.
 - **Live sync from the pedal (`0x03F0 → 0x1002`).** The editor opens the
   captured event channel after connecting and polls it in the background, so
   knob turns, bypass changes, snapshot switches, preset changes and snapshot
