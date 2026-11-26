@@ -7,6 +7,28 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Delete an effect three ways.** A selected effect can be removed from the
+  right-click **Remove** item, the **Delete**/**Backspace** key, or the
+  **None** tile at the top of the Models pane. All three edit an
+  offline/imported preset as a JSON draft, or remove it live on a connected
+  pedal (operations 28 then 78); with no editable copy the page builds one
+  first so the change is saved or exported. Removing a block also clears its
+  footswitch, controller and snapshot overrides so no dangling assignments
+  remain.
+- **"New preset here" warns before overwriting a draft.** Starting a fresh
+  preset in a User slot that already holds an offline copy or an unsaved draft
+  now asks for confirmation before replacing it, instead of throwing the work
+  away silently. Empty slots still start immediately without a prompt.
+- **Selective `.pgb` import/export from the header.** The old **Import** button
+  is now **Import/Export** and its dialog can bring in or write back only the
+  parts you pick from a full backup: the Factory setlist (`SL00`), the User
+  setlist (`SL01`), impulse responses (`I000`…, RIFF/WAVE) and globals
+  (`GLOB`). Import can open one preset or add every non-empty preset of the
+  checked setlists to the offline library; export rebuilds the container with
+  only the checked parts, keeps selected members byte for byte, and always
+  keeps the `SLNM` name table and unknown members so the file stays readable.
+  The button stays in the header's three-column grid, so it keeps the same
+  size as the other actions on phones.
 - **Installable PWA with a complete offline precache.** A Vite build plugin
   (`apps/web/vite.config.ts`) generates `dist/sw.js` with a versioned, full
   precache list (JS, WASM, CSS, icons and fixtures), so one online visit is

@@ -1466,6 +1466,56 @@ export function setImportedModel(
 }
 
 /**
+ * Remove one effect from an offline document.
+ *
+ * The slot becomes the vendor's unused-slot shape (`{ "@position": block }`,
+ * no `@model`), which `toneToStructure` reads as an empty slot. The block's
+ * footswitch, controller and snapshot overrides are cleared along with it, so
+ * the preset keeps no dangling assignments to a block that no longer exists.
+ */
+export function removeImportedBlock(preset: EditPreset, block: number): void {
+  if (!Number.isInteger(block) || block < 0 || block >= BLOCK_COUNT) {
+    return;
+  }
+  const tone = preset.tone;
+  const dsp0 = asObject(tone.dsp0);
+  if (!dsp0) {
+    return;
+  }
+  dsp0[`block${block}`] = { '@position': block };
+
+  // Per-block roots: `tone.footswitch.dsp0` and `tone.controller.dsp0` carry
+  // one key per block (`block0`, `block1`, …). Clear both so the removed
+  // effect keeps no switch or controller assignment.
+  const footswitchRoot =
+    asObject(asObject(tone.footswitch)?.dsp0);
+  if (footswitchRoot) {
+    delete footswitchRoot[`block${block}`];
+  }
+  const controllerRoot = asObject(asObject(tone.controller)?.dsp0);
+  if (controllerRoot) {
+    delete controllerRoot[`block${block}`];
+  }
+
+  // Snapshot overrides for this block: the bypass boolean and any stored
+  // controller values.
+  for (let index = 0; index < 4; index += 1) {
+    const snapshot = asObject(tone[`snapshot${index}`]);
+    if (!snapshot) {
+      continue;
+    }
+    const blocks = asObject(asObject(snapshot.blocks)?.dsp0);
+    if (blocks) {
+      delete blocks[`block${block}`];
+    }
+    const controllers = asObject(asObject(snapshot.controllers)?.dsp0);
+    if (controllers) {
+      delete controllers[`block${block}`];
+    }
+  }
+}
+
+/**
  * Build the `.pgp` document for a preset.
  *
  * A `.pgp` import keeps its original document. A `.pgb` entry only carries the
@@ -1713,6 +1763,135 @@ export async function serializePgb(backup: EditBackup): Promise<Uint8Array> {
   }
   out.set(directory, cursor);
   return out;
+}
+
+// --- selective backup content ---------------------------------------------
+//
+// A `AF6L` backup is a bag of tagged members: `SL00`/`SL01` setlists, `I000`
+// impulse responses, `GLOB` globals, plus the `SLNM` name table and `UMDS`
+// model archive. The page can import or export any of the four user-visible
+// groups while keeping the bookkeeping members so the file stays readable.
+
+const FACTORY_SETLIST_TAG = 'SL00';
+const USER_SETLIST_TAG = 'SL01';
+/** Impulse responses are `I000`, `I001`, … (`RIFF/WAVE` content). */
+const IR_MEMBER_TAG = /^I\d{3}$/;
+
+/** Which optional parts of a `.pgb` to import or export. */
+export interface BackupContentSelection {
+  factory: boolean;
+  user: boolean;
+  irs: boolean;
+  globals: boolean;
+}
+
+/** What a parsed `.pgb` offers, in the terms the selection uses. */
+export interface BackupContent {
+  /** Non-empty presets in the Factory setlist. */
+  factory: number;
+  /** Non-empty presets in the User setlist. */
+  user: number;
+  /** Number of impulse-response members. */
+  irs: number;
+  /** True when the globals member is present. */
+  globals: boolean;
+}
+
+/** True for an impulse-response member (`I000`, `I001`, …). */
+export function isIrMember(tag: string): boolean {
+  return IR_MEMBER_TAG.test(tag);
+}
+
+function setlistTag(
+  backup: EditBackup,
+  index: number,
+  fallback: string,
+): string {
+  return backup.setlists[index]?.memberTag ?? fallback;
+}
+
+/** True when the selection includes this setlist member. */
+export function setlistInSelection(
+  setlist: EditSetlist,
+  selection: BackupContentSelection,
+): boolean {
+  if (setlist.memberTag === FACTORY_SETLIST_TAG) {
+    return selection.factory;
+  }
+  if (setlist.memberTag === USER_SETLIST_TAG) {
+    return selection.user;
+  }
+  // Read without a directory: the tag is unknown, so never hide it.
+  return true;
+}
+
+/** Count the parts a `.pgb` offers to import or export. */
+export function backupContent(backup: EditBackup): BackupContent {
+  const container = backup.container;
+  const factoryTag = setlistTag(backup, 0, FACTORY_SETLIST_TAG);
+  const userTag = setlistTag(backup, 1, USER_SETLIST_TAG);
+  const count = (setlist: EditSetlist | undefined): number =>
+    setlist ? setlist.presets.filter((preset) => preset !== null).length : 0;
+  return {
+    factory: count(
+      backup.setlists.find((setlist) => setlist.memberTag === factoryTag) ??
+        backup.setlists[0],
+    ),
+    user: count(
+      backup.setlists.find((setlist) => setlist.memberTag === userTag) ??
+        backup.setlists[1],
+    ),
+    irs:
+      container?.members.filter((member) => isIrMember(member.tag)).length ?? 0,
+    globals:
+      container?.members.some((member) => member.tag === 'GLOB') ?? false,
+  };
+}
+
+/**
+ * Keep only the selected parts of a backup.
+ *
+ * Members this build does not recognise (the `SLNM` name table, the `UMDS`
+ * model archive, anything unknown) are always kept, so the rebuilt file stays
+ * readable. `serializePgb` recomputes every directory offset afterwards.
+ */
+export function selectBackupContent(
+  backup: EditBackup,
+  selection: BackupContentSelection,
+): EditBackup {
+  const container = backup.container;
+  if (!container) {
+    throw new Error(
+      'This .pgb was read without its directory, so it cannot be rebuilt.',
+    );
+  }
+  const factoryTag = setlistTag(backup, 0, FACTORY_SETLIST_TAG);
+  const userTag = setlistTag(backup, 1, USER_SETLIST_TAG);
+  const keep = (tag: string): boolean => {
+    if (tag === factoryTag) {
+      return selection.factory;
+    }
+    if (tag === userTag) {
+      return selection.user;
+    }
+    if (isIrMember(tag)) {
+      return selection.irs;
+    }
+    if (tag === 'GLOB') {
+      return selection.globals;
+    }
+    return true;
+  };
+  return {
+    ...backup,
+    setlists: backup.setlists.filter(
+      (setlist) => !setlist.memberTag || keep(setlist.memberTag),
+    ),
+    container: {
+      ...container,
+      members: container.members.filter((member) => keep(member.tag)),
+    },
+  };
 }
 
 /** Filename-safe export name for a `.pgb` backup. */

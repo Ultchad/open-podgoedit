@@ -84,8 +84,10 @@ import {
   clonePreset,
   hasImportedSnapshotParam,
   presetFileName,
+  selectBackupContent,
   serializePgb,
   serializePgp,
+  setlistInSelection,
   moveImportedBlock,
   setImportedBlockEnabled,
   setImportedModel,
@@ -96,10 +98,12 @@ import {
   setImportedSnapshotLedColor,
   setImportedSnapshotName,
   setImportedSnapshotParam,
+  removeImportedBlock,
   SNAPSHOT_CONTROLLER_WIRE,
   isSnapshotController,
   structureToEditPreset,
   toneToStructure,
+  type BackupContentSelection,
   type EditBackup,
   type EditPreset,
 } from './podgoEdit';
@@ -392,7 +396,9 @@ export default function App() {
 
   /** Keep the shortcut target in step with the slot selected in PresetView. */
   const handleSelectionChange = useCallback((selection: Selection) => {
-    setSelectedBlock(typeof selection === 'number' ? selection : null);
+    const block = typeof selection === 'number' ? selection : null;
+    selectedBlockRef.current = block;
+    setSelectedBlock(block);
   }, []);
 
   const [structure, setStructure] = useState<PresetStructure | null>(null);
@@ -473,6 +479,11 @@ export default function App() {
   );
   /** 0-based processing slot selected in the editor, reported by PresetView. */
   const [selectedBlock, setSelectedBlock] = useState<number | null>(null);
+  /**
+   * Synchronous mirror of `selectedBlock` for the global Delete-key handler,
+   * which must read the latest selection without waiting for a state render.
+   */
+  const selectedBlockRef = useRef<number | null>(null);
   /** Sticky message under the header (no pedal, save unavailable, …). */
   const [saveNotice, setSaveNotice] = useState<Notice | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -2430,6 +2441,21 @@ export default function App() {
   /** Start a neutral preset in a User slot (no pedal required). */
   async function startNewPreset(slot?: number): Promise<void> {
     const target = slot ?? firstEmptyUserSlot();
+    // A slot that already holds an offline copy or a dirty draft would be
+    // silently replaced by a fresh preset, losing the work. Confirm first.
+    const targetKey = localKey(1, target);
+    const wouldOverwrite =
+      localDocs[targetKey] !== undefined ||
+      dirtySlots[targetKey] === true ||
+      (workingSlot?.setlist === 1 &&
+        workingSlot.slot === target &&
+        workingDoc !== null);
+    if (wouldOverwrite && !window.confirm(
+      `Start a new preset in User ${slotLabel(target)}? This replaces the ` +
+        'existing preset or unsaved draft in that slot.',
+    )) {
+      return;
+    }
     if (!(await confirmDiscardPedalDrafts())) {
       return;
     }
@@ -3033,6 +3059,77 @@ export default function App() {
         console.error('[POD Go] remove effect failed', error);
       }
     });
+  }
+
+  /**
+   * Remove one effect from the selected block.
+   *
+   * Single entry point for the right-click **Remove**, the **Delete** key and
+   * the **None** model tile. It edits an offline/imported document in JSON
+   * directly; on a connected pedal it removes the effect in the edit buffer
+   * (operations 28 then 78); with no editable copy yet it builds one first so
+   * the change is kept and can be saved or exported.
+   */
+  function removeBlock(index: number): void {
+    if (!structure) {
+      return;
+    }
+    const entry = structure.chain.find((item) => item.slot === index + 1);
+    if (!entry || (entry.kind !== 'block' && entry.kind !== 'looper')) {
+      setSaveNotice({
+        kind: 'error',
+        text:
+          'Remove works on an amp, effect or looper block. Input and Output ' +
+          'are fixed stages.',
+      });
+      return;
+    }
+    if (workingDoc) {
+      // Offline / imported document: edit the JSON. One entry point for the
+      // shared draft, history and dirty-slot bookkeeping.
+      removeBlockOffline(index);
+      return;
+    }
+    if (connected && activePresetLoaded) {
+      // Live pedal path: suppress in the edit buffer (ops 28 + 78).
+      void removeActiveBlock(index);
+      return;
+    }
+    // A pedal-read preset without an editable copy: build the copy first,
+    // then remove in the new document.
+    const created = createEditableCopy();
+    if (!created) {
+      return;
+    }
+    removeBlockOffline(index);
+  }
+
+  /** Edit an offline/imported document to drop one block, keeping history. */
+  function removeBlockOffline(block: number): void {
+    const doc = workingDoc;
+    if (!doc) {
+      return;
+    }
+    pushHistory('the block removal');
+    removeImportedBlock(doc, block);
+    const next = { ...doc };
+    setWorkingDoc(next);
+    setStructure(toneToStructure(next));
+    if (workingSlot) {
+      const key = localKey(workingSlot.setlist, workingSlot.slot);
+      setLocalDocs((currentDocs) => ({
+        ...currentDocs,
+        [key]: clonePreset(next),
+      }));
+      markSlotDirty(key);
+    } else {
+      setDirty(true);
+    }
+    setSaveNotice(null);
+    appendLog(
+      `Draft: removed block ${block + 1}; the change is offline and exports ` +
+        'as .pgp.',
+    );
   }
 
   /** Copy one amp/effect block for pasting into another preset. */
@@ -3960,6 +4057,137 @@ export default function App() {
     } finally {
       setBackupExportBusy(false);
     }
+  }
+
+  /**
+   * Import every non-empty preset of the selected `.pgb` setlists.
+   *
+   * User presets keep their slot when the browser does not already hold a copy
+   * there; Factory presets (and occupied slots) go to the first free User
+   * slots. Nothing already in the library is overwritten.
+   */
+  function importBackupToLibrary(
+    backup: EditBackup,
+    selection: BackupContentSelection,
+  ): void {
+    const imported: { slot: number; name: string }[] = [];
+    const docs: Record<string, EditPreset> = {};
+    const used = new Set<number>();
+    let skipped = 0;
+    let cursor = 0;
+    const takeFree = (): number | null => {
+      while (cursor < 128) {
+        const candidate = cursor;
+        cursor += 1;
+        if (used.has(candidate) || localKey(1, candidate) in localDocs) {
+          continue;
+        }
+        const entry = setlists[1]?.find((item) => item.slot === candidate);
+        if (entry?.name) {
+          continue;
+        }
+        return candidate;
+      }
+      return null;
+    };
+    for (const setlist of backup.setlists) {
+      if (!setlistInSelection(setlist, selection)) {
+        continue;
+      }
+      const fromUser = setlist.memberTag !== 'SL00';
+      for (const [sourceSlot, preset] of setlist.presets.entries()) {
+        if (!preset) {
+          continue;
+        }
+        let target: number | null = null;
+        if (
+          fromUser &&
+          !used.has(sourceSlot) &&
+          !(localKey(1, sourceSlot) in localDocs) &&
+          !setlists[1]?.find((item) => item.slot === sourceSlot)?.name
+        ) {
+          target = sourceSlot;
+        } else {
+          target = takeFree();
+        }
+        if (target === null) {
+          skipped += 1;
+          continue;
+        }
+        used.add(target);
+        const stored = clonePreset(preset);
+        stored.setlist = 1;
+        stored.slot = target;
+        const name = stored.name || DEFAULT_PRESET_NAME;
+        docs[localKey(1, target)] = stored;
+        imported.push({ slot: target, name });
+      }
+    }
+    if (imported.length === 0) {
+      throw new Error('No preset to import. Check a setlist that has presets.');
+    }
+    setLocalDocs((current) => ({ ...current, ...docs }));
+    for (const { slot, name } of imported) {
+      updateSetlistName(1, slot, name);
+    }
+    setImportOpen(false);
+    setImportTarget(null);
+    const first = imported[0];
+    const firstDoc = docs[localKey(1, first.slot)];
+    if (firstDoc) {
+      void openLocalPreset(1, first.slot, firstDoc, {
+        fresh: true,
+        draftsConfirmed: true,
+      });
+    }
+    appendLog(
+      `Imported ${imported.length} preset(s) from the backup into the offline ` +
+        `library (User ${imported
+          .map((item) => slotLabel(item.slot))
+          .join(', ')}).`,
+    );
+    setSaveNotice({
+      kind: 'info',
+      text:
+        `Imported ${imported.length} preset(s) as offline copies` +
+        (skipped > 0 ? `; ${skipped} skipped: no free User slot.` : '.'),
+    });
+  }
+
+  /** Download the `.pgb` with only the selected parts. */
+  async function exportBackupSelection(
+    backup: EditBackup,
+    selection: BackupContentSelection,
+  ): Promise<void> {
+    const parts: string[] = [];
+    if (selection.factory) {
+      parts.push('factory');
+    }
+    if (selection.user) {
+      parts.push('user');
+    }
+    if (selection.irs) {
+      parts.push('irs');
+    }
+    if (selection.globals) {
+      parts.push('globals');
+    }
+    if (parts.length === 0) {
+      throw new Error('Choose at least one part to export.');
+    }
+    const subset = selectBackupContent(backup, selection);
+    const bytes = await serializePgb(subset);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const file = backupFileName(`podgo-backup-${stamp}-${parts.join('-')}`);
+    downloadBytes(bytes, file);
+    appendLog(
+      `Export: ${file} (${bytes.length} B) with ${parts.join(', ')} from the ` +
+        'imported backup; every selected member keeps its bytes.',
+    );
+    setSaveNotice({
+      kind: 'info',
+      text: `Exported ${file} (${parts.join(', ')}).`,
+    });
   }
 
   /** Export one slot's offline document, when it has one. */
@@ -5619,6 +5847,8 @@ export default function App() {
   copyBlockRef.current = copySelectedBlock;
   const pasteBlockRef = useRef(pasteSelectedBlock);
   pasteBlockRef.current = pasteSelectedBlock;
+  const removeBlockRef = useRef(removeBlock);
+  removeBlockRef.current = removeBlock;
   // Effects registered once read the state they closed over. Every action the
   // listener needs goes through a ref that this render refreshes.
   const saveNoticeRef = useRef(setSaveNotice);
@@ -5626,11 +5856,6 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
-        return;
-      }
-      const key = event.key.toLowerCase();
-
       // Text fields keep their native shortcuts (undo the typed text, paste
       // text, save the page). A focused slider or checkbox is not text entry,
       // so the editor shortcuts still work there.
@@ -5645,6 +5870,27 @@ export default function App() {
       if (typing) {
         return;
       }
+
+      // Delete/Backspace removes the selected effect (right-click Remove,
+      // None, and this key all use the same path).
+      if (
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        (event.key === 'Delete' || event.key === 'Backspace')
+      ) {
+        event.preventDefault();
+        const block = selectedBlockRef.current;
+        if (block !== null) {
+          removeBlockRef.current(block);
+        }
+        return;
+      }
+
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+        return;
+      }
+      const key = event.key.toLowerCase();
 
       if (key === 's') {
         event.preventDefault();
@@ -5777,33 +6023,6 @@ export default function App() {
           </button>
 
           <button
-            id="save-preset"
-            type="button"
-            className="toolbar-button is-primary"
-            disabled={!moduleReady || writing}
-            onClick={() => void saveWorkingPreset()}
-            title={
-              !connected
-                ? 'Connect a POD Go to save. Export .pgp works offline.'
-                : !activePresetLoaded
-                  ? 'Read the active preset from the pedal first.'
-                  : 'Store the preset in its slot (Ctrl+S)'
-            }
-          >
-            Save
-          </button>
-
-          <button
-            id="new-preset"
-            type="button"
-            className="toolbar-button"
-            disabled={!moduleReady || busy}
-            onClick={() => void startNewPreset()}
-            title="Create a neutral preset in the first empty User slot"
-          >
-            New
-          </button>
-          <button
             id="import-edit-file"
             type="button"
             className="toolbar-button"
@@ -5812,9 +6031,9 @@ export default function App() {
               setImportTarget(null);
               setImportOpen(true);
             }}
-            title="Open a POD Go Edit .pgp preset or .pgb backup as an offline copy"
+            title="Import a POD Go Edit .pgp preset or .pgb backup, or export chosen parts of a .pgb"
           >
-            Import…
+            Import/Export
           </button>
         </div>
       </header>
@@ -5905,9 +6124,7 @@ export default function App() {
               onSetBlockEnabled={setBlockEnabled}
               canSetBlockEnabled={connected}
               onRemoveBlock={
-                !workingDoc && connected
-                  ? (block) => void removeActiveBlock(block)
-                  : undefined
+                structure && !busy ? (block) => removeBlock(block) : undefined
               }
               onPresetMenu={
                 currentPresetTarget() ? openCurrentPresetMenu : undefined
@@ -5915,6 +6132,15 @@ export default function App() {
               onCopyBlock={copyBlockAt}
               onPasteBlock={pasteBlockAt}
               canPasteBlock={blockClipboard !== null}
+              canSave={moduleReady && !writing}
+              onSave={() => void saveWorkingPreset()}
+              saveTitle={
+                !connected
+                  ? 'Connect a POD Go to save. Export .pgp works offline.'
+                  : !activePresetLoaded
+                    ? 'Read the active preset from the pedal first.'
+                    : 'Store the preset in its slot (Ctrl+S)'
+              }
               canExport={canExport}
               onExport={exportWorkingPreset}
               canExportBackup={canExportBackup}
@@ -6168,11 +6394,14 @@ export default function App() {
 
       <PodgoEditImportDialog
         open={importOpen}
+        singleSlot={importTarget !== null}
         onClose={() => {
           setImportOpen(false);
           setImportTarget(null);
         }}
         onOpenPreset={openImportedPreset}
+        onImportBackup={importBackupToLibrary}
+        onExportBackup={exportBackupSelection}
       />
 
       <PresetActionsDialog

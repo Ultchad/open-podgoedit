@@ -17,11 +17,19 @@
 
 ## 2. Importing a preset
 
-1. Choose **Import**.
+1. Choose **Import/Export**.
 2. Select a `.pgp` preset or a `.pgb` backup.
 3. The app validates the schema, version and size.
 4. Review the summary (name, model count, warnings).
 5. Choose a destination User slot or keep it local.
+
+A `.pgb` backup also lets you choose which parts to bring in: Factory presets,
+User presets, impulse responses and globals. Unticking a setlist hides it from
+the slot browser; **Import N preset(s)** adds every non-empty preset of the
+checked setlists to the offline library. User presets keep their slot when it
+is free; Factory presets and occupied slots go to the first empty User slots,
+and nothing already in the library is overwritten. IRs have no editor here and
+are only kept for re-export.
 
 Warnings are shown for unknown models, out-of-range parameters and unknown
 fields. Unknown fields are preserved even when not displayed.
@@ -37,8 +45,10 @@ fields. Unknown fields are preserved even when not displayed.
 
 - **Full backup (`.pgbak`):** both setlists, every non-empty slot, raw bodies.
 - **Partial backup (`.pgbak`):** one setlist or a chosen set of slots.
-- **Backup file import/export (`.pgb`):** the vendor container, with untouched
-  members copied byte for byte on export.
+- **Backup file import/export (`.pgb`):** the vendor container. On export you
+  choose which parts to keep — Factory setlist, User setlist, impulse responses
+  and globals — and every member you keep is copied byte for byte. The `SLNM`
+  name table and unknown members are always kept so the file stays readable.
 - **Restore:** checked entries from a `.pgbak` are streamed with operation 5;
   unchecked entries and slots absent from the file are left untouched.
 - Backups are never uploaded anywhere.

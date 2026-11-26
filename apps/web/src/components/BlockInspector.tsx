@@ -72,6 +72,8 @@ interface Props {
   canSetBlockEnabled?: boolean;
   /** Open the effect actions menu at a viewport position. */
   onOpenBlockMenu?: (x: number, y: number) => void;
+  /** Remove the selected effect (the "None" model tile). */
+  onRemove?: () => void;
 }
 
 export default function BlockInspector({
@@ -89,6 +91,7 @@ export default function BlockInspector({
   onSetBlockEnabled,
   canSetBlockEnabled = false,
   onOpenBlockMenu,
+  onRemove,
 }: Props) {
   const [mode, setMode] = useState<Mode>('params');
 
@@ -212,6 +215,7 @@ export default function BlockInspector({
         <ModelBrowser
           current={model}
           onSelect={io ? undefined : onSelectModel}
+          onRemove={io || !onRemove ? undefined : onRemove}
           usedCategories={usedModelCategories}
         />
       ) : (
@@ -503,10 +507,13 @@ function formatDraft(value: number, param: CatalogParam | null): string {
 function ModelBrowser({
   current,
   onSelect,
+  onRemove,
   usedCategories,
 }: {
   current: CatalogModel | null;
   onSelect?: (model: CatalogModel) => void;
+  /** Remove the effect (the "None" tile); shown only when a model is present. */
+  onRemove?: () => void;
   usedCategories: ReadonlySet<string>;
 }) {
   // An empty slot is an Effects block, so start there rather than on Amp.
@@ -591,6 +598,20 @@ function ModelBrowser({
           ? `${models.length} models · click one to load it into the selected block (offline draft; exports as .pgp)`
           : `${models.length} models · changing a model needs an editable preset.`}
       </p>
+
+      {onRemove && current && (
+        <div className="model-grid">
+          <button
+            type="button"
+            className="model-tile is-selectable is-none"
+            title="Remove the effect from this slot"
+            onClick={onRemove}
+          >
+            <span className="model-name">None</span>
+            <span className="model-current">clear</span>
+          </button>
+        </div>
+      )}
 
       <div className="model-grid">
         {models.map((model) => {

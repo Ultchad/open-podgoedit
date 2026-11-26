@@ -59,8 +59,13 @@ explicit discard.
   moves whole slots in the librarian, not blocks inside a preset.
 - Duplicate creates a new local preset with a new id.
 - Move changes slot order locally; synchronization is a separate, explicit step.
-- Delete is not implemented: there is no evidenced delete-slot operation in
-  this build.
+- **Delete an effect** removes an amp, effect or looper block, clearing the slot
+  back to empty. Use the right-click **Remove** item, the **Delete**/`Backspace`
+  key with a block selected, or the **None** tile at the top of the **Models**
+  pane. On an offline copy it edits the JSON document (export as `.pgp` to keep
+  it); on a connected pedal it removes the effect in the preset being played
+  (operations 28 then 78) and **Save** stores the result. Input and Output are
+  fixed stages and cannot be removed.
 
 ## 6. Comparing presets
 
@@ -94,7 +99,8 @@ Implemented in the web app:
 | Save | `Ctrl/Cmd+S` |
 | Copy the selected effect | `Ctrl/Cmd+C` |
 | Paste the copied effect | `Ctrl/Cmd+V` |
+| Delete the selected effect | `Delete` or `Backspace` |
 
 These shortcuts are ignored while a text field has focus, so typing and native
-text editing keep working. Planned but not implemented: duplicate (`Ctrl/Cmd+D`),
-delete (`Delete`), next/previous preset (`↓` / `↑`).
+text editing keep working. Planned but not implemented: duplicate (`Ctrl/Cmd+D`)
+and next/previous preset (`↓` / `↑`).
