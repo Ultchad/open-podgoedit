@@ -364,7 +364,11 @@ test.describe('phone layout', () => {
     await expect(page.locator('.preset-title .preset-slot')).toHaveText('01B');
     await expect(page.locator('#preset-librarian')).not.toHaveClass(/is-open/);
 
-    for (const selector of ['#toggle-presets', '#connect', '#new-preset']) {
+    for (const selector of [
+      '#toggle-presets',
+      '#connect',
+      '#import-edit-file',
+    ]) {
       const target = await page.locator(selector).boundingBox();
       expect(target?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
@@ -692,7 +696,7 @@ test('marks EXP-controlled parameters as not assignable to snapshots', async ({
   await page.goto('/');
   await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
 
-  await page.getByRole('button', { name: 'Import' }).click();
+  await page.locator('#import-edit-file').click();
   await page
     .locator('#import-file')
     .setInputFiles(

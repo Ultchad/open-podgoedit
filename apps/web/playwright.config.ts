@@ -8,6 +8,10 @@ export default defineConfig({
   testIgnore: /pwa\.spec\.ts/,
   fullyParallel: true,
   reporter: 'list',
+  // The app initialises WASM before it accepts input, and the first dev-server
+  // load compiles the whole bundle. A 5 s assertion timeout is too tight on a
+  // slow or memory-constrained machine, so give startup a wider window.
+  expect: { timeout: 20_000 },
   use: {
     baseURL: 'http://127.0.0.1:5173',
     trace: 'retain-on-failure',

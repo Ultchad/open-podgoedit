@@ -84,8 +84,10 @@ import {
   clonePreset,
   hasImportedSnapshotParam,
   presetFileName,
+  selectBackupContent,
   serializePgb,
   serializePgp,
+  setlistInSelection,
   moveImportedBlock,
   setImportedBlockEnabled,
   setImportedModel,
@@ -100,6 +102,7 @@ import {
   isSnapshotController,
   structureToEditPreset,
   toneToStructure,
+  type BackupContentSelection,
   type EditBackup,
   type EditPreset,
 } from './podgoEdit';
@@ -3962,6 +3965,137 @@ export default function App() {
     }
   }
 
+  /**
+   * Import every non-empty preset of the selected `.pgb` setlists.
+   *
+   * User presets keep their slot when the browser does not already hold a copy
+   * there; Factory presets (and occupied slots) go to the first free User
+   * slots. Nothing already in the library is overwritten.
+   */
+  function importBackupToLibrary(
+    backup: EditBackup,
+    selection: BackupContentSelection,
+  ): void {
+    const imported: { slot: number; name: string }[] = [];
+    const docs: Record<string, EditPreset> = {};
+    const used = new Set<number>();
+    let skipped = 0;
+    let cursor = 0;
+    const takeFree = (): number | null => {
+      while (cursor < 128) {
+        const candidate = cursor;
+        cursor += 1;
+        if (used.has(candidate) || localKey(1, candidate) in localDocs) {
+          continue;
+        }
+        const entry = setlists[1]?.find((item) => item.slot === candidate);
+        if (entry?.name) {
+          continue;
+        }
+        return candidate;
+      }
+      return null;
+    };
+    for (const setlist of backup.setlists) {
+      if (!setlistInSelection(setlist, selection)) {
+        continue;
+      }
+      const fromUser = setlist.memberTag !== 'SL00';
+      for (const [sourceSlot, preset] of setlist.presets.entries()) {
+        if (!preset) {
+          continue;
+        }
+        let target: number | null = null;
+        if (
+          fromUser &&
+          !used.has(sourceSlot) &&
+          !(localKey(1, sourceSlot) in localDocs) &&
+          !setlists[1]?.find((item) => item.slot === sourceSlot)?.name
+        ) {
+          target = sourceSlot;
+        } else {
+          target = takeFree();
+        }
+        if (target === null) {
+          skipped += 1;
+          continue;
+        }
+        used.add(target);
+        const stored = clonePreset(preset);
+        stored.setlist = 1;
+        stored.slot = target;
+        const name = stored.name || DEFAULT_PRESET_NAME;
+        docs[localKey(1, target)] = stored;
+        imported.push({ slot: target, name });
+      }
+    }
+    if (imported.length === 0) {
+      throw new Error('No preset to import. Check a setlist that has presets.');
+    }
+    setLocalDocs((current) => ({ ...current, ...docs }));
+    for (const { slot, name } of imported) {
+      updateSetlistName(1, slot, name);
+    }
+    setImportOpen(false);
+    setImportTarget(null);
+    const first = imported[0];
+    const firstDoc = docs[localKey(1, first.slot)];
+    if (firstDoc) {
+      void openLocalPreset(1, first.slot, firstDoc, {
+        fresh: true,
+        draftsConfirmed: true,
+      });
+    }
+    appendLog(
+      `Imported ${imported.length} preset(s) from the backup into the offline ` +
+        `library (User ${imported
+          .map((item) => slotLabel(item.slot))
+          .join(', ')}).`,
+    );
+    setSaveNotice({
+      kind: 'info',
+      text:
+        `Imported ${imported.length} preset(s) as offline copies` +
+        (skipped > 0 ? `; ${skipped} skipped: no free User slot.` : '.'),
+    });
+  }
+
+  /** Download the `.pgb` with only the selected parts. */
+  async function exportBackupSelection(
+    backup: EditBackup,
+    selection: BackupContentSelection,
+  ): Promise<void> {
+    const parts: string[] = [];
+    if (selection.factory) {
+      parts.push('factory');
+    }
+    if (selection.user) {
+      parts.push('user');
+    }
+    if (selection.irs) {
+      parts.push('irs');
+    }
+    if (selection.globals) {
+      parts.push('globals');
+    }
+    if (parts.length === 0) {
+      throw new Error('Choose at least one part to export.');
+    }
+    const subset = selectBackupContent(backup, selection);
+    const bytes = await serializePgb(subset);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const file = backupFileName(`podgo-backup-${stamp}-${parts.join('-')}`);
+    downloadBytes(bytes, file);
+    appendLog(
+      `Export: ${file} (${bytes.length} B) with ${parts.join(', ')} from the ` +
+        'imported backup; every selected member keeps its bytes.',
+    );
+    setSaveNotice({
+      kind: 'info',
+      text: `Exported ${file} (${parts.join(', ')}).`,
+    });
+  }
+
   /** Export one slot's offline document, when it has one. */
   function exportSlot(kind: SetlistKind, slot: number): void {
     if (workingSlot?.setlist === kind && workingSlot.slot === slot && workingDoc) {
@@ -5785,9 +5919,9 @@ export default function App() {
               setImportTarget(null);
               setImportOpen(true);
             }}
-            title="Open a POD Go Edit .pgp preset or .pgb backup as an offline copy"
+            title="Import a POD Go Edit .pgp preset or .pgb backup, or export chosen parts of a .pgb"
           >
-            Import
+            Import/Export
           </button>
         </div>
       </header>
@@ -6150,11 +6284,14 @@ export default function App() {
 
       <PodgoEditImportDialog
         open={importOpen}
+        singleSlot={importTarget !== null}
         onClose={() => {
           setImportOpen(false);
           setImportTarget(null);
         }}
         onOpenPreset={openImportedPreset}
+        onImportBackup={importBackupToLibrary}
+        onExportBackup={exportBackupSelection}
       />
 
       <PresetActionsDialog
