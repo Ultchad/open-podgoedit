@@ -700,6 +700,11 @@ export default function PresetView({
               }
             : undefined
         }
+        onRemove={
+          onRemoveBlock && blockIndex !== null
+            ? () => onRemoveBlock(blockIndex)
+            : undefined
+        }
       />
 
       <div className="editor-foot">

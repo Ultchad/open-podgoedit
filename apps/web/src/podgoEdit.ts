@@ -1466,6 +1466,56 @@ export function setImportedModel(
 }
 
 /**
+ * Remove one effect from an offline document.
+ *
+ * The slot becomes the vendor's unused-slot shape (`{ "@position": block }`,
+ * no `@model`), which `toneToStructure` reads as an empty slot. The block's
+ * footswitch, controller and snapshot overrides are cleared along with it, so
+ * the preset keeps no dangling assignments to a block that no longer exists.
+ */
+export function removeImportedBlock(preset: EditPreset, block: number): void {
+  if (!Number.isInteger(block) || block < 0 || block >= BLOCK_COUNT) {
+    return;
+  }
+  const tone = preset.tone;
+  const dsp0 = asObject(tone.dsp0);
+  if (!dsp0) {
+    return;
+  }
+  dsp0[`block${block}`] = { '@position': block };
+
+  // Per-block roots: `tone.footswitch.dsp0` and `tone.controller.dsp0` carry
+  // one key per block (`block0`, `block1`, …). Clear both so the removed
+  // effect keeps no switch or controller assignment.
+  const footswitchRoot =
+    asObject(asObject(tone.footswitch)?.dsp0);
+  if (footswitchRoot) {
+    delete footswitchRoot[`block${block}`];
+  }
+  const controllerRoot = asObject(asObject(tone.controller)?.dsp0);
+  if (controllerRoot) {
+    delete controllerRoot[`block${block}`];
+  }
+
+  // Snapshot overrides for this block: the bypass boolean and any stored
+  // controller values.
+  for (let index = 0; index < 4; index += 1) {
+    const snapshot = asObject(tone[`snapshot${index}`]);
+    if (!snapshot) {
+      continue;
+    }
+    const blocks = asObject(asObject(snapshot.blocks)?.dsp0);
+    if (blocks) {
+      delete blocks[`block${block}`];
+    }
+    const controllers = asObject(asObject(snapshot.controllers)?.dsp0);
+    if (controllers) {
+      delete controllers[`block${block}`];
+    }
+  }
+}
+
+/**
  * Build the `.pgp` document for a preset.
  *
  * A `.pgp` import keeps its original document. A `.pgb` entry only carries the
