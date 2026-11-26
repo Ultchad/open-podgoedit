@@ -692,7 +692,7 @@ test('marks EXP-controlled parameters as not assignable to snapshots', async ({
   await page.goto('/');
   await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
 
-  await page.getByRole('button', { name: 'Import…' }).click();
+  await page.getByRole('button', { name: 'Import' }).click();
   await page
     .locator('#import-file')
     .setInputFiles(

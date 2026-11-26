@@ -5777,16 +5777,6 @@ export default function App() {
           </button>
 
           <button
-            id="new-preset"
-            type="button"
-            className="toolbar-button"
-            disabled={!moduleReady || busy}
-            onClick={() => void startNewPreset()}
-            title="Create a neutral preset in the first empty User slot"
-          >
-            New
-          </button>
-          <button
             id="import-edit-file"
             type="button"
             className="toolbar-button"
@@ -5797,7 +5787,7 @@ export default function App() {
             }}
             title="Open a POD Go Edit .pgp preset or .pgb backup as an offline copy"
           >
-            Import…
+            Import
           </button>
         </div>
       </header>
