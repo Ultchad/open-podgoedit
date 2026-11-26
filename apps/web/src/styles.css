@@ -1972,6 +1972,67 @@ dl.save-backup-info dd {
   border-color: var(--amber);
 }
 
+.import-modes {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.2rem 1rem 0.4rem;
+}
+
+.import-mode {
+  flex: 1 1 0;
+  padding: 0.42rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.import-mode.is-active {
+  color: #fff;
+  border-color: var(--amber);
+  background: rgba(245, 158, 36, 0.16);
+}
+
+.import-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1.1rem;
+  margin: 0.3rem 1rem 0.6rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.import-content legend {
+  padding: 0 0.35rem;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+}
+
+.import-content label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-soft);
+}
+
+.import-ir-note {
+  margin-top: -0.2rem;
+}
+
+/* Keep the longer label on one line; the mobile grid already gives every
+   header action the same width. */
+#import-edit-file {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .import-slots {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2248,6 +2309,13 @@ dl.save-backup-info dd {
     overflow: hidden;
     clip: rect(0 0 0 0);
     white-space: nowrap;
+  }
+
+  /* "Import/Export" is longer than the other labels; keep it on one line and
+     the same size as the Connect/Presets buttons in the 3-column grid. */
+  #import-edit-file {
+    font-size: 0.7rem;
+    padding-inline: 0.2rem;
   }
 }
 

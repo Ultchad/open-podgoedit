@@ -141,7 +141,15 @@ function member(tag: string, document: unknown): Member {
   return { tag, stored, codec: 1, original: plain.length };
 }
 
-function buildPgb(setlists: { name: string; presets: unknown[] }[]): Buffer {
+/** A stored (uncompressed) member, for raw payloads such as an IR. */
+function rawMember(tag: string, bytes: Buffer): Member {
+  return { tag, stored: bytes, codec: 0, original: bytes.length };
+}
+
+function buildPgb(
+  setlists: { name: string; presets: unknown[] }[],
+  extras: Member[] = [],
+): Buffer {
   const members: Member[] = [
     {
       tag: 'SLNM',
@@ -157,6 +165,7 @@ function buildPgb(setlists: { name: string; presets: unknown[] }[]): Buffer {
     ...setlists.map((setlist, index) =>
       member(`SL0${index}`, setlistDocument(setlist.name, setlist.presets)),
     ),
+    ...extras,
   ];
 
   const headerLength = 48;
@@ -543,7 +552,112 @@ test('drops Export .pgb when another preset becomes the working copy', async ({
   // Starting another preset replaces the working copy; the backup offer must
   // disappear so the new preset is never written into the imported slot.
   page.on('dialog', (dialog) => void dialog.accept());
-  await page.locator('#new-preset').click();
+  await page.locator('.preset-item[data-setlist="1"][data-slot="0"]').click();
   await expect(page.locator('#export-pgb')).toHaveCount(0);
   await expect(page.locator('#export-pgp')).toBeEnabled();
+});
+
+test('exports only the chosen parts of a .pgb backup', async ({ page }) => {
+  const ir = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(24)]);
+  const pgb = buildPgb(
+    [
+      { name: 'Factory', presets: [presetBody('Factory Clean')] },
+      { name: 'User', presets: [{}, presetBody('User Lead')] },
+    ],
+    [rawMember('I000', ir)],
+  );
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'backup.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: pgb,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+  // The content picker reports what the file holds.
+  await expect(page.locator('#ie-content-factory')).toBeChecked();
+  await expect(page.locator('#ie-content-user')).toBeChecked();
+  await expect(page.locator('#ie-content-irs')).toBeChecked();
+
+  // Export only the User setlist and its IR; drop Factory and globals.
+  await page.locator('#ie-mode-export').click();
+  await page.locator('#ie-content-factory').uncheck();
+  await page.locator('#ie-content-globals').uncheck();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#export-backup-file').click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(
+    /^podgo-backup-\d{4}-\d{2}-\d{2}-user-irs\.pgb$/,
+  );
+  const exported = readFileSync((await download.path()) ?? '');
+  const members = readPgbMembers(exported).members.map((item) => item.tag);
+  expect(members).toContain('SL01');
+  expect(members).toContain('I000');
+  // Dropped parts are gone; the name table stays so the file remains readable.
+  expect(members).not.toContain('SL00');
+  expect(members).not.toContain('GLOB');
+  expect(members).toContain('SLNM');
+
+  // The subset re-opens in this reader with one setlist and the IR intact.
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'user-only.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: exported,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(1, {
+    timeout: 30000,
+  });
+  await expect(page.locator('.import-setlist-tab').first()).toContainText(
+    'User (1)',
+  );
+});
+
+test('imports the selected setlists into the offline library', async ({
+  page,
+}) => {
+  const pgb = buildPgb([
+    { name: 'Factory', presets: [presetBody('Factory A')] },
+    {
+      name: 'User',
+      presets: [{}, {}, {}, {}, {}, presetBody('User A'), presetBody('User B')],
+    },
+  ]);
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'backup.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: pgb,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+
+  // Unchecking Factory hides that setlist and narrows the bulk import.
+  await page.locator('#ie-content-factory').uncheck();
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(1);
+  await expect(page.locator('.import-setlist-tab').first()).toContainText(
+    'User (2)',
+  );
+  await expect(page.locator('#import-library')).toContainText(
+    'Import 2 preset(s)',
+  );
+
+  await page.locator('#import-library').click();
+  await expect(page.locator('#save-notice')).toContainText(
+    'Imported 2 preset(s)',
+  );
+  // The first imported User preset opens as an offline copy.
+  await expect(page.locator('.preset-title-name')).toHaveText('User A');
+  await expect(page.locator('.import-dialog')).toHaveCount(0);
 });
