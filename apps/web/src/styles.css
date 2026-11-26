@@ -191,6 +191,18 @@ code {
   border-color: var(--text-soft);
 }
 
+/* Sit beside the title and WASM badge, which are about 25px tall. */
+.brand-title .github-link {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.brand-title .toolbar-button {
+  min-height: 1.5rem;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.76rem;
+}
+
 .badge.idle {
   background: #21262d;
   color: var(--text-dim);
@@ -2213,6 +2225,24 @@ dl.save-backup-info dd {
   .header-actions > .edit-arm {
     grid-column: 1 / -1;
     justify-content: center;
+  }
+
+  /* Phones: the WASM status shrinks to a colored dot; its label stays for screen readers. */
+  .brand-title .badge {
+    width: 0.65rem;
+    height: 0.65rem;
+    padding: 0;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .brand-title .badge-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }
 
