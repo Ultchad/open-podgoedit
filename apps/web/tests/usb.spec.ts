@@ -3190,7 +3190,9 @@ test.describe('editing a connected preset on a phone viewport', () => {
 
     await page.getByRole('tab', { name: 'Models' }).tap();
     const current = await page.locator('.inspector-model').textContent();
-    const tiles = page.locator('.model-tile.is-selectable:not(.is-blocked)');
+    const tiles = page.locator(
+      '.model-tile.is-selectable:not(.is-blocked):not(.is-none)',
+    );
     await expect(tiles.first()).toBeVisible();
     let target = tiles.first();
     for (let index = 0; index < (await tiles.count()); index += 1) {

@@ -600,6 +600,105 @@ test('reorders blocks, adds a Wah and marks browser-only presets', async ({
   expect(doc.data.tone.footswitch.dsp0.block0).toBeUndefined();
 });
 
+test('deletes an effect with the right-click Remove, the Delete key and None', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // The seed preset has an amp (slot 1) and a cab (slot 2).
+  const tiles = page.locator('.block-tile');
+  await expect(tiles).toHaveCount(10);
+  await expect(tiles.nth(1)).toContainText('4x10 Ampeg');
+
+  // 1. Right-click Remove on the cab.
+  await tiles.nth(1).click({ button: 'right' });
+  await page
+    .getByRole('menuitem', { name: /Remove 4x10 Ampeg/ })
+    .click();
+  await expect(tiles).toHaveCount(10);
+  await expect(tiles.nth(1)).not.toContainText('4x10 Ampeg');
+  await expect(page.locator('.preset-title-name')).toHaveClass(/is-unsaved/);
+
+  // The removed slot now shows an empty tile: 9 empty, only the amp remains.
+  await expect(tiles.nth(0)).toContainText('G Cougar 800');
+  await expect(page.locator('.block-tile.is-empty')).toHaveCount(9);
+});
+
+test('the Delete key removes the selected effect', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  const tiles = page.locator('.block-tile');
+  await expect(tiles.nth(1)).toContainText('4x10 Ampeg');
+  await tiles.nth(1).click();
+  await expect(tiles.nth(1)).toHaveClass(/is-selected/);
+
+  await page.keyboard.press('Delete');
+  // The amp survived; the cab slot is now an empty tile.
+  await expect(tiles.nth(0)).toContainText('G Cougar 800');
+  await expect(page.locator('.block-tile.is-empty')).toHaveCount(9);
+  await expect(tiles.nth(1)).not.toContainText('4x10 Ampeg');
+  await expect(page.locator('.preset-title-name')).toHaveClass(/is-unsaved/);
+});
+
+test('the None model tile clears the selected effect', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('.block-tile').nth(1).click();
+  await page.getByRole('tab', { name: 'Models' }).click();
+  const none = page.locator('button.model-tile.is-none');
+  await expect(none).toHaveCount(1);
+  await expect(none).toContainText('None');
+  await none.click();
+
+  await expect(page.locator('.block-tile').nth(0)).toContainText(
+    'G Cougar 800',
+  );
+  await expect(page.locator('.block-tile.is-empty')).toHaveCount(9);
+  await expect(page.locator('.block-tile').nth(1)).not.toContainText(
+    '4x10 Ampeg',
+  );
+  await expect(page.locator('.preset-title-name')).toHaveClass(/is-unsaved/);
+});
+
+test('New preset here warns before overwriting a slot that has a draft', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // The seed preset is an offline doc in User 01A, so "New preset here" on
+  // that slot must ask before replacing it. Dismissing keeps the preset.
+  page.once('dialog', (dialog) => {
+    expect(dialog.message()).toContain('replaces');
+    void dialog.dismiss();
+  });
+  await page
+    .locator('.preset-item[data-setlist="1"][data-slot="0"]')
+    .click({ button: 'right' });
+  await page.locator('#menu-new').click();
+  await expect(page.locator('.preset-title-name')).toHaveText('New Preset');
+});
+
+test('New preset here skips the prompt on an empty slot', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  let dialogs = 0;
+  page.on('dialog', (dialog) => {
+    dialogs += 1;
+    void dialog.accept();
+  });
+  await page
+    .locator('.preset-item[data-setlist="1"][data-slot="5"]')
+    .click({ button: 'right' });
+  await page.locator('#menu-open').click();
+  await expect(page.locator('.preset-title .preset-slot')).toHaveText('02B');
+  expect(dialogs).toBe(0);
+});
+
 test('links to GitHub and edits snapshot bypass, values and LED colours', async ({
   page,
 }) => {

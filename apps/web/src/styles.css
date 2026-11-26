@@ -1380,6 +1380,25 @@ button.param-value.is-editable:focus-visible {
   color: #fff;
 }
 
+/* The "None" tile removes the effect: muted, with a red "clear" note. */
+button.model-tile.is-none {
+  border-style: dashed;
+  border-color: var(--line-strong);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+button.model-tile.is-none .model-current {
+  color: #f28482;
+  font-style: normal;
+}
+
+button.model-tile.is-none:hover:not(:disabled),
+button.model-tile.is-none:focus-visible {
+  border-color: #f28482;
+  color: #fff;
+}
+
 /* Clickable model tiles (offline preset): the button keeps the tile look. */
 button.model-tile.is-selectable {
   font: inherit;
