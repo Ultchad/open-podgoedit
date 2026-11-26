@@ -5777,23 +5777,6 @@ export default function App() {
           </button>
 
           <button
-            id="save-preset"
-            type="button"
-            className="toolbar-button is-primary"
-            disabled={!moduleReady || writing}
-            onClick={() => void saveWorkingPreset()}
-            title={
-              !connected
-                ? 'Connect a POD Go to save. Export .pgp works offline.'
-                : !activePresetLoaded
-                  ? 'Read the active preset from the pedal first.'
-                  : 'Store the preset in its slot (Ctrl+S)'
-            }
-          >
-            Save
-          </button>
-
-          <button
             id="new-preset"
             type="button"
             className="toolbar-button"
@@ -5915,6 +5898,15 @@ export default function App() {
               onCopyBlock={copyBlockAt}
               onPasteBlock={pasteBlockAt}
               canPasteBlock={blockClipboard !== null}
+              canSave={moduleReady && !writing}
+              onSave={() => void saveWorkingPreset()}
+              saveTitle={
+                !connected
+                  ? 'Connect a POD Go to save. Export .pgp works offline.'
+                  : !activePresetLoaded
+                    ? 'Read the active preset from the pedal first.'
+                    : 'Store the preset in its slot (Ctrl+S)'
+              }
               canExport={canExport}
               onExport={exportWorkingPreset}
               canExportBackup={canExportBackup}

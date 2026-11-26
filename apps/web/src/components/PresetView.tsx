@@ -1,7 +1,7 @@
 // Preset editor pane: toolbar, signal chain and inspector, in the POD Go Edit
 // layout. The values come from the structured view rendered by the Rust core.
 // Parameter edits update the working copy only; the page writes them when the
-// user saves. Toolbar actions stay deliberately small: rename and export live
+// user saves. Toolbar actions stay deliberately small: save and export live
 // here, everything else is in the header or the right-click menu.
 
 import { useEffect, useMemo, useState } from 'react';
@@ -77,6 +77,9 @@ interface Props {
   onPasteBlock?: (index: number) => void;
   /** True when the effect clipboard holds something. */
   canPasteBlock?: boolean;
+  canSave: boolean;
+  onSave: () => void;
+  saveTitle: string;
   canExport: boolean;
   onExport: () => void;
   /** The working copy came from a `.pgb` backup that can be rebuilt. */
@@ -116,6 +119,9 @@ export default function PresetView({
   onCopyBlock,
   onPasteBlock,
   canPasteBlock = false,
+  canSave,
+  onSave,
+  saveTitle,
   canExport,
   onExport,
   canExportBackup,
@@ -594,20 +600,32 @@ export default function PresetView({
           >
             Rename…
           </button> */}
-          <button
-            id="export-pgp"
-            type="button"
-            className="toolbar-button is-primary"
-            disabled={!canExport || busy}
-            title={
-              canExport
-                ? 'Download this preset as a POD Go Edit .pgp file (works offline)'
-                : 'Open an offline preset or import a .pgp/.pgb to export it'
-            }
-            onClick={onExport}
-          >
-            Export
-          </button>
+          <div className="preset-save-export">
+            <button
+              id="save-preset"
+              type="button"
+              className="toolbar-button is-primary"
+              disabled={!canSave}
+              onClick={onSave}
+              title={saveTitle}
+            >
+              Save
+            </button>
+            <button
+              id="export-pgp"
+              type="button"
+              className="toolbar-button is-primary"
+              disabled={!canExport || busy}
+              title={
+                canExport
+                  ? 'Download this preset as a POD Go Edit .pgp file (works offline)'
+                  : 'Open an offline preset or import a .pgp/.pgb to export it'
+              }
+              onClick={onExport}
+            >
+              Export
+            </button>
+          </div>
           {canExportBackup && (
             <button
               id="export-pgb"

@@ -65,6 +65,32 @@ test('loads factory names and a default User preset offline', async ({
   expect(errors).toEqual([]);
 });
 
+test('keeps Save beside Export on desktop and small screens', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+  const save = page.locator('#save-preset');
+  const exportButton = page.locator('#export-pgp');
+
+  for (const width of [1280, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(save).toBeVisible();
+    await expect(exportButton).toBeVisible();
+    const saveBox = await save.boundingBox();
+    const exportBox = await exportButton.boundingBox();
+    expect(saveBox).not.toBeNull();
+    expect(exportBox).not.toBeNull();
+    expect(saveBox!.x + saveBox!.width).toBeLessThan(exportBox!.x);
+    expect(saveBox!.y).toBe(exportBox!.y);
+  }
+
+  await expect(save).toHaveAttribute(
+    'title',
+    'Connect a POD Go to save. Export .pgp works offline.',
+  );
+  await save.click();
+  await expect(page.locator('#save-notice')).toContainText('No POD Go connected');
+});
+
 test('edits a draft with the slider and value field, then exports', async ({
   page,
 }) => {

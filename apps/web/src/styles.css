@@ -787,6 +787,11 @@ button:disabled:hover {
   gap: 0.45rem;
 }
 
+.preset-save-export {
+  display: flex;
+  gap: 0.45rem;
+}
+
 .history-actions {
   display: flex;
   gap: 0.25rem;
