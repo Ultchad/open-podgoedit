@@ -7,6 +7,18 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **PWA install documented.** The README now explains how to install the
+  editor as an app (Chromium-only install + WebUSB; Safari/Firefox/iOS can
+  open the offline page but not install or reach the pedal).
+- **Contributing branch policy.** CONTRIBUTING now makes explicit that pushes
+  go to `dev` only, never directly to `main`, and explains that a `main`
+  branch-protection rule (require PR + CI) is the real enforcement.
+- **Tick individual presets in the Import/Export dialog.** For a `.pgb` you
+  can now tick the exact preset slots to import or export: leave them all
+  ticked for a whole setlist, tick a subset for only those presets (unticked
+  slots are emptied on export), and tick exactly one User preset to download
+  it as a single `.pgp` too. The group checkboxes (Factory / User / IRs /
+  Globals) still control which members are kept.
 - **Delete an effect three ways.** A selected effect can be removed from the
   right-click **Remove** item, the **Delete**/**Backspace** key, or the
   **None** tile at the top of the Models pane. All three edit an
@@ -192,6 +204,13 @@ semantic versioning once it reaches 1.0.
   exists inside the runner.
 
 ### Changed
+- **Platform support is tiered, not forked.** One version, changelog and tag
+  cover every target. The README and roadmap now label Web/PWA as **Supported**,
+  the Android APK as **Beta**, the Tauri desktop shell as **Experimental**,
+  Safari/Firefox/iOS browsers as **Untested** (offline only) and native iOS as
+  **Not planned** (no public vendor-USB path). The
+  [support matrix](docs/architecture/platform-support-matrix.md) reflects the
+  same evidence.
 - **Export lives in the preset menu only.** The toolbar **Export** button is
   removed on every screen size; **Export .pgp** stays in each preset's
   right-click menu and in the **⋯** menu next to the name (same code path, so

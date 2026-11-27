@@ -629,6 +629,108 @@ test('exports only the chosen parts of a .pgb backup', async ({ page }) => {
   );
 });
 
+/** Re-parse the `SL01` User setlist member from exported bytes, as raw slots. */
+function readPgbSetlists(bytes: Buffer) {
+  const { members } = readPgbMembers(bytes);
+  const member = members.find((m) => m.tag === 'SL01');
+  if (!member) {
+    return [];
+  }
+  const raw = member.codec === 1 ? inflateSync(member.stored) : member.stored;
+  const doc = JSON.parse(raw.toString('utf8'));
+  return doc.data.presets as Array<Record<string, unknown> | null>;
+}
+
+test('exports only the ticked User presets of a .pgb backup', async ({
+  page,
+}) => {
+  const pgb = buildPgb([
+    { name: 'Factory', presets: [presetBody('Factory Clean')] },
+    {
+      name: 'User',
+      presets: [
+        presetBody('User A'),
+        presetBody('User B'),
+        presetBody('User C'),
+      ],
+    },
+  ]);
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'backup.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: pgb,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+
+  // Export with User ticked, but keep only slot 1 (the second User preset).
+  await page.locator('#ie-mode-export').click();
+  await page.locator('#ie-content-factory').uncheck();
+  await page.locator('#ie-content-globals').uncheck();
+  await page.locator('#ie-content-irs').uncheck();
+  await page.locator('.import-slot[data-slot="1"]').click();
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#export-backup-file').click(),
+  ]);
+  const exported = readFileSync((await download.path()) ?? '');
+  const presets = readPgbSetlists(exported);
+  // Only the ticked slot survives; the others are emptied to `{}`.
+  expect((presets[1] as { meta?: { name?: string } } | null)?.meta?.name).toBe(
+    'User B',
+  );
+  expect(presets[0]).toEqual({});
+  expect(presets[2]).toEqual({});
+});
+
+test('exports a single ticked User preset as a .pgp', async ({ page }) => {
+  const pgb = buildPgb([
+    { name: 'Factory', presets: [] },
+    {
+      name: 'User',
+      presets: [{}, {}, presetBody('Solo Lead')],
+    },
+  ]);
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'backup.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: pgb,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+
+  await page.locator('#ie-mode-export').click();
+  await page.locator('#ie-content-factory').uncheck();
+  await page.locator('#ie-content-globals').uncheck();
+  await page.locator('#ie-content-irs').uncheck();
+  // Tick exactly one User slot and drop the others.
+  await page.locator('.import-slot[data-slot="2"]').click();
+
+  await expect(page.locator('#export-single-pgp')).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#export-single-pgp').click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('Solo_Lead.pgp');
+  const text = readFileSync((await download.path()) ?? '', 'utf8');
+  const doc = JSON.parse(text);
+  expect(doc.schema).toBe('L6Preset');
+  expect(doc.data.meta.name).toBe('Solo Lead');
+});
+
 test('imports the selected setlists into the offline library', async ({
   page,
 }) => {
@@ -670,4 +772,43 @@ test('imports the selected setlists into the offline library', async ({
   // The first imported User preset opens as an offline copy.
   await expect(page.locator('.preset-title-name')).toHaveText('User A');
   await expect(page.locator('.import-dialog')).toHaveCount(0);
+});
+
+test('imports only the ticked User slots of a .pgb backup', async ({
+  page,
+}) => {
+  const pgb = buildPgb([
+    { name: 'Factory', presets: [] },
+    {
+      name: 'User',
+      presets: [{}, {}, {}, {}, {}, presetBody('User A'), presetBody('User B')],
+    },
+  ]);
+
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#import-edit-file').click();
+  await page.locator('#import-file').setInputFiles({
+    name: 'backup.pgb',
+    mimeType: 'application/octet-stream',
+    buffer: pgb,
+  });
+  await expect(page.locator('.import-setlist-tab')).toHaveCount(2, {
+    timeout: 30000,
+  });
+  await page.locator('#ie-content-factory').uncheck();
+
+  // Tick only the slot holding User B (source index 6); the imported count
+  // narrows from 2 to 1.
+  await page.locator('.import-slot[data-slot="6"]').click();
+  await expect(page.locator('#import-library')).toContainText(
+    'Import 1 preset(s)',
+  );
+
+  await page.locator('#import-library').click();
+  await expect(page.locator('#save-notice')).toContainText(
+    'Imported 1 preset(s)',
+  );
+  await expect(page.locator('.preset-title-name')).toHaveText('User B');
 });
