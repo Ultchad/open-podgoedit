@@ -25,6 +25,11 @@ import {
 export interface PodgoAndroidUsbBridge extends NativeUsbBridge {
   /** `true` when the Android app injected the bridge. */
   readonly present?: boolean;
+  /**
+   * Shell adapter version (see `src/shell.ts`). Older packages omit it, which
+   * the startup handshake reports as outdated.
+   */
+  readonly apiVersion?: number | (() => number);
   /** Open the first POD Go on the USB bus; resolves to `description (0xPID)`. */
   open(): Promise<string>;
 }

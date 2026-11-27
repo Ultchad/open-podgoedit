@@ -109,6 +109,11 @@ import {
   type EditPreset,
 } from './podgoEdit';
 import { createDefaultPreset } from './defaultPreset';
+import {
+  checkShellBridge,
+  SHELL_API_VERSION,
+  type ShellBridgeStatus,
+} from './shell';
 import SavePresetDialog, {
   type SaveBackup,
 } from './components/SavePresetDialog';
@@ -370,6 +375,7 @@ export default function App() {
   const [usbSupported] = useState(() => usbLinkSupported());
   const [androidShell] = useState(() => runningOnAndroidShell());
   const [desktopShell] = useState(() => isDesktopShell());
+  const [shellBridge, setShellBridge] = useState<ShellBridgeStatus | null>(null);
   const { canInstall, install } = useInstallPrompt();
   const [deviceInfo, setDeviceInfo] = useState<PodgoDeviceInfo | null>(null);
   const [usbBusy, setUsbBusy] = useState<string | null>(null);
@@ -627,6 +633,35 @@ export default function App() {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
+
+  // One startup handshake: a native shell must implement the adapter version
+  // this bundle expects. A mismatch still runs, but flags the app package so a
+  // stale shell is updated instead of failing in a confusing way later.
+  useEffect(() => {
+    let cancelled = false;
+    void checkShellBridge()
+      .then((status) => {
+        if (cancelled) {
+          return;
+        }
+        setShellBridge(status);
+        if (status.outdated) {
+          appendLog(
+            `WARNING shell: the app package implements adapter v${
+              status.reportedVersion ?? 'unknown'
+            }, this bundle expects v${SHELL_API_VERSION}. Update the app package.`,
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          appendLog(`WARNING shell: adapter check failed: ${String(error)}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appendLog]);
 
   // Escape closes the phone preset drawer.
   useEffect(() => {
@@ -5959,7 +5994,13 @@ export default function App() {
   }, []);
 
   return (
-    <main className="app">
+    <main
+      className="app"
+      data-shell={shellBridge?.capabilities.kind}
+      data-shell-outdated={
+        shellBridge ? String(shellBridge.outdated) : undefined
+      }
+    >
       <header className="app-bar">
         <div className="brand">
           <div className="brand-title">
@@ -5967,6 +6008,17 @@ export default function App() {
               POD Go <span>Editor</span>
             </h1>
             <ModuleBadge module={module} />
+            {shellBridge?.outdated && (
+              <span
+                id="shell-bridge-warning"
+                className="badge shell-warning"
+                title={`This app package implements shell adapter v${
+                  shellBridge.reportedVersion ?? 'unknown'
+                }; the bundled UI expects v${SHELL_API_VERSION}. Update the app package.`}
+              >
+                App update needed
+              </span>
+            )}
             <a
               className="github-link"
               href="https://github.com/Ultchad/open-podgoedit"
