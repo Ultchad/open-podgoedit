@@ -23,6 +23,7 @@ import {
   SLOT_COUNT,
   toneToStructure,
   type BackupContentSelection,
+  type BackupSlotSelection,
   type EditFile,
   type EditBackup,
   type EditPreset,
@@ -59,11 +60,17 @@ interface Props {
   onImportBackup: (
     backup: EditBackup,
     selection: BackupContentSelection,
+    slots?: BackupSlotSelection[],
   ) => void | Promise<void>;
-  /** Download the `.pgb` with only the selected parts. */
+  /**
+   * Download the `.pgb` subset, or a single `.pgp` when `singlePreset` is set
+   * and only one user slot is selected.
+   */
   onExportBackup: (
     backup: EditBackup,
     selection: BackupContentSelection,
+    slots?: BackupSlotSelection[],
+    singlePreset?: EditPreset | null,
   ) => Promise<void>;
 }
 
@@ -118,6 +125,7 @@ export default function PodgoEditImportDialog({
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<Mode>('import');
   const [content, setContent] = useState<BackupContentSelection>(ALL_CONTENT);
+  const [slotSets, setSlotSets] = useState<Map<string, Set<number>>>(new Map());
   const [setlistIndex, setSetlistIndex] = useState(0);
   const [slot, setSlot] = useState<number | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
@@ -136,6 +144,7 @@ export default function PodgoEditImportDialog({
       setLoading(false);
       setMode('import');
       setContent(ALL_CONTENT);
+      setSlotSets(new Map());
       setSetlistIndex(0);
       setSlot(null);
       setActionBusy(false);
@@ -195,20 +204,31 @@ export default function PodgoEditImportDialog({
     }
   }, [selected]);
 
-  /** Presets a bulk import would add (all non-empty slots of the selection). */
+  /** Presets a bulk import would add (respecting any fine-grained slot ticks). */
   const importCount = useMemo(() => {
     if (file?.kind !== 'pgb') {
       return 0;
     }
     return file.setlists
       .filter((setlist) => setlistInSelection(setlist, content))
-      .reduce(
-        (sum, setlist) =>
+      .reduce((sum, setlist) => {
+        const restricted = slotSets.get(setlist.memberTag ?? '');
+        const anyRestricted =
+          restricted !== undefined && restricted.size > 0;
+        return (
           sum +
-          setlist.presets.filter((preset) => preset !== null).length,
-        0,
-      );
-  }, [file, content]);
+          setlist.presets.reduce(
+            (count, preset, slot) =>
+              count +
+              (preset !== null &&
+              (!anyRestricted || restricted!.has(slot))
+                ? 1
+                : 0),
+            0,
+          )
+        );
+      }, 0);
+  }, [file, content, slotSets]);
 
   const nothingSelected =
     !content.factory && !content.user && !content.irs && !content.globals;
@@ -224,6 +244,7 @@ export default function PodgoEditImportDialog({
     setExportError(null);
     setMode('import');
     setContent(ALL_CONTENT);
+    setSlotSets(new Map());
     try {
       const bytes = await readChosenFile(chosen);
       const parsed = await parsePodgoEditFile(bytes);
@@ -274,6 +295,35 @@ export default function PodgoEditImportDialog({
     }
   }
 
+  /** Toggle one slot in a setlist's fine-grained selection. */
+  function toggleSlot(tag: string, slot: number): void {
+    const next = new Map(slotSets);
+    const current = new Set(next.get(tag) ?? []);
+    if (current.has(slot)) {
+      current.delete(slot);
+    } else {
+      current.add(slot);
+    }
+    next.set(tag, current);
+    setSlotSets(next);
+  }
+
+  /** Build the slot list to hand to import/export, from any non-empty sets. */
+  function slotSelection(): BackupSlotSelection[] {
+    const out: BackupSlotSelection[] = [];
+    for (const [tag, slots] of slotSets) {
+      if (slots.size > 0) {
+        out.push({ tag, slots });
+      }
+    }
+    return out;
+  }
+
+  function slotIsSelected(slot: number): boolean {
+    const selected = slotSets.get(activeSetlist?.memberTag ?? '');
+    return selected === undefined || selected.size === 0 || selected.has(slot);
+  }
+
   async function importLibrary(): Promise<void> {
     if (file?.kind !== 'pgb' || actionBusy) {
       return;
@@ -281,7 +331,7 @@ export default function PodgoEditImportDialog({
     setActionBusy(true);
     setActionError(null);
     try {
-      await onImportBackup(file, content);
+      await onImportBackup(file, content, slotSelection());
       onClose();
     } catch (failure) {
       setActionError(messageOf(failure));
@@ -297,13 +347,57 @@ export default function PodgoEditImportDialog({
     setExportBusy(true);
     setExportError(null);
     try {
-      await onExportBackup(file, content);
+      // Always build the .pgb subset; the separate "Export .pgp" button handles
+      // a single ticked User preset.
+      await onExportBackup(file, content, slotSelection(), null);
       onClose();
     } catch (failure) {
       setExportError(messageOf(failure));
     } finally {
       setExportBusy(false);
     }
+  }
+
+  async function exportSinglePgp(): Promise<void> {
+    if (file?.kind !== 'pgb' || exportBusy) {
+      return;
+    }
+    const preset = singlePresetSource();
+    if (!preset) {
+      return;
+    }
+    setExportBusy(true);
+    setExportError(null);
+    try {
+      await onExportBackup(file, content, slotSelection(), preset);
+      onClose();
+    } catch (failure) {
+      setExportError(messageOf(failure));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  /**
+   * Detect a single-preset export: one user setlist is selected, exactly one of
+   * its presets is ticked, and no other group is selected.
+   */
+  function singlePresetSource(): EditPreset | null {
+    if (file?.kind !== 'pgb' || !content.user || content.factory || content.irs || content.globals) {
+      return null;
+    }
+    const userSet = file.setlists.find(
+      (setlist) => setlist.memberTag === 'SL01',
+    );
+    if (!userSet) {
+      return null;
+    }
+    const selected = slotSets.get('SL01');
+    if (!selected || selected.size !== 1) {
+      return null;
+    }
+    const slot = [...selected][0];
+    return userSet.presets[slot] ?? null;
   }
 
   if (!open) {
@@ -509,7 +603,7 @@ export default function PodgoEditImportDialog({
               </p>
             )}
 
-            {mode === 'import' && file.kind === 'pgb' && (
+            {(mode === 'import' || mode === 'export') && file.kind === 'pgb' && (
               <>
                 <div className="import-setlists" role="tablist">
                   {visibleIndexes.map((index) => {
@@ -535,20 +629,40 @@ export default function PodgoEditImportDialog({
                 </div>
 
                 {activeSetlist ? (
-                  <div className="import-slots" id="import-slots">
+                  <>
+                    <p className="modal-hint import-slot-tip">
+                      {mode === 'export'
+                        ? 'Tick the presets to export; leaving them all ticked keeps the whole setlist.'
+                        : 'Tick the presets to import, or leave them all ticked for the whole setlist.'}
+                    </p>
+                    <div className="import-slots" id="import-slots">
                     {Array.from({ length: SLOT_COUNT }, (_, index) => {
                       const preset = activeSetlist.presets[index] ?? null;
+                      const tag = activeSetlist.memberTag ?? '';
+                      const ticked =
+                        preset !== null && slotIsSelected(index);
+                      const selectedNow = mode === 'import' && index === slot;
                       return (
                         <button
                           key={index}
                           type="button"
                           className={`import-slot${
-                            index === slot ? ' is-selected' : ''
-                          }${preset ? '' : ' is-empty'}`}
+                            ticked ? ' is-ticked' : ''
+                          }${selectedNow ? ' is-selected' : ''}${
+                            preset ? '' : ' is-empty'
+                          }`}
                           data-slot={index}
                           title={preset?.name || 'Empty slot'}
                           disabled={!preset}
-                          onClick={() => setSlot(index)}
+                          onClick={() => {
+                            // In both modes a click ticks the slot into the
+                            // fine-grained selection; in import mode it also
+                            // selects it for "Open in editor".
+                            toggleSlot(tag, index);
+                            if (mode === 'import') {
+                              setSlot(index);
+                            }
+                          }}
                         >
                           <span className="import-slot-label">
                             {slotLabel(index)}
@@ -560,6 +674,7 @@ export default function PodgoEditImportDialog({
                       );
                     })}
                   </div>
+                  </>
                 ) : (
                   <p className="modal-hint" id="import-no-setlist">
                     Select Factory or User presets to browse slots.
@@ -595,6 +710,8 @@ export default function PodgoEditImportDialog({
                 {nothingSelected
                   ? 'Choose at least one part to export.'
                   : 'The downloaded backup contains only the parts checked above.'}{' '}
+                Tick the preset slots you want; unticked presets are emptied.
+                Tick exactly one User preset to also get a single *.pgp* export.
                 Unsaved edits in the editor are not included; use{' '}
                 <strong>Export .pgb</strong> there to write the working slot.
               </p>
@@ -657,17 +774,31 @@ export default function PodgoEditImportDialog({
               </button>
             </>
           ) : (
-            <button
-              id="export-backup-file"
-              type="button"
-              className="save-confirm"
-              disabled={
-                file?.kind !== 'pgb' || exportBusy || nothingSelected
-              }
-              onClick={() => void exportBackup()}
-            >
-              {exportBusy ? 'Exporting…' : 'Export .pgb'}
-            </button>
+            <>
+              <button
+                id="export-backup-file"
+                type="button"
+                className="save-confirm"
+                disabled={
+                  file?.kind !== 'pgb' || exportBusy || nothingSelected
+                }
+                onClick={() => void exportBackup()}
+              >
+                {exportBusy ? 'Exporting…' : 'Export .pgb'}
+              </button>
+              {singlePresetSource() && (
+                <button
+                  id="export-single-pgp"
+                  type="button"
+                  className="toolbar-button"
+                  disabled={exportBusy}
+                  onClick={() => void exportSinglePgp()}
+                  title="Download just the one ticked user preset as a .pgp file"
+                >
+                  Export .pgp
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

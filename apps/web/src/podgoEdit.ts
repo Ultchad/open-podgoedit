@@ -1785,6 +1785,20 @@ export interface BackupContentSelection {
   globals: boolean;
 }
 
+/**
+ * Slot-level granularity, keyed by setlist member tag (`SL00`, `SL01`).
+ *
+ * Stored only when the user ticked individual presets. An absent entry (or an
+ * entry without `slots`) means the whole setlist is imported/exported; an
+ * entry with a non-empty `slots` set restricts the operation to those slots.
+ */
+export interface BackupSlotSelection {
+  /** Setlist member tag the slots belong to. */
+  tag: string;
+  /** Slot indexes to keep. */
+  slots: Set<number>;
+}
+
 /** What a parsed `.pgb` offers, in the terms the selection uses. */
 export interface BackupContent {
   /** Non-empty presets in the Factory setlist. */
@@ -1858,6 +1872,7 @@ export function backupContent(backup: EditBackup): BackupContent {
 export function selectBackupContent(
   backup: EditBackup,
   selection: BackupContentSelection,
+  slots?: BackupSlotSelection[],
 ): EditBackup {
   const container = backup.container;
   if (!container) {
@@ -1882,11 +1897,50 @@ export function selectBackupContent(
     }
     return true;
   };
+  const slotSet = (setlist: EditSetlist | undefined): Set<number> | undefined => {
+    if (!setlist?.memberTag || !slots) {
+      return undefined;
+    }
+    return slots.find((s) => s.tag === setlist.memberTag)?.slots;
+  };
+  const setlists = backup.setlists
+    .filter((setlist) => !setlist.memberTag || keep(setlist.memberTag))
+    .map((setlist) => {
+      const restricted = slotSet(setlist);
+      if (!setlist.memberTag || restricted === undefined || restricted.size === setlist.presets.length) {
+        return setlist;
+      }
+      if (restricted.size === 0) {
+        throw new Error(
+          `Setlist ${setlist.name} has presets ticked that add up to nothing to export.`,
+        );
+      }
+      // Empty every slot outside the selection and rebuild the document so the
+      // export contains exactly the ticked presets.
+      const presets = setlist.presets.map((preset, slot) =>
+        restricted.has(slot) ? preset : null,
+      );
+      let document = setlist.document;
+      if (document) {
+        const data = asObject(document.data) ?? {};
+        const rawPresets = Array.isArray(data.presets)
+          ? [...(data.presets as unknown[])]
+          : [];
+        while (rawPresets.length < SLOT_COUNT) {
+          rawPresets.push({});
+        }
+        for (let slot = 0; slot < SLOT_COUNT; slot += 1) {
+          if (!restricted.has(slot)) {
+            rawPresets[slot] = {};
+          }
+        }
+        document = { ...document, data: { ...data, presets: rawPresets } };
+      }
+      return { ...setlist, presets, document, stored: null };
+    });
   return {
     ...backup,
-    setlists: backup.setlists.filter(
-      (setlist) => !setlist.memberTag || keep(setlist.memberTag),
-    ),
+    setlists,
     container: {
       ...container,
       members: container.members.filter((member) => keep(member.tag)),

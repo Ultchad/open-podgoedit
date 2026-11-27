@@ -104,6 +104,7 @@ import {
   structureToEditPreset,
   toneToStructure,
   type BackupContentSelection,
+  type BackupSlotSelection,
   type EditBackup,
   type EditPreset,
 } from './podgoEdit';
@@ -4069,12 +4070,17 @@ export default function App() {
   function importBackupToLibrary(
     backup: EditBackup,
     selection: BackupContentSelection,
+    slots?: BackupSlotSelection[],
   ): void {
     const imported: { slot: number; name: string }[] = [];
     const docs: Record<string, EditPreset> = {};
     const used = new Set<number>();
     let skipped = 0;
     let cursor = 0;
+    const slotFilter = new Map<string, Set<number>>();
+    for (const item of slots ?? []) {
+      slotFilter.set(item.tag, item.slots);
+    }
     const takeFree = (): number | null => {
       while (cursor < 128) {
         const candidate = cursor;
@@ -4097,6 +4103,11 @@ export default function App() {
       const fromUser = setlist.memberTag !== 'SL00';
       for (const [sourceSlot, preset] of setlist.presets.entries()) {
         if (!preset) {
+          continue;
+        }
+        const tag = setlist.memberTag ?? '';
+        const restricted = slotFilter.get(tag);
+        if (restricted && restricted.size > 0 && !restricted.has(sourceSlot)) {
           continue;
         }
         let target: number | null = null;
@@ -4154,11 +4165,17 @@ export default function App() {
     });
   }
 
-  /** Download the `.pgb` with only the selected parts. */
+  /** Download the `.pgb` with only the selected parts, or a `.pgp` single preset. */
   async function exportBackupSelection(
     backup: EditBackup,
     selection: BackupContentSelection,
+    slots?: BackupSlotSelection[],
+    singlePreset?: EditPreset | null,
   ): Promise<void> {
+    if (singlePreset) {
+      downloadEditPreset(singlePreset);
+      return;
+    }
     const parts: string[] = [];
     if (selection.factory) {
       parts.push('factory');
@@ -4175,7 +4192,7 @@ export default function App() {
     if (parts.length === 0) {
       throw new Error('Choose at least one part to export.');
     }
-    const subset = selectBackupContent(backup, selection);
+    const subset = selectBackupContent(backup, selection, slots);
     const bytes = await serializePgb(subset);
     const stamp = new Date().toISOString().slice(0, 10);
     const file = backupFileName(`podgo-backup-${stamp}-${parts.join('-')}`);
