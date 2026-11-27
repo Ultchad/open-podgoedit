@@ -37,8 +37,10 @@ fields. Unknown fields are preserved even when not displayed.
 ## 3. Exporting a preset
 
 1. Select a preset.
-2. Choose **Export .pgp** (portable), **Export .pgb** (rebuild the backup it
-   came from), or **Download preset** for the raw blob.
+2. Right-click it (or open the **⋯** menu next to the preset name) and choose
+   **Export .pgp** (portable). When the preset was opened from a `.pgb` backup,
+   the toolbar also offers **Export .pgb** to rebuild the backup it came from,
+   and Developer tools has **Download preset** for the raw blob.
 3. The browser downloads the file; nothing is uploaded.
 
 ## 4. Backups
