@@ -58,6 +58,24 @@ transport (Android, desktop) has been run against a pedal yet.
 Nothing leaves the browser: there is no backend, account or telemetry, and
 imported files are never uploaded.
 
+## Install as an app
+
+The editor is an installable **PWA** — a web app you can pin like a desktop or
+phone app, with its own icon and a full offline precache so it starts even
+without a network connection.
+
+- **Chrome / Edge (and other Chromium browsers)** can install it directly. Open
+  the editor, then use the install button in the address bar (or **Install /
+  Install app** in the browser menu). The page also shows an **Install** button
+  when the browser offers it.
+- **Only Chromium browsers** support an in-browser install and the WebUSB
+  pedal connection. Safari and Firefox can open the same offline page but
+  cannot install it as an app or reach the pedal.
+- **iPhone/iPad:** Safari has no in-browser PWA install here; on iOS, adding a
+  page to the Home Screen only bookmarks the URL.
+- **Android** users who need the pedal can install the [APK](https://github.com/Ultchad/open-podgoedit/releases)
+  instead of the PWA.
+
 ## Goals
 
 - Connect to a POD Go, identify it, and read presets, setlists, blocks,
