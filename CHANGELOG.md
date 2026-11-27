@@ -192,6 +192,13 @@ semantic versioning once it reaches 1.0.
   exists inside the runner.
 
 ### Changed
+- **Platform support is tiered, not forked.** One version, changelog and tag
+  cover every target. The README and roadmap now label Web/PWA as **Supported**,
+  the Android APK as **Beta**, the Tauri desktop shell as **Experimental**,
+  Safari/Firefox/iOS browsers as **Untested** (offline only) and native iOS as
+  **Not planned** (no public vendor-USB path). The
+  [support matrix](docs/architecture/platform-support-matrix.md) reflects the
+  same evidence.
 - **Export lives in the preset menu only.** The toolbar **Export** button is
   removed on every screen size; **Export .pgp** stays in each preset's
   right-click menu and in the **⋯** menu next to the name (same code path, so

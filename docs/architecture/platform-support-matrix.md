@@ -9,52 +9,64 @@ Status vocabulary (mandatory):
 - **UNS** — unsupported due to a documented platform limitation
 
 > No claim in this matrix is stronger than the evidence behind it. Read paths
-> and the gated `set_param` write are `ITH` on Web Chromium (POD Go Wireless,
-> fw 2.50); preset save and full backup/restore are implemented but `ITM`;
-> every other write path is `PL` (gated) or `UNS`.
+> and `set_param` are `ITH` on Web Chromium (POD Go Wireless, fw 2.50). Preset
+> store/rename, delete, body copy, snapshots, save and full backup/restore are
+> `ITM` (implemented and covered by fake-device tests). Desktop transports are
+> `BU`; the Android bridge is `ITM`. Effect move (op 21) is implemented but
+> disabled until a hardware test. iOS native remains `UNS`.
 
 ## 1. Capability matrix
 
 | Capability | Web (Chromium) | Web (Safari/Firefox) | Windows | macOS | Linux | Android | iOS/iPadOS |
 |---|---|---|---|---|---|---|---|
-| Offline preset management | PL | PL | PL | PL | PL | PL | PL |
-| Import/export `.pgp` | PL | PL | PL | PL | PL | PL | PL |
-| Import/export `.pgb` | PL | PL | PL | PL | PL | PL | PL |
+| Offline preset management | ITM | BU | BU | BU | BU | ITM | UNS |
+| Import/export `.pgp` | ITM | BU | BU | BU | BU | ITM | UNS |
+| Import/export `.pgb` | ITM | BU | BU | BU | BU | ITM | UNS |
 | Device discovery | ITH (WebUSB) | UNS | BU (libusb) | BU (libusb) | BU (libusb) | ITM (USB Host) | UNS |
-| Vendor bulk protocol | ITH (WebUSB, read-only) | UNS | BU | BU | BU | ITM | UNS |
-| MIDI control | UNS | UNS | PL (WINMM) | PL (CoreMIDI) | PL (ALSA) | PL | PL (CoreMIDI, unverified) |
+| Vendor bulk protocol | ITH (WebUSB) | UNS | BU | BU | BU | ITM | UNS |
+| MIDI control | UNS | UNS | PL (WINMM) | PL (CoreMIDI) | PL (ALSA) | PL | UNS |
 | Read presets | ITH (WebUSB, Factory + User) | UNS | BU | BU | BU | ITM | UNS |
-| Write one effect parameter (`set_param`, gated) | ITH (WebUSB) | UNS | PL (gated) | PL (gated) | PL (gated) | PL (gated) | UNS |
-| Save preset metadata (`save_preset`, gated) | ITM (WebUSB) | UNS | PL (gated) | PL (gated) | PL (gated) | PL (gated) | UNS |
-| Full backup / restore (`.pgbak`, op 5, gated) | ITM (WebUSB) | UNS | PL (gated) | PL (gated) | PL (gated) | PL (gated) | UNS |
-| Write presets (model swap, chain blob) | PL (gated) | UNS | PL (gated) | PL (gated) | PL (gated) | PL (gated) | UNS |
+| Live sync (event channel `0x1002`) | ITM (WebUSB) | UNS | UNS | UNS | UNS | UNS | UNS |
+| Write one effect parameter (`set_param`, op 30) | ITH (WebUSB) | UNS | BU | BU | BU | ITM | UNS |
+| Model change (`model`, op 40) | ITM (WebUSB) | UNS | BU | BU | BU | ITM | UNS |
+| Save preset metadata (`save_preset`, op 71) | ITM (WebUSB) | UNS | BU | BU | BU | ITM | UNS |
+| Delete / body copy (ops 28/78, op 5) | ITM (WebUSB) | UNS | BU | BU | BU | ITM | UNS |
+| Snapshots (ops 88/89/98/37) | ITM (WebUSB) | UNS | BU | BU | BU | ITM | UNS |
+| Move effect (op 21) | ITM, disabled in UI | UNS | ITM, disabled in UI | ITM, disabled in UI | ITM, disabled in UI | ITM, disabled in UI | UNS |
+| Full backup / restore (`.pgbak`, op 5) | ITM (WebUSB) | UNS | BU | BU | BU | ITM | UNS |
 | Firmware update | UNS | UNS | UNS | UNS | UNS | UNS | UNS |
+
+`iOS/iPadOS` in this table means a native app. The iOS browser can still load
+the offline web bundle (tier **Untested** in the roadmap); it cannot reach the
+pedal.
 
 ## 2. Transport detail
 
 | Platform | Transport | Status | Notes |
 |---|---|---|---|
-| Web Chromium | WebUSB | ITH | Read-only setlist read on a POD Go Wireless (fw 2.50, PID `0x424b`); requires HTTPS/loopback and a user gesture |
-| Web Safari/Firefox | none | UNS | No WebUSB; offline only |
-| Windows | libusb/WinUSB | BU | Tauri shell compiles; the pedal must be bound to WinUSB. Not run on hardware yet |
+| Web Chromium | WebUSB | ITH | Setlist and active-preset reads plus `set_param` on a POD Go Wireless (fw 2.50, PID `0x424b`); requires HTTPS/loopback and a user gesture. Live model, save, delete, snapshot and backup/restore paths are `ITM` |
+| Web Safari/Firefox | none | UNS | No WebUSB; offline browse/edit/import/export only, and not exercised by the Chromium-only suite |
+| Windows | libusb/WinUSB | BU | Tauri shell compiles with the same live write paths; the pedal must be bound to WinUSB. Not run on hardware yet |
 | macOS | libusb | BU | Tauri shell compiles; App Sandbox would need a USB entitlement. Not run on hardware yet |
 | Linux | libusb | BU | Tauri shell compiles; udev rule for `0e41:4247`. Not run on hardware yet |
 | Android | USB Host | ITM | Native bridge covered by browser tests with a fake transport; not run on a phone with a pedal yet |
-| iOS | none verified | UNS | Direct vendor USB unavailable via public libusb-style APIs |
-| iOS MIDI | CoreMIDI | PL | Only if the device exposes class-compliant MIDI |
+| iOS | none verified | UNS | No public vendor-USB path; see the roadmap's "Not planned" tier |
+| iOS MIDI | CoreMIDI | UNS | No MIDI path is implemented or planned; CoreMIDI would only help if the pedal exposed class-compliant MIDI |
 
 ## 3. Evidence for the hard limits
 
 | Limit | Evidence |
 |---|---|
 | No WebUSB in Safari/Firefox | Browser platform documentation; WebUSB is Chromium-only |
+| No WebUSB in Chrome for Android | WebUSB is not exposed on Android, which is why the app ships a WebView shell with a USB Host bridge |
 | No direct vendor USB on iOS | Apple restricts USB device access; libusb requires jailbreak/private APIs; ExternalAccessory needs MFi |
 | Windows driver | Official installer ships WinUSB/libusb-style access |
 | Linux permissions | Project ships `99-podgo.rules` |
+| No effect move yet | Encoder matches both captured uploads byte for byte, but the menu stays disabled until a hardware test on a backed-up User slot |
 
 ## 4. Upgrade criteria
 
-A row moves from `PL` to `ITM` when mock tests pass in CI, and to `ITH` only
+A row moves from `PL` or `BU` to `ITM` when mock tests pass in CI, and to `ITH` only
 after a recorded hardware session with:
 
 1. device model and firmware version,
@@ -101,12 +113,13 @@ at the front of the first chunk. `preset_list` already tolerates it: all 128
 factory entries scan correctly. Wiring both reads, including the header case,
 is what this session validates.
 
-Scope of the claim: device discovery, the read-only vendor bulk protocol,
-setlist reads and one `set_param` write are `ITH` for Web Chromium (Brave
-1.99.56, Chromium engine). Preset save (op 71) and full backup/restore (op 5)
-are `ITM`: covered by the Rust/WASM tests and a fake WebUSB device, never sent
-to a pedal from this build. Every other write path and all native transports
-remain unvalidated.
+Scope of the claim: device discovery, the vendor bulk protocol, setlist and
+active-preset reads and one `set_param` write are `ITH` for Web Chromium (Brave
+1.99.56, Chromium engine). Live sync, preset store/rename, delete, body copy,
+snapshots, save and full backup/restore are `ITM`: covered by the Rust/WASM
+tests and a fake WebUSB device, not yet confirmed on hardware. Every native
+transport remains `BU` (desktop) or `ITM` (Android) until a real-device session
+is recorded.
 
 ## 6. Known platform risks
 
