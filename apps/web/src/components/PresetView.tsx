@@ -80,8 +80,6 @@ interface Props {
   canSave: boolean;
   onSave: () => void;
   saveTitle: string;
-  canExport: boolean;
-  onExport: () => void;
   /** The working copy came from a `.pgb` backup that can be rebuilt. */
   canExportBackup: boolean;
   onExportBackup: () => void;
@@ -122,8 +120,6 @@ export default function PresetView({
   canSave,
   onSave,
   saveTitle,
-  canExport,
-  onExport,
   canExportBackup,
   onExportBackup,
   // canRename,
@@ -604,26 +600,27 @@ export default function PresetView({
             <button
               id="save-preset"
               type="button"
-              className="toolbar-button is-primary"
+              className="toolbar-button is-primary save-button"
               disabled={!canSave}
               onClick={onSave}
               title={saveTitle}
+              aria-label="Save"
             >
-              Save
-            </button>
-            <button
-              id="export-pgp"
-              type="button"
-              className="toolbar-button is-primary"
-              disabled={!canExport || busy}
-              title={
-                canExport
-                  ? 'Download this preset as a POD Go Edit .pgp file (works offline)'
-                  : 'Open an offline preset or import a .pgp/.pgb to export it'
-              }
-              onClick={onExport}
-            >
-              Export
+              <svg
+                viewBox="0 0 16 16"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.4}
+                strokeLinejoin="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M2.6 2.6h7.9l2.9 2.9v7.9H2.6z" />
+                <path d="M5.1 2.6v3.1h5.1V2.6" />
+                <path d="M5.1 13.4v-3.2h5.8v3.2" />
+              </svg>
             </button>
           </div>
           {canExportBackup && (

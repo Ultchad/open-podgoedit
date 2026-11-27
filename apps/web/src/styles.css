@@ -821,6 +821,16 @@ button:disabled:hover {
   color: #fff;
 }
 
+/* Icon-only Save: square-ish, so it takes less room than the word. */
+.toolbar-button.save-button {
+  min-width: 2.1rem;
+  padding-inline: 0.45rem;
+}
+
+.toolbar-button.save-button svg {
+  display: block;
+}
+
 /* --- signal chain -------------------------------------------------------- */
 
 .chain-panel {
@@ -2660,12 +2670,16 @@ dl.save-backup-info dd {
     gap: 0.4rem;
   }
 
+  /* Title and the action toolbar share one row on a phone too (the name
+     truncates); the snapshot chips drop to their own full-width row below.
+     That saves the third row the phone layout used to need. */
   .preset-title {
-    flex: 1 1 100%;
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .editor-toolbar .snapshot-row {
-    order: 2;
+    order: 1;
     width: 100%;
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -2678,19 +2692,27 @@ dl.save-backup-info dd {
   }
 
   .toolbar-right {
-    order: 3;
-    width: 100%;
+    flex: 0 0 auto;
+    width: auto;
     margin-left: 0;
-    flex-wrap: wrap;
-    justify-content: flex-start;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
   }
 
   .toolbar-right .toolbar-button {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
   }
 
+  /* Free room on a narrow phone so the preset name stays readable while the
+     action toolbar shares its row. The tempo and the status chip are dropped
+     here: offline/unsaved is already shown by the italic name and the
+     connection banner, while the name and Save/Export matter more. */
   .toolbar-right .tempo {
-    margin-right: auto;
+    display: none;
+  }
+
+  .preset-title .readonly-chip {
+    display: none;
   }
 
   .editor-foot {
