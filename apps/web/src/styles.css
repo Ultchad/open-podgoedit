@@ -1087,37 +1087,44 @@ button.inspector-state.is-toggle.is-bypassed {
   color: #e3b341;
 }
 
-.snapshot-assign {
+.param-controller {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 1.35rem;
   min-height: 0;
-  width: 1.15rem;
   height: 1.15rem;
   margin-right: 0.35rem;
-  padding: 0;
+  padding: 0 0.22rem;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: #8a8f98;
+  font: inherit;
+  font-size: 0.58rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1;
   vertical-align: middle;
   cursor: pointer;
 }
 
-.snapshot-assign:hover:not(:disabled) {
+.param-controller:hover:not(:disabled),
+.param-controller:focus-visible {
   border-color: var(--line-strong);
   color: #fff;
 }
 
-.snapshot-assign.is-on {
+.param-controller.is-on {
   border-color: var(--amber);
   background: #2b2412;
   color: var(--amber);
 }
 
-.snapshot-assign.is-blocked {
-  opacity: 0.4;
-  cursor: not-allowed;
+.param-controller.is-snapshot {
+  border-color: #3d5f8f;
+  background: #182334;
+  color: #8ab4f8;
 }
 
 .inspector-slot {
@@ -2578,7 +2585,7 @@ dl.save-backup-info dd {
     min-height: 44px;
   }
 
-  .snapshot-assign {
+  .param-controller {
     min-width: 44px;
     min-height: 44px;
   }

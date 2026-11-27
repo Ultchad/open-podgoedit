@@ -332,6 +332,53 @@ Preuves à consigner :
 > autre logiciel. Ne remplace pas le pilote sans sauvegarde : note le message
 > exact et la version de Chrome avant toute manipulation.
 
+### 2.6 Affectation d'un contrôleur FS/EXP hors ligne
+
+> Hors ligne uniquement : aucune trame n'est envoyée au pédalier. Les numéros
+> FS1–FS6 (3–8) sont déduits de la convention Line 6 et **ne sont pas encore
+> validés sur matériel** — le bouton de contrôleur ne les écrit jamais en
+> direct.
+
+- [ ] Ouvrir un `.pgp` ou le preset User par défaut, puis créer une copie
+      éditable si nécessaire.
+- [ ] Sélectionner un bloc et cliquer le bouton de contrôleur d'un paramètre
+      (ex. **Drive**) : le menu propose **None**, **Snapshots**, **EXP 1**,
+      **EXP 2**, **FS 1–FS 6**.
+- [ ] Choisir **FS 3** : le bouton affiche `FS3`, le preset passe à
+      « modifié » et le journal indique une affectation hors ligne.
+- [ ] Exporter en `.pgp` et vérifier dans le JSON :
+      `tone.controller.dsp0.blockN.<Param>` contient `"@controller": 5`
+      (FS3 = 3 + 3 - 1), `"@min": 0`, `"@max": 1`.
+- [ ] Vérifier que `tone.footswitch` est inchangé (`@fs_index`, `@fs_label`,
+      `@fs_ledcolor`, `@fs_momentary`, `@fs_primary`) et qu'aucune valeur de
+      snapshot n'a été supprimée.
+- [ ] Choisir **EXP 2** : le JSON porte `"@controller": 2`.
+- [ ] Choisir **None** : l'entrée du paramètre disparaît, les autres
+      affectations du bloc restent.
+- [ ] Rouvrir le `.pgp` exporté : le bouton affiche de nouveau la bonne
+      affectation.
+- [ ] Connecter le pédalier et lire le preset actif : les options **FS/EXP**
+      sont désactivées avec l'infobulle « hors ligne uniquement — pas de
+      capture » ; **Snapshots** reste actif.
+
+**Résultat :** à compléter (date, fichier, valeurs JSON, écarts).
+
+### 2.7 Sélecteur de modèle : **None** dans les catégories
+
+- [ ] Ouvrir l'onglet **Models** d'un bloc contenant un modèle : aucune tuile
+      **None** n'apparaît au-dessus de la grille.
+- [ ] La rangée de catégories commence par **None** (puis Amp, Cab, Dist, Dyn…).
+- [ ] Cliquer **None** : une seule tuile « None · clear » est affichée ; la
+      recherche et les sous-catégories sont masquées.
+- [ ] Cliquer la tuile : le bloc est vidé, comme avec le clic droit
+      **Remove** et la touche **Delete**.
+- [ ] Revenir à une catégorie (ex. **Amp**) : la tuile **None** n'est plus
+      affichée dans la grille.
+- [ ] Vérifier que le clic droit **Remove** et **Delete/Backspace** fonctionnent
+      toujours.
+
+**Résultat :** à compléter (date, navigateur, écarts).
+
 ---
 
 ## 3. Tests matériel POD Go

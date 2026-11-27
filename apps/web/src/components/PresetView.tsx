@@ -54,11 +54,11 @@ interface Props {
   onRenameSnapshot?: (index: number, name: string) => void;
   /** Change a snapshot's LED palette colour; absent for read-only presets. */
   onSetSnapshotLedColor?: (index: number, color: number) => void;
-  /** Assign or remove the Snapshots controller on a parameter. */
-  onToggleSnapshotParam?: (
+  /** Assign or remove a controller on a parameter (offline draft, or Snapshots live). */
+  onSetParamController?: (
     block: number,
     paramIndex: number,
-    assigned: boolean,
+    controller: number | null,
   ) => void;
   /** Bypass or enable a block in the active snapshot. */
   onSetBlockEnabled?: (block: number, enabled: boolean) => void;
@@ -109,7 +109,7 @@ export default function PresetView({
   onSelectSnapshot,
   onRenameSnapshot,
   onSetSnapshotLedColor,
-  onToggleSnapshotParam,
+  onSetParamController,
   onSetBlockEnabled,
   canSetBlockEnabled = false,
   onRemoveBlock,
@@ -672,12 +672,13 @@ export default function PresetView({
         snapshotIndex={snapshotIndex}
         snapshotAssignments={snapshotAssignments}
         snapshotValues={snapshotValues}
-        onToggleSnapshotParam={
-          onToggleSnapshotParam && blockIndex !== null
-            ? (paramIndex, assigned) =>
-                onToggleSnapshotParam(blockIndex, paramIndex, assigned)
+        onSetParamController={
+          onSetParamController && blockIndex !== null
+            ? (paramIndex, controller) =>
+                onSetParamController(blockIndex, paramIndex, controller)
             : undefined
         }
+        offline={offline}
         onSetBlockEnabled={
           onSetBlockEnabled && blockIndex !== null
             ? (enabled) => onSetBlockEnabled(blockIndex, enabled)

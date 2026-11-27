@@ -94,6 +94,7 @@ import {
   setImportedName,
   setImportedParam,
   setImportedSnapshot,
+  setImportedControllerAssignment,
   setImportedSnapshotAssignment,
   setImportedSnapshotLedColor,
   setImportedSnapshotName,
@@ -101,6 +102,7 @@ import {
   removeImportedBlock,
   SNAPSHOT_CONTROLLER_WIRE,
   isSnapshotController,
+  controllerLabel,
   structureToEditPreset,
   toneToStructure,
   type BackupContentSelection,
@@ -3680,7 +3682,12 @@ export default function App() {
       (controller) =>
         controller.block === block && controller.paramIndex === paramIndex,
     );
-    if (assigned && existing && !isSnapshotController(existing.controller)) {
+    if (
+      assigned &&
+      existing &&
+      !isSnapshotController(existing.controller) &&
+      !workingDoc
+    ) {
       setSaveNotice({
         kind: 'error',
         text:
@@ -3778,6 +3785,85 @@ export default function App() {
         ? `Draft: ${param.n} now stores a value per snapshot (starting at ${String(value)}).`
         : `Draft: ${param.n} no longer changes with snapshots.`,
       'the snapshot assignment',
+    );
+  }
+
+  /**
+   * Assign or remove a controller on one parameter.
+   *
+   * Snapshots uses {@link toggleSnapshotParam}: the live op-37 path, or the
+   * offline four-snapshot document path. EXP and footswitch assignments are
+   * offline authoring only. No capture shows the pedal write, and the FS1–FS6
+   * numbers are inferred from the Line 6 convention, so they never leave the
+   * page as a wire command.
+   */
+  function setParamController(
+    block: number,
+    paramIndex: number,
+    controller: number | null,
+  ): void {
+    if (!structure) {
+      return;
+    }
+    const entry = structure.chain.find((item) => item.slot === block + 1);
+    const model =
+      entry && (entry.kind === 'block' || entry.kind === 'looper')
+        ? modelById(entry.modelId)
+        : null;
+    const param = paramAt(model, paramIndex);
+    if (!entry || !param || !('params' in entry)) {
+      return;
+    }
+
+    const existing = structure.controllers.find(
+      (item) => item.block === block && item.paramIndex === paramIndex,
+    );
+
+    if (controller !== null && isSnapshotController(controller)) {
+      if (existing && !isSnapshotController(existing.controller)) {
+        setSaveNotice({
+          kind: 'error',
+          text:
+            `${param.n} already follows a controller (${controllerLabel(
+              existing.controller,
+            )}). Choose None first; this editor will not overwrite it silently.`,
+        });
+        return;
+      }
+      toggleSnapshotParam(block, paramIndex, true);
+      return;
+    }
+
+    if (controller === null && !existing) {
+      return;
+    }
+    const current = entry.params[paramIndex];
+    const value = typeof current === 'boolean' ? current : (current ?? 0);
+
+    if (!workingDoc) {
+      setSaveNotice({
+        kind: 'info',
+        text:
+          controller === null
+            ? 'Removing a controller has no capture yet. Open an offline copy (or Export .pgp) to change it.'
+            : `${controllerLabel(controller)} assignment is offline only — no capture yet. Use an offline copy and export a .pgp.`,
+      });
+      return;
+    }
+
+    commitSnapshotDraft(
+      (doc) => {
+        // Replacing a Snapshots assignment must also drop the per-snapshot
+        // values; otherwise the document keeps values no controller recalls.
+        if (existing && isSnapshotController(existing.controller)) {
+          setImportedSnapshotAssignment(doc, block, param.n, false, value);
+        }
+        setImportedControllerAssignment(doc, block, param.n, controller);
+      },
+      controller === null
+        ? `Draft: ${param.n} no longer has a controller.`
+        : `Draft: ${param.n} → ${controllerLabel(controller)} (offline; FS numbers unverified).`,
+      'the controller assignment',
     );
   }
 
@@ -6187,9 +6273,9 @@ export default function App() {
               onSelectSnapshot={selectSnapshot}
               onRenameSnapshot={renameSnapshot}
               onSetSnapshotLedColor={setSnapshotLedColor}
-              onToggleSnapshotParam={
+              onSetParamController={
                 workingDoc || (connected && activePresetLoaded)
-                  ? toggleSnapshotParam
+                  ? setParamController
                   : undefined
               }
               onSetBlockEnabled={setBlockEnabled}

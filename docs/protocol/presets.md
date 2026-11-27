@@ -142,6 +142,17 @@ Confirmed shape (schema `L6Preset`, version 6):
   controller (`SNAPSHOT_CONTROLLER` / `SNAPSHOT_CONTROLLER_WIRE` in the page);
   documents written here keep `10`. Controllers `1`/`2` are EXP 1/2 and are
   evidenced by the `.pgp` fixtures.
+- **FS/EXP controller authoring is a hypothesis.** The page can write an EXP
+  or footswitch assignment into a `.pgp` document offline: EXP `1`/`2` are
+  evidenced by fixtures; the FS numbers **`3`…`8` = FS1…FS6** follow the Line 6
+  convention (6 POD Go footswitches, matching the 1-based `@fs_index`) but are
+  **not yet hardware-validated** — no capture shows the official editor writing
+  one, so their numbers are inferred (`FOOTSWITCH_CONTROLLER_MIN` … `_MAX` in
+  the page). These assignments never leave the editor as a wire command; only a
+  `.pgp` export carries them. Assigning or removing one parameter controller
+  edits `tone.controller.dsp0` only: it never touches `tone.footswitch` or the
+  snapshots, so a bypass-footswitch entry, per-snapshot values and unknown
+  fields (`@fs_ledcolor`, `@fs_momentary`, `@fs_primary`) survive byte-for-byte.
 - `device_version` is packed BCD: `0x02500000` reads as firmware `2.50`.
 
 ## 6. `.pgb` backup

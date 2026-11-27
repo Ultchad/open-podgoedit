@@ -3694,11 +3694,22 @@ test('recalls, renames and colours snapshots on the pedal', async ({ page }) => 
   );
 
   // Select the first processing block, then assign its first parameter to the
-  // Snapshots controller: op 37.
+  // Snapshots controller: op 37. On a live preset only Snapshots is enabled in
+  // the controller menu; EXP/FS appear disabled.
   await page.locator('.block-tile').first().click();
-  const camera = page.locator('.snapshot-assign').first();
-  await expect(camera).toBeVisible();
-  await camera.click();
+  const controller = page.locator('.param-controller').first();
+  await expect(controller).toBeVisible();
+  await controller.click();
+  const controllerMenu = page.getByRole('menu', { name: /Controller for/ });
+  await expect(
+    controllerMenu.getByRole('menuitem', { name: /EXP 1/ }),
+  ).toBeDisabled();
+  await expect(
+    controllerMenu.getByRole('menuitem', { name: /FS 1/ }),
+  ).toBeDisabled();
+  await controllerMenu
+    .getByRole('menuitem', { name: /^Snapshots/ })
+    .click();
   await expect(page.locator('.report.log')).toContainText(
     'now stores a value per snapshot (operation 37)',
   );
