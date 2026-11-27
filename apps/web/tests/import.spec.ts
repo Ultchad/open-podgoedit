@@ -1,6 +1,17 @@
 import { expect, test } from '@playwright/test';
+import type { Download, Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { deflateSync, inflateSync } from 'node:zlib';
+
+/** Export the open preset through its ⋯ menu (Export is no longer a button). */
+async function exportViaMenu(page: Page): Promise<Download> {
+  await page.locator('#preset-more').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#menu-export').click(),
+  ]);
+  return download;
+}
 
 // Synthetic POD Go Edit files. They use the observed shapes (L6Preset,
 // L6Setlist, AF6L header + zlib members + IDGP directory) but contain only
@@ -298,7 +309,10 @@ test('edits an imported preset offline and exports a .pgp', async ({ page }) => 
 
   // The preset is an offline copy: export is offered, device writes are not.
   await expect(page.locator('.readonly-chip')).toHaveText('offline');
-  await expect(page.locator('#export-pgp')).toBeEnabled();
+  // Export is offered through the preset menu, not as a toolbar button.
+  await page.locator('#preset-more').click();
+  await expect(page.locator('#menu-export')).toBeEnabled();
+  await page.keyboard.press('Escape');
   await expect(page.locator('#arm-writes')).toHaveCount(0);
 
   // Edit the Wah Mix (catalog index 3, a 0..1 knob shown on the 0-10 scale)
@@ -322,10 +336,7 @@ test('edits an imported preset offline and exports a .pgp', async ({ page }) => 
   await page.getByRole('button', { name: 'Close' }).first().click();
 
   // Export and inspect the JSON.
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.locator('#export-pgp').click(),
-  ]);
+  const download = await exportViaMenu(page);
   expect(download.suggestedFilename()).toBe('Renamed_Clean.pgp');
   const path = await download.path();
   const exported = JSON.parse(readFileSync(path ?? '', 'utf8'));
@@ -372,10 +383,7 @@ test('edits an imported preset offline and exports a .pgp', async ({ page }) => 
   await expect(page.locator('#import-detail')).toContainText('User Lead');
   await page.locator('#import-open').click();
 
-  const [backupExport] = await Promise.all([
-    page.waitForEvent('download'),
-    page.locator('#export-pgp').click(),
-  ]);
+  const backupExport = await exportViaMenu(page);
   expect(backupExport.suggestedFilename()).toBe('User_Lead.pgp');
   const backupPath = await backupExport.path();
   const fromBackup = JSON.parse(readFileSync(backupPath ?? '', 'utf8'));
@@ -554,7 +562,9 @@ test('drops Export .pgb when another preset becomes the working copy', async ({
   page.on('dialog', (dialog) => void dialog.accept());
   await page.locator('.preset-item[data-setlist="1"][data-slot="0"]').click();
   await expect(page.locator('#export-pgb')).toHaveCount(0);
-  await expect(page.locator('#export-pgp')).toBeEnabled();
+  await page.locator('#preset-more').click();
+  await expect(page.locator('#menu-export')).toBeEnabled();
+  await page.keyboard.press('Escape');
 });
 
 test('exports only the chosen parts of a .pgb backup', async ({ page }) => {

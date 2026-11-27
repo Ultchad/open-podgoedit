@@ -192,6 +192,19 @@ semantic versioning once it reaches 1.0.
   exists inside the runner.
 
 ### Changed
+- **Export lives in the preset menu only.** The toolbar **Export** button is
+  removed on every screen size; **Export .pgp** stays in each preset's
+  right-click menu and in the **⋯** menu next to the name (same code path, so
+  unsaved edits are still included). The backup-specific **Export .pgb** button
+  remains in the toolbar because the menu has no equivalent. The menu item is
+  disabled for a pedal-only preset until an editable copy exists.
+- **Icon-only Save.** The toolbar **Save** button is now a floppy-disk icon
+  (with `aria-label="Save"` and the same tooltip), so it takes less room and
+  leaves more of the preset name visible, especially on phones.
+- **Phone toolbar shares the preset-title row.** On screens 700 px and narrower
+  the action toolbar now sits to the right of the preset name instead of on its
+  own third row; the snapshot chips keep their full-width row below. The tempo
+  and status chip are hidden in that row so the name stays readable.
 - **Android application ID now matches GitHub.** The installed package is
   `io.github.ultchad.openpodgoedit` (hyphens are not valid in an Android
   application ID; the Kotlin namespace stays `dev.openpodgo.edit`). The

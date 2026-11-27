@@ -4804,7 +4804,10 @@ export default function App() {
       {
         id: 'menu-export',
         label: 'Export .pgp',
-        disabled: !hasDoc,
+        // Only an offline document can be exported: a pedal-only preset has
+        // no body to write (build an editable copy first).
+        disabled:
+          !((isWorking && workingDoc) || Boolean(localDocs[localKey(kind, slot)])),
         onSelect: () => exportSlot(kind, slot),
       },
       {
@@ -5811,7 +5814,6 @@ export default function App() {
   const moduleReady = module.status === 'ready';
   const busy = usbBusy !== null;
   const connected = deviceInfo !== null;
-  const canExport = workingDoc !== null;
   /** **Export .pgb** is only offered for the preset opened from a backup. */
   const canExportBackup =
     importedBackup !== null &&
@@ -6141,8 +6143,6 @@ export default function App() {
                     ? 'Read the active preset from the pedal first.'
                     : 'Store the preset in its slot (Ctrl+S)'
               }
-              canExport={canExport}
-              onExport={exportWorkingPreset}
               canExportBackup={canExportBackup}
               onExportBackup={() => void exportBackup()}
               canRename={workingDoc !== null}

@@ -1,5 +1,16 @@
 import { expect, test } from '@playwright/test';
+import type { Download, Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+
+/** Export the open preset through its ⋯ menu (Export is no longer a button). */
+async function exportViaMenu(page: Page): Promise<Download> {
+  await page.locator('#preset-more').click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#menu-export').click(),
+  ]);
+  return download;
+}
 
 // Offline-first WebUI: no pedal is required to browse, edit and export. These
 // tests cover the default library, the draft-then-save contract and the
@@ -65,22 +76,22 @@ test('loads factory names and a default User preset offline', async ({
   expect(errors).toEqual([]);
 });
 
-test('keeps Save beside Export on desktop and small screens', async ({ page }) => {
+test('keeps Save in the toolbar and Export in the preset menu', async ({
+  page,
+}) => {
   await page.goto('/');
   await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
   const save = page.locator('#save-preset');
-  const exportButton = page.locator('#export-pgp');
 
   for (const width of [1280, 320]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(save).toBeVisible();
-    await expect(exportButton).toBeVisible();
-    const saveBox = await save.boundingBox();
-    const exportBox = await exportButton.boundingBox();
-    expect(saveBox).not.toBeNull();
-    expect(exportBox).not.toBeNull();
-    expect(saveBox!.x + saveBox!.width).toBeLessThan(exportBox!.x);
-    expect(saveBox!.y).toBe(exportBox!.y);
+    // Export is no longer a toolbar button at any width.
+    await expect(page.locator('#export-pgp')).toHaveCount(0);
+    // The right-click / ⋯ menu still offers it.
+    await page.locator('#preset-more').click();
+    await expect(page.locator('#menu-export')).toBeEnabled();
+    await page.keyboard.press('Escape');
   }
 
   await expect(save).toHaveAttribute(
@@ -133,9 +144,7 @@ test('edits a draft with the slider and value field, then exports', async ({
   await expect(notice).toContainText('Export .pgp');
 
   // Export keeps the whole document and the edited value.
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   expect(file.suggestedFilename()).toBe('New_Preset.pgp');
   const path = await file.path();
   const doc = JSON.parse(await readFile(path!, 'utf8'));
@@ -182,9 +191,7 @@ test('undoes and redoes parameter edits with the keyboard', async ({
   // Undo must also restore the offline document, not only the rendered
   // structure: export after undoing the last edit writes the old value.
   await page.keyboard.press('Control+z');
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   expect(doc.data.tone.dsp0.block0.Drive).toBeCloseTo(0.4, 5);
 });
@@ -232,9 +239,7 @@ test('copies an effect between presets with Ctrl+C and Ctrl+V', async ({
   await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
 
   // The exported document carries the copied model and value.
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   expect(doc.data.tone.dsp0.block2['@model']).toBe('HD2_DM4TubeDrive');
 });
@@ -417,9 +422,7 @@ test('keeps an offline draft when switching to another preset', async ({
   await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
 
   // Exporting is what commits the draft to the local library.
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   expect(doc.data.tone.dsp0.block0.Drive).toBeCloseTo(0.65, 5);
   await expect(page.locator('.readonly-chip')).toHaveText('offline');
@@ -531,9 +534,7 @@ test('swaps an amp and loads an effect into an empty slot offline', async ({
     .click();
   await expect(page.locator('.inspector-model')).toHaveText('Tube Drive');
 
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   expect(doc.data.tone.dsp0.block0['@model']).toBe('HD2_AmpUSDoubleNrm');
   expect(doc.data.tone.dsp0.block0['@type']).toBe(1);
@@ -583,9 +584,7 @@ test('reorders blocks, adds a Wah and marks browser-only presets', async ({
     page.locator('button.model-tile', { hasText: 'Vetta Wah' }).first(),
   ).toBeDisabled();
 
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   const dsp0 = doc.data.tone.dsp0;
   expect(dsp0.block0['@model']).toBe('HD2_WahVettaWahStereo');
@@ -752,9 +751,7 @@ test('links to GitHub and edits snapshot bypass, values and LED colours', async 
     .getByRole('menuitemradio', { name: 'Blue' })
     .click();
 
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   const tone = doc.data.tone;
 
@@ -778,11 +775,8 @@ test('links to GitHub and edits snapshot bypass, values and LED colours', async 
   // Removing the Snapshots controller clears the base entry and every value.
   await ampCamera.click();
   await expect(ampCamera).toHaveAttribute('aria-pressed', 'false');
-  const removedDownload = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const removed = JSON.parse(
-    await readFile((await (await removedDownload).path())!, 'utf8'),
-  );
+  const removedFile = await exportViaMenu(page);
+  const removed = JSON.parse(await readFile((await removedFile.path())!, 'utf8'));
   expect(removed.data.tone.controller.dsp0.block0?.Drive).toBeUndefined();
   expect(
     removed.data.tone.snapshot0.controllers.dsp0.block0?.Drive,
@@ -850,9 +844,7 @@ test('opens snapshot actions from the right-click menu', async ({ page }) => {
   await menu.getByRole('menuitem', { name: 'Clear custom name' }).click();
   await expect(chips.nth(2)).toContainText('SNAPSHOT 3');
 
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   expect(doc.data.tone.global['@current_snapshot']).toBe(2);
   expect(doc.data.tone.snapshot2['@name']).toBeUndefined();
@@ -892,9 +884,7 @@ test('selects and renames snapshots offline, then exports them', async ({
   await expect(chips.nth(2)).toContainText('1234567890');
   await expect(chips.nth(3)).toContainText('SNAPSHOT 4');
 
-  const download = page.waitForEvent('download');
-  await page.locator('#export-pgp').click();
-  const file = await download;
+  const file = await exportViaMenu(page);
   const doc = JSON.parse(await readFile((await file.path())!, 'utf8'));
   expect(doc.data.tone.global['@current_snapshot']).toBe(2);
   expect(doc.data.tone.snapshot1['@name']).toBe('GTR SOLO');

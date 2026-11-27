@@ -16,6 +16,17 @@ async function openDevTools(page: Page): Promise<void> {
 }
 
 /**
+ * Export lives in the preset ⋯ menu (it is no longer a toolbar button). Open
+ * the menu, read the Export item's state, then close it again.
+ */
+async function menuExportDisabled(page: Page): Promise<boolean> {
+  await page.locator('#preset-more').click();
+  const disabled = await page.locator('#menu-export').isDisabled();
+  await page.keyboard.press('Escape');
+  return disabled;
+}
+
+/**
  * Build a small streamed setlist (`[{109: {109: name, 123, 124, 125}}]`) so a
  * backup/restore test does not need 256 real slots.
  */
@@ -2920,7 +2931,8 @@ test('saves an export through the desktop save dialog', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
 
-  await page.locator('#export-pgp').click();
+  await page.locator('#preset-more').click();
+  await page.locator('#menu-export').click();
 
   await expect
     .poll(() =>
@@ -3229,7 +3241,6 @@ test.describe('editing a connected preset on a phone viewport', () => {
     );
     await expect(page.locator('.inspector-model')).toHaveText(chosen);
     await expect(page.locator('.readonly-chip')).toHaveText('unsaved changes');
-    await expect(page.locator('#export-pgp')).toBeDisabled();
 
     // Armed, the swap is live: operation 40 already reached the pedal.
     await expect(page.locator('.report.log')).toContainText(
@@ -3294,10 +3305,10 @@ test.describe('editing a connected preset on a phone viewport', () => {
     );
 
     // The pedal preset is read-only until the user asks for a copy.
-    await expect(page.locator('#export-pgp')).toBeDisabled();
+    expect(await menuExportDisabled(page)).toBe(true);
     await page.locator('#edit-copy').tap();
     await expect(page.locator('.editor-source')).toContainText('editable copy');
-    await expect(page.locator('#export-pgp')).toBeEnabled();
+    expect(await menuExportDisabled(page)).toBe(false);
     await expect(page.locator('#save-notice')).toContainText(
       'Editable offline copy created',
     );
