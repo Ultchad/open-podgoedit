@@ -7,6 +7,12 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **PWA install documented.** The README now explains how to install the
+  editor as an app (Chromium-only install + WebUSB; Safari/Firefox/iOS can
+  open the offline page but not install or reach the pedal).
+- **Contributing branch policy.** CONTRIBUTING now makes explicit that pushes
+  go to `dev` only, never directly to `main`, and explains that a `main`
+  branch-protection rule (require PR + CI) is the real enforcement.
 - **Tick individual presets in the Import/Export dialog.** For a `.pgb` you
   can now tick the exact preset slots to import or export: leave them all
   ticked for a whole setlist, tick a subset for only those presets (unticked

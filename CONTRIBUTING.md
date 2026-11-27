@@ -28,6 +28,34 @@ Thanks for helping build an open, unofficial POD Go editor.
 6. Update `CHANGELOG.md`.
 7. Open a pull request; link the evidence and the phase checklist.
 
+## Branches — never push directly to `main`
+
+- Work on a `feature/…` branch and open a pull request.
+- **Only push to `dev`, never directly to `main`.** Every change reaches the
+  repository through `dev` (or a short-lived feature branch merged into it);
+  `main` is updated only by merging the reviewed `dev → main` pull request.
+- Test and review on `dev` first. Merge `dev` to `main` only after CI is green
+  and the changes have been reviewed.
+- Keep the local `main` in sync with `origin/main`; do not force-push shared
+  branches.
+
+### How this is (and isn't) enforced
+
+The **recommended** enforcement is a branch protection rule on `main` in the
+repository settings: **Settings → Branches → Add rule** for `main`, then require
+`Require pull request reviews` (at least 1) and `Require status checks to pass`
+(the `CI` workflow). That prevents any direct push to `main` at the GitHub
+level.
+
+A repository workflow cannot hard block a push to `main` — branch protection is
+the only real control. The CI workflow will, however, **fail loudly** if a push
+bypasses it: `ci.yml` runs on `dev`/`main` and any direct `main` push that
+somehow does not get a branch rule will only pass if it is tested. The
+`pages.yml` deploy also runs on every `main` push, so an unreviewed `main`
+change would publish to GitHub Pages.
+
+> No force-push to `dev` or `main`.
+
 ## Commit style
 
 Use conventional-ish commits: `feat(protocol): decode chunk header`,
