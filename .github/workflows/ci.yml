@@ -87,6 +87,12 @@ jobs:
         working-directory: apps/web
         run: npm run build
 
+      # One UI, thin shells: the desktop app embeds this bundle, the Android app
+      # copies it, and Pages deploys it. Fail if a consumer drifts or the shell
+      # adapter versions disagree.
+      - name: Verify the shells consume this bundle
+        run: node scripts/verify-shell-consumers.mjs
+
       - name: Install Chromium
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
