@@ -877,6 +877,95 @@ test('assigns a footswitch to a parameter offline and preserves the footswitch m
   expect(noneTone.controller.dsp0.block0?.Drive).toBeUndefined();
 });
 
+test('assigns an effect to a footswitch offline and lets blocks share a switch', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  // The default preset already toggles the amp's bypass with FS1.
+  await page.locator('.block-tile').nth(0).click();
+  const ampBypass = page.getByRole('button', { name: 'Bypass footswitch' });
+  await expect(ampBypass).toHaveText('FS1');
+
+  // Reassign it to FS3; the existing custom label survives.
+  await ampBypass.click();
+  await page
+    .getByRole('menu', { name: 'Bypass footswitch' })
+    .getByRole('menuitem', { name: /^FS3/ })
+    .click();
+  await expect(ampBypass).toHaveText('FS3');
+
+  // A second block can share FS3 ("Merge" in the manual).
+  await page.locator('.block-tile').nth(1).click();
+  const cabBypass = page.getByRole('button', { name: 'Bypass footswitch' });
+  await expect(cabBypass).toHaveText('FS');
+  await cabBypass.click();
+  await page
+    .getByRole('menu', { name: 'Bypass footswitch' })
+    .getByRole('menuitem', { name: /^FS3/ })
+    .click();
+  await expect(cabBypass).toHaveText('FS3');
+
+  let file = await exportViaMenu(page);
+  let tone = JSON.parse(
+    await readFile((await file.path())!, 'utf8'),
+  ).data.tone;
+  expect(tone.footswitch.dsp0.block0['@fs_index']).toBe(3);
+  expect(tone.footswitch.dsp0.block0['@fs_enabled']).toBe(true);
+  expect(tone.footswitch.dsp0.block0['@fs_label']).toBe('G Cougar 800');
+  expect(tone.footswitch.dsp0.block1['@fs_index']).toBe(3);
+  expect(tone.footswitch.dsp0.block1['@fs_label']).toBe('4x10 Rhino');
+
+  // Clearing one block's assignment leaves the other on the same switch.
+  await cabBypass.click();
+  await page
+    .getByRole('menu', { name: 'Bypass footswitch' })
+    .getByRole('menuitem', { name: 'None' })
+    .click();
+  await expect(cabBypass).toHaveText('FS');
+  file = await exportViaMenu(page);
+  tone = JSON.parse(await readFile((await file.path())!, 'utf8')).data.tone;
+  expect(tone.footswitch.dsp0.block1).toBeUndefined();
+  expect(tone.footswitch.dsp0.block0['@fs_index']).toBe(3);
+});
+
+test('reassigning a bypass switch preserves unknown footswitch fields', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('#import-edit-file').click();
+  await page
+    .locator('#import-file')
+    .setInputFiles(
+      new URL('../../../fixtures/spec02_a.pgp', import.meta.url).pathname,
+    );
+  await expect(page.locator('#import-preset-name')).toBeVisible();
+  await page.locator('#import-open').click();
+
+  // Block 0 (Volume Pedal) bypasses with the expression toe switch.
+  const bypass = page.getByRole('button', { name: 'Bypass footswitch' });
+  await expect(bypass).toHaveText('EXP Toe');
+  await bypass.click();
+  await page
+    .getByRole('menu', { name: 'Bypass footswitch' })
+    .getByRole('menuitem', { name: /^FS2/ })
+    .click();
+  await expect(bypass).toHaveText('FS2');
+
+  const file = await exportViaMenu(page);
+  const entry = JSON.parse(
+    await readFile((await file.path())!, 'utf8'),
+  ).data.tone.footswitch.dsp0.block0;
+  expect(entry['@fs_index']).toBe(2);
+  // Unknown/extra fields survive the reassignment.
+  expect(entry['@fs_ledcolor']).toBe(65408);
+  expect(entry['@fs_momentary']).toBe(false);
+  expect(entry['@fs_label']).toBe('Volume Pedal');
+});
+
 test('EXP-controlled parameters cannot be reassigned to snapshots on a live preset', async ({
   page,
 }) => {

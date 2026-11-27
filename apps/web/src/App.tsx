@@ -95,6 +95,7 @@ import {
   setImportedParam,
   setImportedSnapshot,
   setImportedControllerAssignment,
+  setImportedFootswitchAssignment,
   setImportedSnapshotAssignment,
   setImportedSnapshotLedColor,
   setImportedSnapshotName,
@@ -103,6 +104,7 @@ import {
   SNAPSHOT_CONTROLLER_WIRE,
   isSnapshotController,
   controllerLabel,
+  footswitchSwitchLabel,
   structureToEditPreset,
   toneToStructure,
   type BackupContentSelection,
@@ -3868,6 +3870,52 @@ export default function App() {
   }
 
   /**
+   * Assign a block's bypass (on/off) to a footswitch, or remove it.
+   *
+   * The manual's "Bypass/Control > Bypass > Switch" setting, stored as the
+   * block's `tone.footswitch` entry. Offline authoring only: selecting a block
+   * and a switch edits the JSON document, exportable as `.pgp`. Multiple
+   * blocks may share a switch (manual "Merge"), so other blocks keep their
+   * entries. No wire command is sent.
+   */
+  function setBypassSwitch(block: number, group: number | null): void {
+    if (!structure) {
+      return;
+    }
+    const entry = structure.chain.find((item) => item.slot === block + 1);
+    if (!entry || entry.kind !== 'block') {
+      return;
+    }
+    const model = modelById(entry.modelId);
+
+    if (!workingDoc) {
+      setSaveNotice({
+        kind: 'info',
+        text:
+          'Assigning a block to a footswitch is offline only — no captured write yet. ' +
+          'Use an offline copy and export a .pgp.',
+      });
+      return;
+    }
+
+    commitSnapshotDraft(
+      (doc) =>
+        setImportedFootswitchAssignment(
+          doc,
+          block,
+          group,
+          model?.short ?? entry.kind,
+        ),
+      group === null
+        ? `Draft: block ${block + 1} is no longer assigned to a footswitch.`
+        : `Draft: block ${block + 1} toggles with ${footswitchSwitchLabel(
+            group,
+          )} (offline; several blocks may share one switch).`,
+      'the footswitch assignment',
+    );
+  }
+
+  /**
    * Bypass or enable one block in the active snapshot.
    *
    * A preset read from the pedal is read-only here, so the first bypass
@@ -6278,6 +6326,7 @@ export default function App() {
                   ? setParamController
                   : undefined
               }
+              onSetBypassSwitch={workingDoc ? setBypassSwitch : undefined}
               onSetBlockEnabled={setBlockEnabled}
               canSetBlockEnabled={connected}
               onRemoveBlock={

@@ -1127,6 +1127,36 @@ button.inspector-state.is-toggle.is-bypassed {
   color: #8ab4f8;
 }
 
+/* Bypass footswitch chip in the inspector header (block → FS). */
+.inspector-bypass {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 0.05rem 0.34rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.6rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.inspector-bypass:hover:not(:disabled),
+.inspector-bypass:focus-visible {
+  color: #fff;
+}
+
+.inspector-bypass.is-on {
+  border-color: var(--amber);
+  background: #2b2412;
+  color: var(--amber);
+}
+
 .inspector-slot {
   margin-left: auto;
 }
