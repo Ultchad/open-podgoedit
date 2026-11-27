@@ -25,8 +25,9 @@
 
 A `.pgb` backup also lets you choose which parts to bring in: Factory presets,
 User presets, impulse responses and globals. Unticking a setlist hides it from
-the slot browser; **Import N preset(s)** adds every non-empty preset of the
-checked setlists to the offline library. User presets keep their slot when it
+the slot browser. **Import N preset(s)** adds the ticked presets of the checked
+setlists to the offline library — leave every slot ticked for all of them, or
+tick only the specific presets you want. User presets keep their slot when it
 is free; Factory presets and occupied slots go to the first empty User slots,
 and nothing already in the library is overwritten. IRs have no editor here and
 are only kept for re-export.
@@ -49,8 +50,10 @@ fields. Unknown fields are preserved even when not displayed.
 - **Partial backup (`.pgbak`):** one setlist or a chosen set of slots.
 - **Backup file import/export (`.pgb`):** the vendor container. On export you
   choose which parts to keep — Factory setlist, User setlist, impulse responses
-  and globals — and every member you keep is copied byte for byte. The `SLNM`
-  name table and unknown members are always kept so the file stays readable.
+  and globals — and tick exactly the preset slots you want; unticked members
+  and presets are dropped, every member you keep is copied byte for byte. The
+  `SLNM` name table and unknown members are always kept so the file stays
+  readable. Ticking a single User preset also lets you download it as a `.pgp`.
 - **Restore:** checked entries from a `.pgbak` are streamed with operation 5;
   unchecked entries and slots absent from the file are left untouched.
 - Backups are never uploaded anywhere.

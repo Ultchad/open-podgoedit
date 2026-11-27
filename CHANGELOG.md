@@ -7,6 +7,12 @@ semantic versioning once it reaches 1.0.
 ## [Unreleased]
 
 ### Added
+- **Tick individual presets in the Import/Export dialog.** For a `.pgb` you
+  can now tick the exact preset slots to import or export: leave them all
+  ticked for a whole setlist, tick a subset for only those presets (unticked
+  slots are emptied on export), and tick exactly one User preset to download
+  it as a single `.pgp` too. The group checkboxes (Factory / User / IRs /
+  Globals) still control which members are kept.
 - **Delete an effect three ways.** A selected effect can be removed from the
   right-click **Remove** item, the **Delete**/**Backspace** key, or the
   **None** tile at the top of the Models pane. All three edit an

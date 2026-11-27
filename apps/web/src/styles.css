@@ -2054,6 +2054,10 @@ dl.save-backup-info dd {
   margin-top: -0.2rem;
 }
 
+.import-slot-tip {
+  margin: 0.4rem 1rem 0.15rem;
+}
+
 /* Keep the longer label on one line; the mobile grid already gives every
    header action the same width. */
 #import-edit-file {
@@ -2098,6 +2102,12 @@ dl.save-backup-info dd {
 .import-slot.is-selected {
   border-color: var(--amber);
   background: var(--surface-2);
+  color: #fff;
+}
+
+.import-slot.is-ticked {
+  border-color: var(--amber);
+  box-shadow: inset 0 0 0 1px var(--amber);
   color: #fff;
 }
 
