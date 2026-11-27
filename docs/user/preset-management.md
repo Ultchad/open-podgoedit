@@ -41,6 +41,13 @@
   and footswitch choices appear disabled because the pedal write has not been
   captured yet, so set those in an offline copy and export a `.pgp`. The FS
   numbers are inferred and not yet validated on hardware.
+- **Assign an effect to a footswitch (bypass).** With a block selected, the
+  **FS** chip in the inspector header opens **None · FS1–FS8 · EXP Toe**.
+  Choosing a switch edits the offline document (export as `.pgp`) so that
+  stomping it toggles the block; several blocks may share one switch (the
+  manual's "Merge") and clearing one leaves the others. The footer chips
+  (`FS1 → Amp`) show the result. This is the bypass assignment, separate from a
+  parameter's controller; on a live preset it is read-only for now.
 - The chain view lets you enable/disable and reorder blocks where supported.
 - Parameter edits validate against the model definition's min/max.
 - Undo/redo is local to the tab and keeps the **last 50 edits** for the loaded

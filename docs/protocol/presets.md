@@ -118,7 +118,12 @@ Confirmed shape (schema `L6Preset`, version 6):
 - `dsp0.block0`…`block9` are the ten processing slots. An unused slot keeps
   `{"@position": n}` rather than disappearing.
 - `@fs_index` is 1-based: `1`…`8` are `FS1`…`FS8`, `9` is the expression toe
-  switch. The switch target is the containing block (slot `n + 1`).
+  switch. The switch target is the containing block (slot `n + 1`). This is the
+  **bypass** (stomp) assignment: several blocks may name the same `@fs_index`
+  ("Merge" in the POD Go 2.50 Owner's Manual, *Bypass/Control > Bypass >
+  Switch*), so the map is many-to-one. FS7/FS8 only function when *Global
+  Settings > Switches/Pedals > EXP 2 FS7/8* is set to `FS7/8`. Offline authoring
+  writes this entry only; it never touches `tone.controller` or snapshots.
 - `@current_snapshot` is 0-based; `snapshot0`…`snapshot3` carry the names and
   validity flags. The POD Go Owner's Manual limits a custom snapshot label to
   10 characters (the Rename Snapshot screen); `@name` is plain text in the

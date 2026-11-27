@@ -60,6 +60,8 @@ interface Props {
     paramIndex: number,
     controller: number | null,
   ) => void;
+  /** Assign or remove the selected block's bypass footswitch (offline draft). */
+  onSetBypassSwitch?: (block: number, group: number | null) => void;
   /** Bypass or enable a block in the active snapshot. */
   onSetBlockEnabled?: (block: number, enabled: boolean) => void;
   /** Remove one effect from the active preset (operations 28 then 78). */
@@ -110,6 +112,7 @@ export default function PresetView({
   onRenameSnapshot,
   onSetSnapshotLedColor,
   onSetParamController,
+  onSetBypassSwitch,
   onSetBlockEnabled,
   canSetBlockEnabled = false,
   onRemoveBlock,
@@ -250,6 +253,14 @@ export default function PresetView({
       }
     }
   }
+
+  // Bypass footswitch attached to the selected block (1-based slot in the
+  // structure). Several blocks may share the same switch ("Merge").
+  const footswitchGroup =
+    blockIndex === null
+      ? undefined
+      : structure.footswitches.find((fs) => fs.block === blockIndex + 1)
+          ?.group;
 
   /** Start editing a snapshot label inline (double-click on the chip). */
   function startSnapshotRename(index: number): void {
@@ -672,6 +683,12 @@ export default function PresetView({
         snapshotIndex={snapshotIndex}
         snapshotAssignments={snapshotAssignments}
         snapshotValues={snapshotValues}
+        footswitchGroup={footswitchGroup}
+        onSetBypassSwitch={
+          onSetBypassSwitch && blockIndex !== null
+            ? (group) => onSetBypassSwitch(blockIndex, group)
+            : undefined
+        }
         onSetParamController={
           onSetParamController && blockIndex !== null
             ? (paramIndex, controller) =>

@@ -1062,7 +1062,22 @@ export const FOOTSWITCH_CONTROLLER_MIN = 3;
 export const FOOTSWITCH_CONTROLLER_MAX = 8;
 
 /**
- * Human label for a stored controller number.
+ * Bypass-assignment switch groups in `.pgp` documents (`tone.footswitch`).
+ *
+ * `0`…`7` = FS1…FS8 and `8` = the expression-pedal toe switch (`@fs_index`
+ * is this value + 1). Several blocks may share one group: the manual's "Merge"
+ * option assigns multiple blocks to the same footswitch, and each block keeps
+ * its own `tone.footswitch.dsp0.blockN` entry with the same `@fs_index`.
+ */
+export const FOOTSWITCH_GROUP_MIN = 0;
+export const FOOTSWITCH_GROUP_MAX = 8;
+
+/** Switch label used by the pedal and the manual (`FS1`…`FS8`, `EXP Toe`). */
+export function footswitchSwitchLabel(group: number): string {
+  return group === FOOTSWITCH_GROUP_MAX ? 'EXP Toe' : `FS${group + 1}`;
+}
+
+/** Human label for a stored controller number.
  *
  * Snapshots matches both the document (`10`) and wire (`11`) numbers.
  */
@@ -1291,6 +1306,67 @@ export function setImportedControllerAssignment(
   };
 }
 
+/**
+ * Assign a block's bypass to a footswitch, or remove the assignment.
+ *
+ * Offline `.pgp` authoring only: this writes the `tone.footswitch` bypass map
+ * (the manual's "Bypass/Control > Bypass > Switch"), which is separate from a
+ * parameter's controller. Several blocks may share the same switch (the
+ * manual calls this "Merge"), so this never clears another block's entry; each
+ * block carries its own `blockN` object with the same `@fs_index`.
+ *
+ * `group` is 0-based (`0`…`7` = FS1…FS8, `8` = EXP toe). Pass `null` to remove
+ * the assignment. Existing keys (`@fs_label`, `@fs_ledcolor`, `@fs_momentary`,
+ * `@fs_primary`) are preserved; a custom label is never overwritten.
+ */
+export function setImportedFootswitchAssignment(
+  preset: EditPreset,
+  block: number,
+  group: number | null,
+  label?: string,
+): void {
+  if (!Number.isInteger(block) || block < 0 || block >= BLOCK_COUNT) {
+    return;
+  }
+  const root = asObject(asObject(preset.tone.footswitch)?.dsp0);
+  const key = `block${block}`;
+  if (group === null) {
+    if (root) {
+      delete root[key];
+    }
+    return;
+  }
+  if (
+    !Number.isInteger(group) ||
+    group < FOOTSWITCH_GROUP_MIN ||
+    group > FOOTSWITCH_GROUP_MAX
+  ) {
+    return;
+  }
+  if (!asObject(preset.tone.footswitch)) {
+    preset.tone.footswitch = {};
+  }
+  const footswitchRoot = asObject(preset.tone.footswitch) ?? {};
+  const dsp0 = ensureObject(footswitchRoot, 'dsp0');
+  const existing = asObject(dsp0[key]);
+  const entry: Record<string, unknown> = existing ? { ...existing } : {};
+  entry['@fs_enabled'] = true;
+  entry['@fs_index'] = group + 1;
+  const currentLabel = asString(entry['@fs_label']);
+  if ((currentLabel === null || currentLabel === '') && label !== undefined) {
+    entry['@fs_label'] = label;
+  }
+  dsp0[key] = entry;
+}
+
+/**
+ * Set one block's bypass state for a snapshot.
+ *
+ * The other snapshots are seeded from the previous block state when they do
+ * not carry an explicit value yet, so adding a bypass state to one snapshot
+ * cannot silently change the others. The base `@enabled` follows the active
+ * snapshot and is what the vendor editor shows for the loaded preset.
+ */
 export function setImportedBlockEnabled(
   preset: EditPreset,
   snapshotIndex: number,
