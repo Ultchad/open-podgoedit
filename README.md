@@ -42,8 +42,10 @@ are thin shells that add a native USB transport.
 
 Download the APK from [Releases](https://github.com/Ultchad/open-podgoedit/releases).
 The evidence matrix is in
-[docs/architecture/platform-support-matrix.md](docs/architecture/platform-support-matrix.md)
-and the tier policy is in the [roadmap](docs/roadmap.md#platform-tiers).
+[docs/architecture/platform-support-matrix.md](docs/architecture/platform-support-matrix.md),
+the tier policy is in the [roadmap](docs/roadmap.md#platform-tiers), and every
+platform runs the same UI through the
+[shell contract](docs/architecture/shell-contract.md).
 
 **Hardware status.** Parameter writes (operation 30) and the WebUSB read paths
 are validated on a POD Go Wireless with firmware 2.50. Live pedal sync, model

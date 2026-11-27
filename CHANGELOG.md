@@ -6,7 +6,16 @@ semantic versioning once it reaches 1.0.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-27
+
 ### Added
+- **One UI, thin shells — explicit contract and startup handshake.** The web
+  bundle is documented as the only UI for the browser, Android and desktop
+  shells ([shell contract](docs/architecture/shell-contract.md)). Each native
+  shell now reports a shell adapter version; when an app package predates the
+  bundled UI the header shows **App update needed** instead of failing later.
+  CI verifies the three versions agree and that every shell still consumes
+  `apps/web/dist`.
 - **PWA install documented.** The README now explains how to install the
   editor as an app (Chromium-only install + WebUSB; Safari/Firefox/iOS can
   open the offline page but not install or reach the pedal).

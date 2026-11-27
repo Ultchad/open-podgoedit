@@ -53,6 +53,14 @@ class PodgoUsbBridge(private val activity: MainActivity) {
     /** Registered while a permission dialog is up; cleared on close. */
     @Volatile private var permissionReceiver: BroadcastReceiver? = null
 
+    /**
+     * Shell adapter version. The bundled web UI checks this at startup (see
+     * `apps/web/src/shell.ts`) so an old package cannot silently run against a
+     * newer contract. Bump it together with `SHELL_API_VERSION`.
+     */
+    @JavascriptInterface
+    fun apiVersion(): Int = API_VERSION
+
     /** Opens the first POD Go on the bus; returns `name (0xPID)`. */
     @JavascriptInterface
     @Synchronized
@@ -297,6 +305,12 @@ class PodgoUsbBridge(private val activity: MainActivity) {
     companion object {
         const val JS_NAME = "podgoAndroidUsb"
         const val ACTION_USB_PERMISSION = "dev.openpodgo.edit.USB_PERMISSION"
+
+        /**
+         * Shell adapter contract version. Keep in sync with `SHELL_API_VERSION`
+         * in `apps/web/src/shell.ts`; CI verifies all three shells match.
+         */
+        const val API_VERSION = 1
 
         /** Line 6 vendor id and POD Go / POD Go Wireless product ids. */
         const val LINE6_VENDOR_ID = 0x0e41

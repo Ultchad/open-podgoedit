@@ -2622,6 +2622,7 @@ function fakeAndroidBridge(): void {
   const inbox: string[] = [];
   (window as unknown as { podgoAndroidUsb?: unknown }).podgoAndroidUsb = {
     present: true,
+    apiVersion: () => 1,
     open: () => 'POD Go (fake) (0x4247)',
     close: () => undefined,
     discard: () => {
@@ -2838,6 +2839,8 @@ function fakeDesktopShell(): void {
     core: {
       invoke: async (command: string, args?: Record<string, unknown>) => {
         switch (command) {
+          case 'shell_api_version':
+            return 1;
           case 'usb_open':
             return {
               productId: 0x4247,
