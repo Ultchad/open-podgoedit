@@ -571,3 +571,30 @@ output is invented; unavailable tools are recorded as limitations.
   metadata envelope is not invented.
 - **Next:** open an exported `.pgb` in POD Go Edit, restore it to a pedal, and
   confirm the edited slot and the untouched IR still load.
+
+## 2026-11-27 — POD Go 2.50 Owner's Manual: bypass vs controller assignments
+
+- **Source:** `POD Go 2.50 Owner's Manual - English.pdf` (Line 6, downloaded
+  2026-11-27 to `reverse/manuals/`, gitignored). Sections *Bypass/Control*
+  (pp. 38–40), *Snapshots* (pp. 35–37) and *Switches/Pedals* globals.
+- **Result — two separate systems:**
+  - **Bypass assign** (`tone.footswitch.dsp0.blockN.@fs_index`): *Bypass/Control
+    > Bypass > Switch* assigns a block's on/off to `FS1–FS8`, `EXP 1/2`
+    (position + wait) or the toe switch. The dialog's **Merge**/**Replace**
+    option confirms **many blocks may share one switch** (many-to-one map).
+    FS7/FS8 require *Global Settings > Switches/Pedals > EXP 2 FS7/8 = FS7/8*.
+  - **Controller assign** (`tone.controller.dsp0.blockN.<Param>@controller`):
+    parameters can follow `EXP 1/2`, `FS1–FS8` (toggle min↔max) or the
+    **Snapshots** controller. Up to 64 parameters per preset; snapshots also
+    store block bypass automatically unless *Snapshot Bypass* is Off.
+- **Interpretation:** the page's offline authoring matches the document model:
+  `setImportedFootswitchAssignment` edits the bypass map only;
+  `setImportedControllerAssignment` edits parameter controllers only. The two
+  never touch each other. FS/EXP **controller** numbers remain unobserved
+  (reference implementation raises `ControllerAssignUnsupported`); the bypass
+  `@fs_index` numbering (1–8 + toe) is directly documented and captured.
+- **Confidence:** `C` for the manual statements and the document mapping; `U`
+  for the FS/EXP controller *numbers* and for any wire write (op 31/33),
+  which stays offline-only until a capture and hardware pass.
+- **Next:** capture the official editor assigning a block to a footswitch (op
+  31/33) and a parameter to FS, then enable live writes with a hardware test.

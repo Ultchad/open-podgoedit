@@ -22,6 +22,15 @@ semantic versioning once it reaches 1.0.
   **None · clear** tile (keeping the safe second-click) and hiding the search
   and sub-tabs. The standalone tile above the grid is gone; right-click
   **Remove** and **Delete/Backspace** still work.
+- **Assign an effect to a footswitch offline.** A new **FS** chip in the block
+  inspector opens **None · FS1–FS8 · EXP Toe** and writes the block's
+  `tone.footswitch` bypass entry in an offline/imported preset (export as
+  `.pgp`). Several blocks may share one switch (the manual's "Merge"), and
+  reassigning preserves `@fs_label` and unknown fields (`@fs_ledcolor`,
+  `@fs_momentary`, `@fs_primary`). This is separate from a parameter's
+  controller and is offline-only: no captured op-31/33 write is sent yet.
+  FS7/FS8 need the pedal's EXP 2 FS7/8 global setting; see the manual test
+  §2.8 and `docs/protocol/presets.md`.
 
 ## [0.4.0] - 2026-11-27
 

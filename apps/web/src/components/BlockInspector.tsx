@@ -46,8 +46,10 @@ import {
   EXP_CONTROLLER_2,
   FOOTSWITCH_CONTROLLER_MAX,
   FOOTSWITCH_CONTROLLER_MIN,
+  FOOTSWITCH_GROUP_MAX,
   SNAPSHOT_CONTROLLER,
   controllerLabel,
+  footswitchSwitchLabel,
   isSnapshotController,
 } from '../podgoEdit';
 import PresetMenu from './PresetMenu';
@@ -85,6 +87,10 @@ interface Props {
   ) => void;
   /** The preset has an offline JSON document: EXP/FS authoring is enabled. */
   offline: boolean;
+  /** 0-based switch group that toggles this block's bypass, when assigned. */
+  footswitchGroup?: number;
+  /** Assign/remove this block's bypass footswitch (offline draft). */
+  onSetBypassSwitch?: (group: number | null) => void;
   /** Bypass or enable this block in the active snapshot. */
   onSetBlockEnabled?: (enabled: boolean) => void;
   /** The page can create an editable copy, so the toggle stays visible. */
@@ -108,12 +114,18 @@ export default function BlockInspector({
   snapshotValues,
   onSetParamController,
   offline,
+  footswitchGroup,
+  onSetBypassSwitch,
   onSetBlockEnabled,
   canSetBlockEnabled = false,
   onOpenBlockMenu,
   onRemove,
 }: Props) {
   const [mode, setMode] = useState<Mode>('params');
+  const [bypassMenu, setBypassMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   const io: IoKind | null =
     entry?.kind === 'input'
@@ -150,6 +162,35 @@ export default function BlockInspector({
   useEffect(() => {
     setMode(empty ? 'models' : 'params');
   }, [entry, empty]);
+
+  // Bypass assignment menu: one row per switch, the current one ticked.
+  const bypassItems: PresetMenuEntry[] = [
+    {
+      id: `bypass-none-${index ?? 'io'}`,
+      label: 'None',
+      disabled: footswitchGroup === undefined,
+      title:
+        footswitchGroup === undefined
+          ? 'No bypass footswitch'
+          : 'Remove the bypass footswitch',
+      onSelect: () => onSetBypassSwitch?.(null),
+    },
+    'separator',
+    ...Array.from(
+      { length: FOOTSWITCH_GROUP_MAX + 1 },
+      (_, group): PresetMenuEntry => ({
+        id: `bypass-${group}-${index ?? 'io'}`,
+        label: footswitchSwitchLabel(group),
+        hint: footswitchGroup === group ? 'current' : undefined,
+        disabled: footswitchGroup === group,
+        title:
+          group >= 6 && group <= 7
+            ? 'FS7/FS8 require Global Settings > Switches/Pedals > EXP 2 FS7/8 = FS7/8'
+            : undefined,
+        onSelect: () => onSetBypassSwitch?.(group),
+      }),
+    ),
+  ];
 
   return (
     <section className="inspector" aria-label="Block inspector">
@@ -191,6 +232,42 @@ export default function BlockInspector({
           {display}
         </span>
         {model?.sub && <span className="inspector-sub">{model.sub}</span>}
+        {entry?.kind === 'block' &&
+          (onSetBypassSwitch ? (
+            <button
+              type="button"
+              className={`inspector-bypass${
+                footswitchGroup !== undefined ? ' is-on' : ''
+              }`}
+              aria-haspopup="menu"
+              aria-pressed={footswitchGroup !== undefined}
+              aria-label="Bypass footswitch"
+              title={
+                footswitchGroup !== undefined
+                  ? `Bypass toggles with ${footswitchSwitchLabel(
+                      footswitchGroup,
+                    )} — click to change`
+                  : 'Assign a footswitch to toggle this block'
+              }
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setBypassMenu({ x: rect.left, y: rect.bottom + 4 });
+              }}
+            >
+              {footswitchGroup !== undefined
+                ? footswitchSwitchLabel(footswitchGroup)
+                : 'FS'}
+            </button>
+          ) : footswitchGroup !== undefined ? (
+            <span
+              className="inspector-bypass is-on"
+              title={`Bypass toggles with ${footswitchSwitchLabel(
+                footswitchGroup,
+              )}`}
+            >
+              {footswitchSwitchLabel(footswitchGroup)}
+            </span>
+          ) : null)}
         {entry?.kind === 'block' &&
           (onSetBlockEnabled && (editable || canSetBlockEnabled) ? (
             <button
@@ -251,6 +328,16 @@ export default function BlockInspector({
           snapshotValues={snapshotValues}
           onSetParamController={onSetParamController}
           offline={offline}
+        />
+      )}
+
+      {bypassMenu && onSetBypassSwitch && (
+        <PresetMenu
+          x={bypassMenu.x}
+          y={bypassMenu.y}
+          items={bypassItems}
+          label="Bypass footswitch"
+          onClose={() => setBypassMenu(null)}
         />
       )}
     </section>

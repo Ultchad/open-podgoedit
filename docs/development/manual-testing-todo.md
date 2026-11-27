@@ -379,6 +379,33 @@ Preuves à consigner :
 
 **Résultat :** à compléter (date, navigateur, écarts).
 
+### 2.8 Affectation d'un effet (bypass) à un footswitch hors ligne
+
+> Hors ligne uniquement. Le manuel POD Go 2.50 (*Bypass/Control > Bypass >
+> Switch*) confirme qu'un même switch peut commander **plusieurs blocs**
+> (option « Merge »). L'écriture op 31/33 n'est pas encore validée sur
+> matériel ; seul l'export `.pgp` porte l'affectation.
+
+- [ ] Ouvrir un preset User et sélectionner un bloc (ex. l'ampli) : le bouton
+      `FS…` apparaît dans l'en-tête de l'inspecteur.
+- [ ] Cliquer ce bouton : le menu propose **None**, **FS1–FS8** et **EXP Toe**.
+- [ ] Choisir **FS3** : le bouton affiche `FS3` et le preset passe à
+      « modifié ».
+- [ ] Sélectionner un second bloc et l'affecter aussi à **FS3** : les deux
+      blocs partagent le switch (Merge) et le premier n'est pas retiré.
+- [ ] Exporter en `.pgp` : `tone.footswitch.dsp0.blockN.@fs_index` vaut `3`
+      pour les deux blocs et `@fs_enabled` vaut `true` ; `@fs_label` et les
+      champs inconnus (`@fs_ledcolor`, `@fs_momentary`, `@fs_primary`) sont
+      conservés.
+- [ ] Choisir **None** sur un bloc : son entrée disparaît, l'autre reste sur
+      FS3.
+- [ ] Vérifier que `tone.controller` et les snapshots n'ont pas changé.
+- [ ] (Option) Importer `spec02_a.pgp`, réaffecter le bloc 0 de `EXP Toe` à
+      `FS2` : `@fs_ledcolor` 65408, `@fs_momentary` false et `@fs_label`
+      « Volume Pedal » restent inchangés.
+
+**Résultat :** à compléter (date, fichier, valeurs JSON, écarts).
+
 ---
 
 ## 3. Tests matériel POD Go
