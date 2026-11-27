@@ -1044,6 +1044,47 @@ export function isSnapshotController(controller: number | null | undefined): boo
   return controller === SNAPSHOT_CONTROLLER || controller === SNAPSHOT_CONTROLLER_WIRE;
 }
 
+/** EXP 1 controller number in `.pgp` documents (evidenced by fixtures). */
+export const EXP_CONTROLLER_1 = 1;
+
+/** EXP 2 controller number in `.pgp` documents (evidenced by fixtures). */
+export const EXP_CONTROLLER_2 = 2;
+
+/**
+ * Controller numbers for FS1–FS6 in `.pgp` documents.
+ *
+ * These follow the Line 6 convention (`3` = FS1 … `8` = FS6) and are **not**
+ * hardware-validated: no capture shows the official editor assigning a
+ * footswitch to a parameter. They are used for offline `.pgp` authoring only;
+ * a pedal read never writes them.
+ */
+export const FOOTSWITCH_CONTROLLER_MIN = 3;
+export const FOOTSWITCH_CONTROLLER_MAX = 8;
+
+/**
+ * Human label for a stored controller number.
+ *
+ * Snapshots matches both the document (`10`) and wire (`11`) numbers.
+ */
+export function controllerLabel(controller: number): string {
+  if (isSnapshotController(controller)) {
+    return 'Snapshots';
+  }
+  if (controller === EXP_CONTROLLER_1) {
+    return 'EXP 1';
+  }
+  if (controller === EXP_CONTROLLER_2) {
+    return 'EXP 2';
+  }
+  if (
+    controller >= FOOTSWITCH_CONTROLLER_MIN &&
+    controller <= FOOTSWITCH_CONTROLLER_MAX
+  ) {
+    return `FS${controller - FOOTSWITCH_CONTROLLER_MIN + 1}`;
+  }
+  return `Controller ${controller}`;
+}
+
 function ensureObject(
   parent: Record<string, unknown>,
   key: string,
@@ -1203,13 +1244,53 @@ export function setImportedSnapshotAssignment(
 }
 
 /**
- * Set one block's bypass state for a snapshot.
+ * Assign an EXP pedal or footswitch controller to one parameter, or remove it.
  *
- * The other snapshots are seeded from the previous block state when they do
- * not carry an explicit value yet, so adding a bypass state to one snapshot
- * cannot silently change the others. The base `@enabled` follows the active
- * snapshot and is what the vendor editor shows for the loaded preset.
+ * Offline `.pgp` authoring only. The helper edits `tone.controller.dsp0` and
+ * preserves `@min`, `@max` and any unknown keys on an existing entry. It never
+ * touches `tone.footswitch` or snapshot values: assigning a bypass footswitch
+ * and assigning a parameter controller are separate fields in the document.
+ *
+ * The FS1–FS6 numbers are inferred (see {@link FOOTSWITCH_CONTROLLER_MIN});
+ * no capture validates them, so this is not wired to a pedal write.
  */
+export function setImportedControllerAssignment(
+  preset: EditPreset,
+  block: number,
+  paramName: string,
+  controller: number | null,
+): void {
+  const controllerRoot = asObject(preset.tone.controller);
+  if (controller === null) {
+    const dsp0 = asObject(controllerRoot?.dsp0);
+    const blockControllers = asObject(dsp0?.[`block${block}`]);
+    if (blockControllers) {
+      delete blockControllers[paramName];
+      if (dsp0) {
+        pruneEmpty(dsp0, `block${block}`);
+      }
+    }
+    return;
+  }
+
+  if (!controllerRoot) {
+    preset.tone.controller = {};
+  }
+  const root = asObject(preset.tone.controller) ?? {};
+  const dsp0 = ensureObject(root, 'dsp0');
+  const blockControllers = ensureObject(dsp0, `block${block}`);
+  const existing = asObject(blockControllers[paramName]);
+  blockControllers[paramName] = {
+    ...existing,
+    // Documents name Snapshots `10`; a pedal read carries the wire `11`.
+    '@controller': isSnapshotController(controller)
+      ? SNAPSHOT_CONTROLLER
+      : controller,
+    '@min': asNumber(existing?.['@min']) ?? 0,
+    '@max': asNumber(existing?.['@max']) ?? 1,
+  };
+}
+
 export function setImportedBlockEnabled(
   preset: EditPreset,
   snapshotIndex: number,

@@ -641,15 +641,29 @@ test('the Delete key removes the selected effect', async ({ page }) => {
   await expect(page.locator('.preset-title-name')).toHaveClass(/is-unsaved/);
 });
 
-test('the None model tile clears the selected effect', async ({ page }) => {
+test('the None category tab clears the selected effect', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
 
   await page.locator('.block-tile').nth(1).click();
   await page.getByRole('tab', { name: 'Models' }).click();
+
+  // No standalone duct tape tile above the grid; the None tab heads the row.
+  const noneTab = page.getByRole('tab', { name: 'None' });
+  await expect(noneTab).toHaveCount(1);
+  await expect(
+    page.locator('.category-row').getByRole('tab').first(),
+  ).toHaveText('None');
+  await expect(page.locator('button.model-tile.is-none')).toHaveCount(0);
+
+  // Selecting the tab shows a single safe "clear" tile.
+  await noneTab.click();
   const none = page.locator('button.model-tile.is-none');
   await expect(none).toHaveCount(1);
   await expect(none).toContainText('None');
+  await expect(none).toContainText('clear');
+  await expect(page.locator('.model-search')).toHaveCount(0);
+
   await none.click();
 
   await expect(page.locator('.block-tile').nth(0)).toContainText(
@@ -660,6 +674,12 @@ test('the None model tile clears the selected effect', async ({ page }) => {
     '4x10 Ampeg',
   );
   await expect(page.locator('.preset-title-name')).toHaveClass(/is-unsaved/);
+
+  // The None tab does not leak into normal categories.
+  await page.locator('.block-tile').nth(0).click();
+  await page.getByRole('tab', { name: 'Models' }).click();
+  await page.locator('.category-row').getByRole('tab', { name: 'Amp' }).click();
+  await expect(page.locator('button.model-tile.is-none')).toHaveCount(0);
 });
 
 test('New preset here warns before overwriting a slot that has a draft', async ({
@@ -714,12 +734,17 @@ test('links to GitHub and edits snapshot bypass, values and LED colours', async 
 
   const chips = page.locator('.snapshot');
   await expect(chips).toHaveCount(4);
-  const ampCamera = page.locator('.snapshot-assign').first();
+  const ampController = page.locator('.param-controller').first();
 
-  // Nothing is snapshot-controlled yet; the camera toggle assigns it.
-  await expect(ampCamera).toHaveAttribute('aria-pressed', 'false');
-  await ampCamera.click();
-  await expect(ampCamera).toHaveAttribute('aria-pressed', 'true');
+  // Nothing is controlled yet; the unset button opens a controller menu.
+  await expect(ampController).toHaveAttribute('aria-pressed', 'false');
+  await ampController.click();
+  await page
+    .getByRole('menu', { name: /Controller for Drive/ })
+    .getByRole('menuitem', { name: /^Snapshots/ })
+    .click();
+  await expect(ampController).toHaveAttribute('aria-pressed', 'true');
+  await expect(ampController).toHaveText('SNAP');
 
   // Bypass the amp in snapshot 1 (the loaded snapshot).
   const bypass = page.locator('.inspector-state.is-toggle');
@@ -773,8 +798,12 @@ test('links to GitHub and edits snapshot bypass, values and LED colours', async 
   expect(tone.snapshot0['@ledcolor'] ?? 0).toBe(0);
 
   // Removing the Snapshots controller clears the base entry and every value.
-  await ampCamera.click();
-  await expect(ampCamera).toHaveAttribute('aria-pressed', 'false');
+  await ampController.click();
+  await page
+    .getByRole('menu', { name: /Controller for Drive/ })
+    .getByRole('menuitem', { name: 'None' })
+    .click();
+  await expect(ampController).toHaveAttribute('aria-pressed', 'false');
   const removedFile = await exportViaMenu(page);
   const removed = JSON.parse(await readFile((await removedFile.path())!, 'utf8'));
   expect(removed.data.tone.controller.dsp0.block0?.Drive).toBeUndefined();
@@ -783,7 +812,72 @@ test('links to GitHub and edits snapshot bypass, values and LED colours', async 
   ).toBeUndefined();
 });
 
-test('marks EXP-controlled parameters as not assignable to snapshots', async ({
+test('assigns a footswitch to a parameter offline and preserves the footswitch map', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .badge')).toHaveText(/WASM ready/);
+
+  await page.locator('.block-tile').nth(0).click();
+  await expect(page.locator('.param-controller').first()).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+
+  const controller = page.locator('.param-controller').first();
+  await controller.click();
+  // EXP/FS are available on an offline draft.
+  await page
+    .getByRole('menu', { name: /Controller for Drive/ })
+    .getByRole('menuitem', { name: 'FS 3' })
+    .click();
+  await expect(controller).toHaveText('FS3');
+  await expect(controller).toHaveAttribute('aria-pressed', 'true');
+
+  const file = await exportViaMenu(page);
+  const tone = JSON.parse(
+    await readFile((await file.path())!, 'utf8'),
+  ).data.tone;
+  // FS 3 is the inferred controller number 5 (3 = FS1 … 8 = FS6).
+  expect(tone.controller.dsp0.block0.Drive['@controller']).toBe(5);
+  expect(tone.controller.dsp0.block0.Drive['@min']).toBe(0);
+  expect(tone.controller.dsp0.block0.Drive['@max']).toBe(1);
+  // The footswitch map is untouched: assigning a parameter controller does not
+  // create, delete or move a bypass-footswitch entry. The amp keeps its FS1
+  // bypass assignment byte-for-byte.
+  expect(tone.footswitch.dsp0.block0).toEqual({
+    '@fs_index': 1,
+    '@fs_label': 'G Cougar 800',
+    '@fs_enabled': true,
+  });
+
+  // Switch to EXP 2.
+  await controller.click();
+  await page
+    .getByRole('menu', { name: /Controller for Drive/ })
+    .getByRole('menuitem', { name: 'EXP 2' })
+    .click();
+  const expFile = await exportViaMenu(page);
+  const expTone = JSON.parse(
+    await readFile((await expFile.path())!, 'utf8'),
+  ).data.tone;
+  expect(expTone.controller.dsp0.block0.Drive['@controller']).toBe(2);
+
+  // Choose None: the entry disappears.
+  await controller.click();
+  await page
+    .getByRole('menu', { name: /Controller for Drive/ })
+    .getByRole('menuitem', { name: 'None' })
+    .click();
+  await expect(controller).toHaveAttribute('aria-pressed', 'false');
+  const noneFile = await exportViaMenu(page);
+  const noneTone = JSON.parse(
+    await readFile((await noneFile.path())!, 'utf8'),
+  ).data.tone;
+  expect(noneTone.controller.dsp0.block0?.Drive).toBeUndefined();
+});
+
+test('EXP-controlled parameters cannot be reassigned to snapshots on a live preset', async ({
   page,
 }) => {
   await page.goto('/');
@@ -798,12 +892,32 @@ test('marks EXP-controlled parameters as not assignable to snapshots', async ({
   await expect(page.locator('#import-preset-name')).toBeVisible();
   await page.locator('#import-open').click();
 
-  // The first block's Pedal parameter follows EXP 2: the camera toggle is
-  // disabled so the assignment cannot be overwritten silently.
-  const pedal = page.locator('.snapshot-assign').first();
-  await expect(pedal).toBeDisabled();
+  // The first block's Pedal parameter follows EXP 2: the controller menu shows
+  // the current assignment and keeps Snapshots available, but Snapshots would
+  // refuse to overwrite it offline.
+  const pedal = page.locator('.param-controller').first();
+  await expect(pedal).toHaveText('EXP2');
+  await expect(pedal).toHaveAttribute('aria-pressed', 'true');
+  await pedal.click();
+  const menu = page.getByRole('menu', { name: /Controller for Pedal/ });
+  await expect(menu.getByRole('menuitem', { name: /^EXP 2/ })).toContainText(
+    'current',
+  );
+  // Picking Snapshots over the EXP assignment is refused, not silent.
+  await menu.getByRole('menuitem', { name: 'Snapshots' }).click();
+  await expect(page.locator('#save-notice')).toContainText(
+    /already follows a controller \(EXP 2\)/,
+  );
+  await expect(pedal).toHaveAttribute('aria-pressed', 'true');
+  await expect(pedal).toHaveText('EXP2');
+
+  // Clearing it with None releases the parameter for another controller.
+  await pedal.click();
+  await page
+    .getByRole('menu', { name: /Controller for Pedal/ })
+    .getByRole('menuitem', { name: 'None' })
+    .click();
   await expect(pedal).toHaveAttribute('aria-pressed', 'false');
-  await expect(pedal).toHaveAttribute('title', /EXP 2 controls this parameter/);
 });
 
 test('opens snapshot actions from the right-click menu', async ({ page }) => {
