@@ -41,7 +41,17 @@ import type {
   ChainEntry,
   ChainParamValue,
 } from '../types';
-import { isSnapshotController } from '../podgoEdit';
+import {
+  EXP_CONTROLLER_1,
+  EXP_CONTROLLER_2,
+  FOOTSWITCH_CONTROLLER_MAX,
+  FOOTSWITCH_CONTROLLER_MIN,
+  SNAPSHOT_CONTROLLER,
+  controllerLabel,
+  isSnapshotController,
+} from '../podgoEdit';
+import PresetMenu from './PresetMenu';
+import type { PresetMenuEntry } from './PresetMenu';
 
 type Mode = 'params' | 'models';
 
@@ -64,8 +74,17 @@ interface Props {
   snapshotAssignments: ReadonlyMap<number, number>;
   /** Parameter indexes that have a stored value in the active snapshot. */
   snapshotValues: ReadonlySet<number>;
-  /** Assign or remove the Snapshots controller on a parameter. */
-  onToggleSnapshotParam?: (paramIndex: number, assigned: boolean) => void;
+  /**
+   * Assign or remove a controller on a parameter. `null` clears it. Only
+   * available when the page can edit the document (offline draft) or, for
+   * Snapshots alone, on a live preset.
+   */
+  onSetParamController?: (
+    paramIndex: number,
+    controller: number | null,
+  ) => void;
+  /** The preset has an offline JSON document: EXP/FS authoring is enabled. */
+  offline: boolean;
   /** Bypass or enable this block in the active snapshot. */
   onSetBlockEnabled?: (enabled: boolean) => void;
   /** The page can create an editable copy, so the toggle stays visible. */
@@ -87,7 +106,8 @@ export default function BlockInspector({
   snapshotIndex,
   snapshotAssignments,
   snapshotValues,
-  onToggleSnapshotParam,
+  onSetParamController,
+  offline,
   onSetBlockEnabled,
   canSetBlockEnabled = false,
   onOpenBlockMenu,
@@ -229,7 +249,8 @@ export default function BlockInspector({
           onEditParam={onEditParam}
           snapshotAssignments={snapshotAssignments}
           snapshotValues={snapshotValues}
-          onToggleSnapshotParam={onToggleSnapshotParam}
+          onSetParamController={onSetParamController}
+          offline={offline}
         />
       )}
     </section>
@@ -246,7 +267,8 @@ function ParamList({
   onEditParam,
   snapshotAssignments,
   snapshotValues,
-  onToggleSnapshotParam,
+  onSetParamController,
+  offline,
 }: {
   entry: ChainEntry;
   io: IoKind | null;
@@ -257,7 +279,11 @@ function ParamList({
   onEditParam: (block: number, paramIndex: number, value: number) => void;
   snapshotAssignments: ReadonlyMap<number, number>;
   snapshotValues: ReadonlySet<number>;
-  onToggleSnapshotParam?: (paramIndex: number, assigned: boolean) => void;
+  onSetParamController?: (
+    paramIndex: number,
+    controller: number | null,
+  ) => void;
+  offline: boolean;
 }) {
   const values: ChainParamValue[] =
     'params' in entry ? (entry.params as ChainParamValue[]) : [];
@@ -294,11 +320,12 @@ function ParamList({
           controller={snapshotAssignments.get(index)}
           snapshotStored={snapshotValues.has(index)}
           onEditParam={onEditParam}
-          onToggleSnapshot={
-            onToggleSnapshotParam && param?.k === 'cont'
-              ? (assigned) => onToggleSnapshotParam(index, assigned)
+          onSetController={
+            onSetParamController && param?.k === 'cont'
+              ? (controller) => onSetParamController(index, controller)
               : undefined
           }
+          offline={offline}
         />
       ))}
     </div>
@@ -315,7 +342,8 @@ function ParamRow({
   controller,
   snapshotStored,
   onEditParam,
-  onToggleSnapshot,
+  onSetController,
+  offline,
 }: {
   entry: ChainEntry;
   param: CatalogParam | null;
@@ -328,7 +356,9 @@ function ParamRow({
   /** The active snapshot stores a value for this parameter. */
   snapshotStored: boolean;
   onEditParam: (block: number, paramIndex: number, value: number) => void;
-  onToggleSnapshot?: (assigned: boolean) => void;
+  onSetController?: (controller: number | null) => void;
+  /** Offline draft: EXP/FS authoring is available. */
+  offline: boolean;
 }) {
   const fraction = valueFraction(param, value);
   const [rangeMin, rangeMax] = paramRange(param);
@@ -340,6 +370,10 @@ function ParamRow({
     : Math.min(high, Math.max(low, current));
   const [draft, setDraft] = useState(() => formatDraft(currentDisplay, param));
   const [typing, setTyping] = useState(false);
+  const [controllerMenu, setControllerMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Re-sync on a new value from the pedal or a new parameter. A plain effect
   // would run after every render and overwrite what the user is typing.
@@ -378,49 +412,121 @@ function ParamRow({
   }
 
   const snapshotControlled = isSnapshotController(controller);
-  const otherController = controller !== undefined && !snapshotControlled;
-  const otherControllerLabel =
-    controller === 1
-      ? 'EXP 1'
-      : controller === 2
-        ? 'EXP 2'
-        : `controller ${String(controller)}`;
-  const snapshotTitle = otherController
-    ? `${otherControllerLabel} controls this parameter. Clear that assignment in POD Go Edit before using the Snapshots controller.`
+  const assigned = controller !== undefined;
+  const controllerText = assigned
+    ? snapshotControlled
+      ? 'SNAP'
+      : controller === EXP_CONTROLLER_1 || controller === EXP_CONTROLLER_2
+        ? `EXP${controller}`
+        : controller >= FOOTSWITCH_CONTROLLER_MIN &&
+            controller <= FOOTSWITCH_CONTROLLER_MAX
+          ? `FS${controller - FOOTSWITCH_CONTROLLER_MIN + 1}`
+          : controllerLabel(controller)
+    : null;
+  const controllerTitle = !assigned
+    ? 'Assign a controller to this parameter'
     : snapshotControlled
       ? `Snapshots control this parameter${
           snapshotStored ? ' and this snapshot stores a value' : ''
-        } — click to remove it from all snapshots`
-      : 'Store a different value for this parameter in each snapshot';
+        } — click to change`
+      : `${controllerLabel(controller)} controls this parameter — click to change`;
+
+  // Offline authoring offers every controller. On a live preset only Snapshots
+  // has a captured write path (op 37); the rest stay visible but disabled so
+  // the reason is explicit.
+  const controllerItems: PresetMenuEntry[] = [
+    {
+      id: `controller-none-${index}`,
+      label: 'None',
+      disabled: !assigned || (!offline && snapshotControlled),
+      title: !assigned
+        ? 'No controller assigned'
+        : !offline
+          ? 'Removing a controller needs an offline copy — no capture yet.'
+          : 'Remove the controller assignment',
+      onSelect: () => onSetController?.(null),
+    },
+    {
+      id: `controller-snapshots-${index}`,
+      label: 'Snapshots',
+      hint: snapshotControlled ? 'current' : undefined,
+      disabled: snapshotControlled,
+      title: snapshotControlled ? 'Already assigned' : undefined,
+      onSelect: () => onSetController?.(SNAPSHOT_CONTROLLER),
+    },
+    'separator',
+    {
+      id: `controller-exp1-${index}`,
+      label: 'EXP 1',
+      hint: controller === EXP_CONTROLLER_1 ? 'current' : undefined,
+      disabled: !offline || controller === EXP_CONTROLLER_1,
+      title: offline
+        ? undefined
+        : 'Offline only — no capture for EXP/footswitch assignment yet.',
+      onSelect: () => onSetController?.(EXP_CONTROLLER_1),
+    },
+    {
+      id: `controller-exp2-${index}`,
+      label: 'EXP 2',
+      hint: controller === EXP_CONTROLLER_2 ? 'current' : undefined,
+      disabled: !offline || controller === EXP_CONTROLLER_2,
+      title: offline
+        ? undefined
+        : 'Offline only — no capture for EXP/footswitch assignment yet.',
+      onSelect: () => onSetController?.(EXP_CONTROLLER_2),
+    },
+    'separator',
+    ...Array.from(
+      { length: FOOTSWITCH_CONTROLLER_MAX - FOOTSWITCH_CONTROLLER_MIN + 1 },
+      (_, offset): PresetMenuEntry => {
+        const number = FOOTSWITCH_CONTROLLER_MIN + offset;
+        return {
+          id: `controller-fs${offset + 1}-${index}`,
+          label: `FS ${offset + 1}`,
+          hint: controller === number ? 'current' : undefined,
+          disabled: !offline || controller === number,
+          title: offline
+            ? undefined
+            : 'Offline only — no capture for footswitch assignment yet.',
+          onSelect: () => onSetController?.(number),
+        };
+      },
+    ),
+  ];
 
   return (
     <div className="param-row">
       <div className="param-line">
         <span className="param-name">
-          {onToggleSnapshot && (
+          {onSetController && (
             <button
               type="button"
-              className={`snapshot-assign${
-                snapshotControlled ? ' is-on' : ''
-              }${otherController ? ' is-blocked' : ''}`}
-              aria-pressed={snapshotControlled}
-              aria-label={`Snapshots controller for ${paramLabel(param, index)}`}
-              title={snapshotTitle}
-              disabled={otherController}
-              onClick={() => onToggleSnapshot(!snapshotControlled)}
+              className={`param-controller${
+                assigned ? ' is-on' : ''
+              }${snapshotControlled ? ' is-snapshot' : ''}`}
+              aria-haspopup="menu"
+              aria-pressed={assigned}
+              aria-label={`Controller for ${paramLabel(param, index)}`}
+              title={controllerTitle}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setControllerMenu({ x: rect.left, y: rect.bottom + 4 });
+              }}
             >
-              <svg
-                viewBox="0 0 16 16"
-                width="12"
-                height="12"
-                aria-hidden="true"
-                focusable="false"
-              >
-                <path
-                  fill="currentColor"
-                  d="M6.5 2 5.6 3.4H3.2A1.7 1.7 0 0 0 1.5 5v6.9a1.7 1.7 0 0 0 1.7 1.6h9.6a1.7 1.7 0 0 0 1.7-1.6V5a1.7 1.7 0 0 0-1.7-1.6h-2.4L9.5 2h-3Zm1.5 3a3.3 3.3 0 1 1 0 6.6 3.3 3.3 0 0 1 0-6.6Zm0 1.4a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8Z"
-                />
-              </svg>
+              {controllerText ?? (
+                <svg
+                  viewBox="0 0 16 16"
+                  width="12"
+                  height="12"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    fill="currentColor"
+                    d="M6.5 2 5.6 3.4H3.2A1.7 1.7 0 0 0 1.5 5v6.9a1.7 1.7 0 0 0 1.7 1.6h9.6a1.7 1.7 0 0 0 1.7-1.6V5a1.7 1.7 0 0 0-1.7-1.6h-2.4L9.5 2h-3Zm1.5 3a3.3 3.3 0 1 1 0 6.6 3.3 3.3 0 0 1 0-6.6Zm0 1.4a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8Z"
+                  />
+                </svg>
+              )}
             </button>
           )}
           {paramLabel(param, index)}
@@ -490,6 +596,15 @@ function ParamRow({
         <span>{rangeMin}</span>
         <span>{rangeMax}</span>
       </div>
+      {controllerMenu && (
+        <PresetMenu
+          x={controllerMenu.x}
+          y={controllerMenu.y}
+          items={controllerItems}
+          label={`Controller for ${paramLabel(param, index)}`}
+          onClose={() => setControllerMenu(null)}
+        />
+      )}
     </div>
   );
 }
@@ -524,12 +639,18 @@ function ModelBrowser({
   const [query, setQuery] = useState('');
 
   useEffect(() => {
-    setCategory(current?.category ?? 'Dist');
+    setCategory(current ? (current.category ?? 'Dist') : 'Dist');
     setSub(null);
   }, [current]);
 
-  const subs = useMemo(() => subcategories(category), [category]);
+  const subs = useMemo(
+    () => (category ? subcategories(category) : []),
+    [category],
+  );
   const models = useMemo(() => {
+    if (!category) {
+      return [];
+    }
     const text = query.trim().toLowerCase();
     return modelsInCategory(category)
       .filter((model) => (sub ? model.sub === sub : true))
@@ -546,6 +667,22 @@ function ModelBrowser({
     <div className="model-browser">
       <div className="model-controls">
         <div className="category-row" role="tablist">
+          <button
+            type="button"
+            key="None"
+            role="tab"
+            aria-selected={category === null}
+            className={category === null ? 'is-active' : ''}
+            style={{ color: '#f28482' }}
+            title="Clear this block"
+            onClick={() => {
+              setCategory(null);
+              setSub(null);
+              setQuery('');
+            }}
+          >
+            None
+          </button>
           {CATEGORY_ORDER.map((name) => (
             <button
               type="button"
@@ -563,16 +700,18 @@ function ModelBrowser({
             </button>
           ))}
         </div>
-        <input
-          type="search"
-          className="model-search"
-          placeholder="Search…"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        {category !== null && (
+          <input
+            type="search"
+            className="model-search"
+            placeholder="Search…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        )}
       </div>
 
-      {subs.length >= 2 && (
+      {category !== null && subs.length >= 2 && (
         <div className="subcategory-row" role="tablist">
           {['All', ...subs].map((name) => {
             const value = name === 'All' ? null : name;
@@ -593,13 +732,21 @@ function ModelBrowser({
         </div>
       )}
 
-      <p className="model-hint">
-        {onSelect
-          ? `${models.length} models · click one to load it into the selected block (offline draft; exports as .pgp)`
-          : `${models.length} models · changing a model needs an editable preset.`}
-      </p>
+      {category === null ? (
+        <p className="model-hint">
+          {onRemove && current
+            ? 'Clear this block: the effect is removed from the preset.'
+            : 'Select a category to choose a model.'}
+        </p>
+      ) : (
+        <p className="model-hint">
+          {onSelect
+            ? `${models.length} models · click one to load it into the selected block (offline draft; exports as .pgp)`
+            : `${models.length} models · changing a model needs an editable preset.`}
+        </p>
+      )}
 
-      {onRemove && current && (
+      {category === null && onRemove && current && (
         <div className="model-grid">
           <button
             type="button"
@@ -613,8 +760,9 @@ function ModelBrowser({
         </div>
       )}
 
-      <div className="model-grid">
-        {models.map((model) => {
+      {category !== null && (
+        <div className="model-grid">
+          {models.map((model) => {
           const active = current?.name === model.name;
           const allowed = onSelect
             ? canSwapModel(current, model, usedCategories)
@@ -662,7 +810,8 @@ function ModelBrowser({
             </button>
           );
         })}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

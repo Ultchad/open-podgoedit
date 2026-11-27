@@ -31,6 +31,16 @@
   models, op 30 for parameters, then op 71 to store the preset).
 - **Edit copy** builds an editable offline copy instead. The copy exports as
   `.pgp`; this build cannot write a preset body back to the pedal.
+- **Assign a controller to a parameter** (Snapshots, EXP 1/2, or a footswitch).
+  On an offline copy or an imported preset the controller button next to a
+  parameter name opens a menu with **None · Snapshots · EXP 1 · EXP 2 ·
+  FS 1–FS 6**; picking one (or **None** to remove it) edits the JSON document
+  and can be exported as `.pgp`. Assigning a parameter controller never touches
+  the footswitch bypass map or the per-snapshot values. On a live preset only
+  **Snapshots** is assignable there (through the captured op-37 write); the EXP
+  and footswitch choices appear disabled because the pedal write has not been
+  captured yet, so set those in an offline copy and export a `.pgp`. The FS
+  numbers are inferred and not yet validated on hardware.
 - The chain view lets you enable/disable and reorder blocks where supported.
 - Parameter edits validate against the model definition's min/max.
 - Undo/redo is local to the tab and keeps the **last 50 edits** for the loaded
@@ -61,7 +71,7 @@ explicit discard.
 - Move changes slot order locally; synchronization is a separate, explicit step.
 - **Delete an effect** removes an amp, effect or looper block, clearing the slot
   back to empty. Use the right-click **Remove** item, the **Delete**/`Backspace`
-  key with a block selected, or the **None** tile at the top of the **Models**
+  key with a block selected, or the **None** category tab in the **Models**
   pane. On an offline copy it edits the JSON document (export as `.pgp` to keep
   it); on a connected pedal it removes the effect in the preset being played
   (operations 28 then 78) and **Save** stores the result. Input and Output are

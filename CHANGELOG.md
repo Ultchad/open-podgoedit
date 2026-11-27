@@ -6,6 +6,23 @@ semantic versioning once it reaches 1.0.
 
 ## [Unreleased]
 
+- **Assign two new kinds of controller offline.** A parameter's controller
+  menu (the former Snapshots-only camera toggle) now also offers **EXP 1**,
+  **EXP 2** and **FS 1–FS 6**, so you can author an assignment into an
+  offline/imported preset and export it as `.pgp` — no pedal write is made.
+  Only **Snapshots** stays assignable on a live preset, through the existing
+  op-37 path; EXP/FS appear disabled there because no capture yet shows the
+  pedal write (`docs/development/manual-testing-todo.md` §2.6). Assigning or
+  removing a controller edits `tone.controller.dsp0` only, preserving the
+  `tone.footswitch` bypass map and per-snapshot values byte-for-byte; the FS
+  numbers (3–8) follow the Line 6 convention but are **unverified** — the
+  exported `.pgp` is the only artifact (see `docs/protocol/presets.md`).
+- **Move the "no model" choice into the category row.** Selecting a model now
+  starts with a **None** tab as the first category, showing the single
+  **None · clear** tile (keeping the safe second-click) and hiding the search
+  and sub-tabs. The standalone tile above the grid is gone; right-click
+  **Remove** and **Delete/Backspace** still work.
+
 ## [0.4.0] - 2026-11-27
 
 ### Added
